@@ -9,10 +9,13 @@ from auto_backup_client.baidu.cloud_api import BaiduCloudClient
 from auto_backup_client.baidu.crypto import (
     BAIDU_ENCRYPTION_PASSWORD,
     Argon2idParams,
+    PlainBaiduToken,
+    decrypt_token_envelope,
     derive_password_wrapping_key,
     generate_password_salt,
 )
-from auto_backup_client.baidu.models import BaiduAccount, BaiduAuthSession, CompleteAuthResult
+from auto_backup_client.baidu.kdf_store import PasswordKDFRecord, PasswordKDFStore
+from auto_backup_client.baidu.models import BaiduAccount, BaiduAuthSession, BaiduEncryptedToken, CompleteAuthResult
 
 
 TERMINAL_SESSION_STATUSES = {"completed", "failed", "expired"}
@@ -25,6 +28,7 @@ class PasswordWrappingMaterial:
     argon2id_time_cost: int
     argon2id_memory_cost_kib: int
     argon2id_parallelism: int
+    argon2id_hash_len: int
 
     @classmethod
     def from_password(cls, password: str, *, salt: bytes | None = None) -> "PasswordWrappingMaterial":
@@ -35,7 +39,31 @@ class PasswordWrappingMaterial:
             argon2id_time_cost=params.time_cost,
             argon2id_memory_cost_kib=params.memory_cost_kib,
             argon2id_parallelism=params.parallelism,
+            argon2id_hash_len=params.hash_len,
         )
+
+    def to_params(self) -> Argon2idParams:
+        return Argon2idParams(
+            salt=self.salt,
+            time_cost=self.argon2id_time_cost,
+            memory_cost_kib=self.argon2id_memory_cost_kib,
+            parallelism=self.argon2id_parallelism,
+            hash_len=self.argon2id_hash_len,
+        )
+
+
+@dataclass(frozen=True)
+class PasswordAuthCompletion:
+    result: CompleteAuthResult
+    material: PasswordWrappingMaterial
+    kdf_record: PasswordKDFRecord
+
+
+@dataclass(frozen=True)
+class PasswordTokenDecryption:
+    encrypted: BaiduEncryptedToken
+    token: PlainBaiduToken
+    kdf_record: PasswordKDFRecord
 
 
 @dataclass(frozen=True)
@@ -47,8 +75,9 @@ class AuthSessionState:
 
 
 class BaiduAuthWorkflow:
-    def __init__(self, cloud_client: BaiduCloudClient) -> None:
+    def __init__(self, cloud_client: BaiduCloudClient, *, kdf_store: PasswordKDFStore | None = None) -> None:
         self._cloud = cloud_client
+        self._kdf_store = kdf_store or PasswordKDFStore.from_env()
 
     def load_accounts(self) -> list[BaiduAccount]:
         return self._cloud.list_accounts()
@@ -78,7 +107,7 @@ class BaiduAuthWorkflow:
         *,
         authorization_password: str,
         salt: bytes | None = None,
-    ) -> tuple[CompleteAuthResult, PasswordWrappingMaterial]:
+    ) -> PasswordAuthCompletion:
         session_id = session_id.strip()
         if not session_id:
             raise ValueError("session_id is required")
@@ -86,7 +115,33 @@ class BaiduAuthWorkflow:
             raise ValueError("authorization password is required")
         material = PasswordWrappingMaterial.from_password(authorization_password, salt=salt)
         result = self._cloud.complete_auth_session(session_id, wrapping_key=material.wrapping_key)
-        return result, material
+        account_id = result.account.account_id or result.token.account_id
+        record = self._kdf_store.save_record(
+            PasswordKDFRecord.from_params(
+                account_id=account_id,
+                params=material.to_params(),
+                token_version=result.account.token_version or result.token.token_version,
+            )
+        )
+        return PasswordAuthCompletion(result=result, material=material, kdf_record=record)
+
+    def decrypt_password_token(self, account_id: str, *, authorization_password: str) -> PasswordTokenDecryption:
+        account_id = account_id.strip()
+        if not account_id:
+            raise ValueError("account_id is required")
+        if not authorization_password:
+            raise ValueError("authorization password is required")
+        encrypted = self._cloud.get_token(account_id)
+        if encrypted.encryption_method != BAIDU_ENCRYPTION_PASSWORD:
+            raise ValueError("account token is not encrypted with password_argon2id_aes256gcm_v1")
+        record = self._kdf_store.require_record(encrypted.account_id or account_id)
+        wrapping_key = record.derive_wrapping_key(authorization_password)
+        token = decrypt_token_envelope(
+            encrypted.encrypted_token_json,
+            encryption_method=encrypted.encryption_method,
+            password_wrapping_key=wrapping_key,
+        )
+        return PasswordTokenDecryption(encrypted=encrypted, token=token, kdf_record=record)
 
 
 def session_status_label(status: str) -> str:

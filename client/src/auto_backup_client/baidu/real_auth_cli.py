@@ -37,6 +37,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     device_parser.add_argument("--poll-seconds", type=int, default=5)
     device_parser.add_argument("--timeout-seconds", type=int, default=600)
 
+    token_check_parser = subparsers.add_parser("token-check", help="读取云端密文 token 并用本地 KDF 参数验证解密。")
+    _add_token_args(token_check_parser)
+    token_check_parser.add_argument("account_id", nargs="?", default="", help="账号 ID；省略时使用当前设备已选择账号。")
+    token_check_parser.add_argument("--password-env", default="", help="从指定环境变量读取授权密码。")
+
     args = parser.parse_args(argv)
     if args.command == "health":
         return _health(args.base_url)
@@ -56,6 +61,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             password_env=args.password_env,
             poll_seconds=args.poll_seconds,
             timeout_seconds=args.timeout_seconds,
+        )
+    if args.command == "token-check":
+        return _token_check(
+            args.base_url,
+            _resolve_device_token(args),
+            account_id=args.account_id,
+            password_env=args.password_env,
         )
     return 2
 
@@ -127,11 +139,7 @@ def _device_code(
     poll_seconds: int,
     timeout_seconds: int,
 ) -> int:
-    password = os.environ.get(password_env, "") if password_env else ""
-    if not password:
-        password = getpass.getpass("授权密码（不回显，不写入文件）: ")
-    if not password:
-        raise SystemExit("authorization password is required")
+    password = _read_authorization_password(password_env)
 
     poll_seconds = max(2, poll_seconds)
     deadline = time.monotonic() + max(30, timeout_seconds)
@@ -150,7 +158,7 @@ def _device_code(
         last_message = ""
         while time.monotonic() < deadline:
             try:
-                result, _material = workflow.complete_password_session(
+                completion = workflow.complete_password_session(
                     session.session_id,
                     authorization_password=password,
                 )
@@ -165,7 +173,9 @@ def _device_code(
                 _print(f"真实授权链路失败: HTTP {exc.status_code} {exc.error_code}: {exc.message}")
                 return 1
 
+            result = completion.result
             _print("授权完成，云端已保存密文 token。")
+            _print("本机已保存 password KDF 参数；后续可用同一授权密码重新派生 wrapping key。")
             _print(f"account_id: {result.account.account_id}")
             _print(f"display_name: {result.account.display_name or result.account.baidu_uid}")
             _print(f"token_version: {result.account.token_version}")
@@ -174,6 +184,46 @@ def _device_code(
 
     _print("等待授权超时，未写入新的账号 token。")
     return 1
+
+
+def _token_check(base_url: str, device_token: str, *, account_id: str, password_env: str) -> int:
+    password = _read_authorization_password(password_env)
+    with BaiduCloudClient(base_url, device_token, timeout=30.0) as cloud:
+        workflow = BaiduAuthWorkflow(cloud)
+        try:
+            actual_account_id = account_id.strip() or _selected_account_id(workflow)
+            decrypted = workflow.decrypt_password_token(actual_account_id, authorization_password=password)
+        except CloudAPIError as exc:
+            _print(f"真实 token 读取失败: HTTP {exc.status_code} {exc.error_code}: {exc.message}")
+            return 1
+        except Exception as exc:
+            _print(f"本地 token 解密失败: {exc}")
+            return 1
+    _print("本地 KDF 参数可重新派生 wrapping key，云端密文 token 解密成功。")
+    _print(f"account_id: {decrypted.encrypted.account_id}")
+    _print(f"token_version: {decrypted.encrypted.token_version}")
+    _print(f"token_expires_at: {decrypted.encrypted.token_expires_at.isoformat()}")
+    _print(f"kdf_updated_at: {decrypted.kdf_record.updated_at.isoformat() if decrypted.kdf_record.updated_at else ''}")
+    _print(f"token_type: {decrypted.token.token_type}")
+    _print(f"scope: {decrypted.token.scope}")
+    return 0
+
+
+def _selected_account_id(workflow: BaiduAuthWorkflow) -> str:
+    accounts = workflow.load_accounts()
+    selected = [account for account in accounts if account.selected]
+    if not selected:
+        raise SystemExit("account_id is required because current device has no selected Baidu account")
+    return selected[0].account_id
+
+
+def _read_authorization_password(password_env: str) -> str:
+    password = os.environ.get(password_env, "") if password_env else ""
+    if not password:
+        password = getpass.getpass("授权密码（不回显，不写入文件）: ")
+    if not password:
+        raise SystemExit("authorization password is required")
+    return password
 
 
 def _print(message: str) -> None:

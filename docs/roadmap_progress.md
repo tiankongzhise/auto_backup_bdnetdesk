@@ -4,21 +4,19 @@
 
 ## 当前阶段
 
-PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动迁移和真实百度授权入库联调已完成；当前真实云端已有一个 token 有效的百度账号可用于账号选择、密文 token 元数据和刷新租约测试。下一步需要修复 password 模式 KDF salt/凭据持久化，再进入百度 token 本地解密和上传链路联调。
+PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动迁移、真实百度授权入库联调和 password 模式 KDF 参数持久化已完成；当前真实云端已有一个 token 有效的百度账号可用于账号选择、密文 token 元数据和刷新租约测试。下一步需要对真实账号重新完成一次带 KDF 参数持久化的新授权，或用受控 re-encrypt 流程补齐本机 KDF 材料，再进入百度 token 本地解密和上传链路联调。
 
 ## 当前工作项
 
-- 本轮修复 Windows Go 工具链自检失败：定位当前 `C:\Program Files\Go` 标准库缺失/缓存工具链异常，优先使用仓库内可复现脚本或干净工具链恢复 `go list runtime` 与 `go test ./...`。
-- 本轮补齐 password 模式授权材料持久化：客户端完成授权时持久化 account 级 KDF salt/参数，重启后可根据用户密码重新派生同一个 wrapping key；优先使用 Windows DPAPI 保护本地凭据文件，不把用户密码或 wrapping key 落入仓库。
-- 继续使用真实 `https://backup.baichengedu.com` API 和已入库授权验证 token 本地解密、百度容量/用户信息读取、预上传、分片上传和 create 链路。
+- 使用真实 `https://backup.baichengedu.com` API 对带 KDF 参数的新授权账号执行 `token-check` 或 UI “验证解密”，确认客户端重启后可用同一授权密码解密云端密文 token。
+- 在 token 可本地解密后，继续验证百度容量/用户信息读取、预上传、分片上传和 create 链路。
 - 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库或敏感日志。
 
 ## 本次验收标准
 
-- `cloud-api/` 下 `go list runtime` 能通过，`go test ./...` 在恢复后的 Windows Go 工具链下通过。
-- password 模式授权完成后，客户端会按 `account_id` 保存 KDF salt/参数；客户端重启后读取该材料并用用户密码解密云端密文 token。
-- 本地凭据材料文件使用 Windows DPAPI 保护；非 Windows 或测试场景必须显式 opt-in 才允许明文持久化，`.env` 和真实敏感材料仍保持 Git 忽略状态。
+- 真实云端账号重新授权后，本机 KDF store 中存在对应 `account_id` 的 KDF 参数，`token-check` 或 UI “验证解密”可在客户端重启后解密云端密文 token。
 - `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run pytest` 和 `uv run python -m compileall src tests` 通过。
+- `cloud-api/` 下 `go version` 为 Go 1.25 补丁线，`go list runtime` 和 `go test ./...` 保持通过。
 - 真实云端已入库百度账号的账号选择、密文 token 元数据读取和刷新租约互斥继续通过。
 
 ## 开发排期
@@ -41,6 +39,31 @@ PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动�
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### password 模式 KDF 参数持久化与恢复解密
+
+- 新增 `client/src/auto_backup_client/baidu/kdf_store.py`，提供 `PasswordKDFRecord` 和 `PasswordKDFStore`，按 `account_id` 保存 password 模式 KDF salt、Argon2id 参数、token version 和时间元数据。
+- Windows 默认使用当前用户 DPAPI 保护 KDF store 文件；非 Windows 或自动化测试只有显式 `allow_plaintext=True` 或 `AUTO_BACKUP_BAIDU_KDF_STORE_ALLOW_PLAINTEXT=true` 时才允许明文测试存储。
+- `BaiduAuthWorkflow.complete_password_session(...)` 改为返回 `PasswordAuthCompletion`，完成真实云端授权后立即保存对应账号的 KDF 参数，不保存用户密码或 wrapping key。
+- 新增 `BaiduAuthWorkflow.decrypt_password_token(...)`，从云端读取密文 token，并基于本地持久化 KDF 参数和用户输入密码重新派生 wrapping key，在本地内存中解密 token。
+- 真实联调 CLI `device-code` 完成授权后提示本机已保存 KDF 参数；新增 `token-check` 命令，只输出账号 ID、token version、过期时间、token type 和 scope 等脱敏元数据，不输出 access token 或 refresh token。
+- PySide6 百度设置页完成授权后显示 KDF 参数已保存，并新增“验证解密”按钮，用于选中账号后读取云端密文 token 并验证本地 KDF 参数可恢复解密。
+- 更新 `client/README.md` 和 `client/docs/baidu_auth_manual_validation.md`，补充 KDF store 默认路径、DPAPI 保护、明文测试 opt-in、CLI `token-check` 和 UI 验证解密步骤。
+- 新增客户端测试覆盖 plaintext store 必须显式 opt-in、Windows DPAPI store 往返、完成授权保存 KDF 参数，以及模拟客户端重启后用同一密码解密云端密文 token。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下提升权限执行 `uv run python -m compileall src tests` 通过；提升权限原因是当前 `.venv` 指向 uv 受管 Python 目录，沙箱内读取用户目录受限。
+- 已验证 `client/` 下提升权限执行 `uv run pytest` 通过，15 个测试通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`。
+- 已验证 `cloud-api/` 下提升权限执行 `go list runtime` 通过；提升权限原因是沙箱内读取 Go 标准库路径受限。
+- 已验证 `cloud-api/` 下提升权限执行 `go test ./...` 通过。
+
+提交摘要：本次提交补齐 password 模式 KDF 参数持久化和恢复解密入口，客户端完成授权后会按账号保存受 DPAPI 保护的 KDF 材料，并可在 CLI 或 PySide6 UI 中用同一授权密码重新派生 wrapping key 验证云端密文 token 本地解密能力。
+
+后续待办：
+
+- 对真实云端账号重新完成一次带 KDF 参数持久化的新授权，或提供受控 re-encrypt 流程补齐已入库旧账号的本机 KDF 材料。
+- 使用真实云端 `token-check` 或 UI “验证解密”验证重启后的 token 本地解密。
+- 在 token 可本地解密后，继续真实百度容量/用户信息、预上传、分片上传和 create 链路联调。
 
 ### Windows 系统 Go 工具链修复
 

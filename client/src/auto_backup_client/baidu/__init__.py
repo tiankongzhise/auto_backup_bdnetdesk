@@ -1,5 +1,7 @@
 from auto_backup_client.baidu.auth_workflow import (
     BaiduAuthWorkflow,
+    PasswordAuthCompletion,
+    PasswordTokenDecryption,
     PasswordWrappingMaterial,
     session_status_label,
     token_validity_label,
@@ -13,6 +15,7 @@ from auto_backup_client.baidu.crypto import (
     derive_password_wrapping_key,
     encrypt_password_token,
 )
+from auto_backup_client.baidu.kdf_store import PasswordKDFRecord, PasswordKDFStore, PasswordKDFStoreError
 from auto_backup_client.baidu.refresh import (
     BaiduOAuthTokenClient,
     RefreshLeaseUnavailable,
@@ -26,6 +29,11 @@ __all__ = [
     "BaiduCloudClient",
     "BaiduOAuthTokenClient",
     "PlainBaiduToken",
+    "PasswordAuthCompletion",
+    "PasswordKDFRecord",
+    "PasswordKDFStore",
+    "PasswordKDFStoreError",
+    "PasswordTokenDecryption",
     "PasswordWrappingMaterial",
     "RefreshLeaseUnavailable",
     "decrypt_token_envelope",

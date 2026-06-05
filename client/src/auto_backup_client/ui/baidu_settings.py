@@ -35,12 +35,15 @@ from PySide6.QtWidgets import (
 from auto_backup_client.baidu.auth_workflow import (
     AuthSessionState,
     BaiduAuthWorkflow,
+    PasswordAuthCompletion,
+    PasswordTokenDecryption,
     PasswordWrappingMaterial,
     session_status_label,
     token_validity_label,
 )
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient
-from auto_backup_client.baidu.models import BaiduAccount, CompleteAuthResult
+from auto_backup_client.baidu.kdf_store import PasswordKDFRecord
+from auto_backup_client.baidu.models import BaiduAccount
 from auto_backup_client.settings import ClientSettings
 
 
@@ -90,6 +93,7 @@ class BaiduSettingsPage(QWidget):
         self._accounts: list[BaiduAccount] = []
         self._session: AuthSessionState | None = None
         self._last_material: PasswordWrappingMaterial | None = None
+        self._last_kdf_record: PasswordKDFRecord | None = None
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(max(1, config.poll_interval_seconds) * 1000)
         self._poll_timer.timeout.connect(self.poll_current_session)
@@ -150,8 +154,11 @@ class BaiduSettingsPage(QWidget):
         self.reload_button.clicked.connect(self.load_accounts)
         self.select_button = QPushButton("选择账号")
         self.select_button.clicked.connect(self.select_current_account)
+        self.verify_token_button = QPushButton("验证解密")
+        self.verify_token_button.clicked.connect(self.verify_current_token_decryption)
         toolbar.addWidget(self.reload_button)
         toolbar.addWidget(self.select_button)
+        toolbar.addWidget(self.verify_token_button)
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
@@ -237,7 +244,7 @@ class BaiduSettingsPage(QWidget):
             self._workflow.load_accounts,
             self._on_accounts_loaded,
             "正在读取真实云端账号列表...",
-            busy_buttons=(self.reload_button, self.select_button),
+            busy_buttons=(self.reload_button, self.select_button, self.verify_token_button),
         )
 
     @Slot()
@@ -251,7 +258,25 @@ class BaiduSettingsPage(QWidget):
             lambda: self._workflow.select_account(account.account_id),
             self._on_account_selected,
             "正在选择真实云端账号...",
-            busy_buttons=(self.reload_button, self.select_button),
+            busy_buttons=(self.reload_button, self.select_button, self.verify_token_button),
+        )
+
+    @Slot()
+    def verify_current_token_decryption(self) -> None:
+        row = self.accounts_table.currentRow()
+        if row < 0 or row >= len(self._accounts):
+            self._show_warning("请先选择一个账号。")
+            return
+        password = self.password_input.text()
+        if not password:
+            self._show_warning("请先输入授权密码。")
+            return
+        account = self._accounts[row]
+        self._run_task(
+            lambda: self._workflow.decrypt_password_token(account.account_id, authorization_password=password),
+            self._on_token_decrypted,
+            "正在读取云端密文 token 并验证本机 KDF 参数...",
+            busy_buttons=(self.reload_button, self.select_button, self.verify_token_button),
         )
 
     @Slot()
@@ -366,6 +391,16 @@ class BaiduSettingsPage(QWidget):
         self.status_label.setText(f"已选择账号：{account.display_name or account.baidu_uid}")
         self.load_accounts()
 
+    def _on_token_decrypted(self, decrypted: PasswordTokenDecryption) -> None:
+        kdf_updated_at = decrypted.kdf_record.updated_at.isoformat() if decrypted.kdf_record.updated_at else "未知"
+        self.status_label.setText(
+            "本机 KDF 参数验证通过："
+            f"account={decrypted.encrypted.account_id}，"
+            f"token_version={decrypted.encrypted.token_version}，"
+            f"expires={decrypted.encrypted.token_expires_at.isoformat()}，"
+            f"kdf_updated={kdf_updated_at}"
+        )
+
     def _on_session_started(self, state: AuthSessionState) -> None:
         self._session = state
         self._render_session_state()
@@ -379,9 +414,10 @@ class BaiduSettingsPage(QWidget):
             self._poll_timer.stop()
         self.status_label.setText(f"授权状态：{session_status_label(state.session.status)}")
 
-    def _on_session_completed(self, result_and_material: tuple[CompleteAuthResult, PasswordWrappingMaterial]) -> None:
-        result, material = result_and_material
-        self._last_material = material
+    def _on_session_completed(self, completion: PasswordAuthCompletion) -> None:
+        result = completion.result
+        self._last_material = completion.material
+        self._last_kdf_record = completion.kdf_record
         self._session = AuthSessionState(
             session=result.session,
             can_complete=False,
@@ -390,7 +426,9 @@ class BaiduSettingsPage(QWidget):
         )
         self._render_session_state()
         self._poll_timer.stop()
-        self.status_label.setText(f"授权完成，已选择账号：{result.account.display_name or result.account.baidu_uid}")
+        self.status_label.setText(
+            f"授权完成，已选择账号：{result.account.display_name or result.account.baidu_uid}；本机已保存 KDF 参数。"
+        )
         self.load_accounts()
 
     def _render_session_state(self) -> None:
