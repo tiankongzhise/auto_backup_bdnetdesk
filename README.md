@@ -34,7 +34,15 @@ go run ./cmd/cloud-api
 
 默认生成 `dist/cloud-api/linux-amd64/cloud-api`，用于 Linux amd64 服务器部署；可通过 `-GoOS`、`-GoArch`、`-OutputDir`、`-OutputName`、`-ModuleDir` 和 `-ServiceName` 调整目标平台、输出位置和服务入口。
 
-云端 PostgreSQL 迁移文件位于 `cloud-api/migrations/postgres`；客户端本地 `sync_outbox` 迁移契约位于 `client/migrations/sqlite`。百度账号授权、密文 token、设备绑定和刷新租约表由 `cloud-api/migrations/postgres/002_baidu_auth.sql` 提供。
+云端 PostgreSQL 迁移文件位于 `cloud-api/migrations/postgres`，并已嵌入服务端二进制。`cloud-api serve` 启动时会自动检查 PostgreSQL 关键 schema；缺少 `devices`、`baidu_accounts` 等关键表/列或 schema 检查失败时，会自动执行内置迁移并复查，复查仍失败才拒绝启动。
+
+正常二进制部署只需要启动服务：
+
+```bash
+/opt/auto-backup-bdnetdesk/cloud-api serve --env-file /www/server/auto-backup-bdnetdesk/.env
+```
+
+`cloud-api migrate --env-file /path/to/.env` 保留为排障或人工修复入口，不作为正常部署的初始化前置条件。客户端本地 `sync_outbox` 迁移契约位于 `client/migrations/sqlite`。百度账号授权、密文 token、设备绑定和刷新租约表由 `cloud-api/migrations/postgres/002_baidu_auth.sql` 提供。`GET /v1/readyz` 会同时检查 PostgreSQL 可连接和关键 schema 已存在；服务启动后的缺表/缺列会返回 `schema_not_ready`。
 
 二进制部署到服务器后，服务通过环境变量决定连接哪台 PostgreSQL。服务启动时支持三种配置来源：
 
@@ -53,7 +61,7 @@ ExecStart=/opt/auto-backup-bdnetdesk/cloud-api
 如果宝塔面板的环境变量注入不可靠，可以直接在启动命令中指定：
 
 ```bash
-/opt/auto-backup-bdnetdesk/cloud-api --env-file /www/server/auto-backup-bdnetdesk/.env
+/opt/auto-backup-bdnetdesk/cloud-api serve --env-file /www/server/auto-backup-bdnetdesk/.env
 ```
 
 环境文件内容参考 `cloud-api/.env.example`。`APP_ENV=production` 只用于日志标识当前部署环境，不影响 PostgreSQL 连接选择。真实 PostgreSQL 密码、DSN、百度 App Secret 和 token 不得提交到仓库。

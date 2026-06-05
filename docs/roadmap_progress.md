@@ -4,13 +4,14 @@
 
 ## 当前阶段
 
-Python 客户端百度授权核心库已完成，后续进入 PySide6 百度授权 UI 与真实服务器联调。
+PySide6 百度设置页、真实云端联调 CLI 和服务端启动自检自动迁移已完成；真实授权完成链路等待服务器部署并重启新二进制后继续。
 
 ## 当前工作项
 
-- 基于 `client/src/auto_backup_client/baidu` 核心库实现 PySide6 百度设置页。
-- 提供账号列表、选择已有账号、新建设备码授权、二维码展示、轮询状态和授权完成反馈。
-- 使用真实服务器验证设备码授权链路；如果需要修改并重新部署 Go 服务，到对应步骤暂停等待人工部署完成。
+- 将本轮新构建的 `dist/cloud-api/linux-amd64/cloud-api` 部署到真实服务器，并用 `cloud-api serve --env-file /实际路径/.env` 或等效进程守护命令重启服务。
+- 重启时服务自动检查 PostgreSQL schema，缺少关键表/列或 schema 检查失败时自动执行内置迁移并复查；不得依赖人工先执行初始化命令。
+- 新二进制重启并确认 `/v1/readyz` 返回 200 后，继续使用真实 `https://backup.baichengedu.com` API 跑设备注册、账号列表、设备码授权、授权完成和账号选择链路。
+- 真实联调过程中继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库或敏感日志。
 
 ## 本次验收标准
 
@@ -18,6 +19,9 @@ Python 客户端百度授权核心库已完成，后续进入 PySide6 百度授�
 - UI 能展示云端返回的百度账号列表和当前设备选择状态。
 - UI 能创建设备码授权 session，展示百度官方授权地址、用户码和二维码，并轮询授权状态。
 - 授权完成后 UI 能调用客户端核心库完成本地 wrapping key 加密提交，并展示账号已选中状态。
+- 新增真实联调脚本覆盖账号加载、账号选择、设备码 session 创建、授权状态轮询和 complete 提交流程；自动化单元测试只覆盖不依赖云端的 UI 状态和输入校验。
+- 真实服务器启动时必须自动补齐内置 PostgreSQL 迁移；自动迁移后 `/v1/readyz` 返回 200，若复查仍缺表/列则服务启动失败并输出脱敏日志。
+- `cloud-api migrate` 仅作为排障和人工修复入口，不作为二进制正常部署初始化前置条件。
 - 真实服务器联调不提交 Device Token、百度 App Secret、access token、refresh token、用户密码或本地数据库。
 
 ## 开发排期
@@ -28,11 +32,11 @@ Python 客户端百度授权核心库已完成，后续进入 PySide6 百度授�
 | 1 | Python 项目骨架、配置加载、日志脱敏、基础目录结构 | 已完成 |
 | 2 | SQLite schema、版本字段、客户端 `sync_outbox`、迁移机制 | 未开始 |
 | 3 | Go Cloud Sync API、PostgreSQL schema、revision 幂等写入、设备认证 | 已完成 |
-| 4 | PySide6 基础 UI、任务页、设置页 | 未开始 |
+| 4 | PySide6 基础 UI、任务页、设置页 | 部分完成：百度设置页已完成 |
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
 | 6 | 去重索引、本地/云端内容对象、来源引用 | 未开始 |
 | 7 | 7-Zip 加密压缩、manifest、标准/严格验证 | 未开始 |
-| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：云端授权管理与客户端授权核心库已完成 |
+| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：云端授权管理、客户端授权核心库、百度设置页和真实联调 CLI 已完成 |
 | 9 | 断点续传、上传恢复、失败重试 | 未开始 |
 | 10 | 缓存额度、动态清理等级、缓存 artifact 管理 | 未开始 |
 | 11 | 来源与远端映射、数据库/百度校对 UI | 未开始 |
@@ -219,3 +223,35 @@ Python 客户端百度授权核心库已完成，后续进入 PySide6 百度授�
 - 使用真实服务器验证设备码授权、授权完成和账号选择链路；如需修改 Go 服务，暂停等待人工重新部署后再继续。
 - 评估 refresh token 刷新是否应迁移到 Go 服务端受控执行；若需要服务端改造，单独提交并等待人工部署。
 - 后续继续实现百度预上传、分片上传和创建文件流程。
+
+### PySide6 百度设置页与真实云端授权联调入口
+
+- 新增 `client/src/auto_backup_client/baidu/auth_workflow.py`，作为 UI/CLI 复用的百度授权流程控制器，封装账号加载、账号选择、设备码 session 创建、轮询和 password wrapping key 完成授权。
+- 新增 `client/src/auto_backup_client/ui/baidu_settings.py`，实现 PySide6 百度设置页：真实云端连接信息、账号表、选择账号、设备码授权、用户码、授权 URL、二维码、轮询状态、授权完成反馈和基础上传参数控件。
+- 新增 `client/src/auto_backup_client/baidu/real_auth_cli.py`，用于真实云端联调：`health`、`accounts`、`select`、`device-code`，支持运行时 Device Token 和进程内临时设备注册，不写入敏感信息。
+- 新增 Python 客户端依赖 `PySide6`、`qrcode[pil]`，并在 `client/pyproject.toml` 中配置清华 PyPI 镜像，解决 PySide6 默认源下载过慢问题；`uv.lock` 已同步。
+- 新增客户端测试 `test_baidu_auth_workflow.py`，覆盖授权状态文案、token 有效性判断和 password wrapping material 派生；保留自动化测试只覆盖本地逻辑，不以模拟云端 API 作为真实联调验收。
+- 新增 `BaiduCloudClient.register_device` 封装和 `DeviceRegistration` 模型，真实联调可在进程内注册临时设备。
+- 真实云端 `/v1/healthz` 与 `/v1/readyz` 旧版本均返回 200，但设备注册返回 500；服务器日志确认 `ERROR: relation "devices" does not exist (SQLSTATE 42P01)`。
+- 新增服务端内置 PostgreSQL 迁移，二进制内嵌 `cloud-api/migrations/postgres/*.sql`，并用 `schema_migrations` 记录迁移名称和 SHA256。
+- `GET /v1/readyz` 已升级为同时检查 PostgreSQL 可连接和关键表/列存在；缺少 `devices`、`baidu_accounts` 等 schema 时返回 `schema_not_ready` 和缺失清单。
+- `cloud-api serve` 启动时会自动检查 PostgreSQL schema；缺少关键表/列或检查失败时自动执行内置迁移并复查，复查失败才拒绝启动。
+- 内置迁移执行使用 PostgreSQL 事务级 advisory lock，避免多实例同时启动时重复抢写。
+- `cloud-api migrate --env-file /实际路径/.env` 保留为排障或人工修复入口，不再作为二进制正常部署初始化前置条件。
+- 更新 README、产品规格、部署文档、客户端说明和手动验收文档，补充 `serve` 启动自检自动迁移、真实 UI/CLI 联调方式和 schema readiness 语义。
+- 将真实云端 API 联调约束、PySide6 镜像源问题和真实云端 PostgreSQL 未迁移问题沉淀到 `AGENTS.MD`。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy uv sync` 成功。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy uv run python -m compileall src tests` 通过。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy uv run pytest` 通过，11 个测试通过。
+- 已验证 `cloud-api/` 下 `go test ./...` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已验证仓库根目录 `.\go_build.ps1` 成功构建包含启动自检自动迁移能力的 `dist/cloud-api/linux-amd64/cloud-api`。
+
+提交摘要：本次提交完成 PySide6 百度设置页、真实云端联调 CLI、客户端 UI 授权流程控制器和服务端启动自检自动迁移/readiness 检查；真实云端授权链路当前需部署并重启新二进制，让服务自动补齐 PostgreSQL schema 后继续。
+
+后续待办：
+
+- 将 `dist/cloud-api/linux-amd64/cloud-api` 部署到服务器，并用 `cloud-api serve --env-file /实际路径/.env` 或等效进程守护命令重启服务；启动阶段会自动执行 schema 自检和内置迁移。
+- 重启后确认 `https://backup.baichengedu.com/v1/readyz` 返回 200，不再返回 `schema_not_ready`。
+- 继续使用真实联调 CLI 或 PySide6 UI 跑设备码授权，完成百度官方页面授权、密文 token 入库和账号选择状态验证。
+- 新二进制重启前不要继续用客户端授权流程判断 UI 或云端授权是否失败，因为当前线上失败根因是旧服务没有自动补齐 PostgreSQL schema。

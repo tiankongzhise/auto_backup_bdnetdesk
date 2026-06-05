@@ -146,6 +146,20 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "not_ready", "database is not ready")
 		return
 	}
+	schema, err := s.store.CheckSchema(ctx)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "not_ready", "database schema check failed")
+		return
+	}
+	if !schema.Ready {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":           "schema_not_ready",
+			"message":         "database schema is not migrated",
+			"missing_tables":  schema.MissingTables,
+			"missing_columns": schema.MissingColumns,
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 

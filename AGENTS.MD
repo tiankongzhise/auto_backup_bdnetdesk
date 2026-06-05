@@ -62,6 +62,13 @@ chcp 65001
 - `uv.lock` 作为客户端依赖锁文件需要随依赖变更提交。
 - `.venv/`、构建缓存和下载缓存不得提交。
 
+## 真实云端 API 联调约束
+
+- 当前 `https://backup.baichengedu.com` 真实云端 API 已部署可用。
+- 后续客户端与百度授权、账号选择、token 回写、上传、同步等联调必须使用真实云端 API 链路，不得以模拟云端 API 作为联调验收依据。
+- 自动化单元测试可以覆盖纯本地输入校验、UI 状态和无网络逻辑，但凡验证客户端与云端接口契约、授权链路、账号状态或同步结果，必须走真实云端 API。
+- 真实联调产生的 Device Token、百度授权 token、用户密码、wrapping key、本地数据库和日志敏感内容不得提交到仓库。
+
 ## 进度记录
 
 本项目的开发排期和进度必须记录在 `docs/roadmap_progress.md`。
@@ -105,6 +112,8 @@ chcp 65001
 - 客户端不得直连云端数据库，必须通过云端 API 访问。
 - 本地数据库与云端数据库需要双写并带版本控制。
 - 本地/云端版本冲突不得自动覆盖，必须进入校对流程。
+- Go 云端二进制部署后不得依赖人工先执行初始化命令；服务启动必须自检 PostgreSQL schema，缺少关键表/列或检查失败时自动执行内置迁移并复查。
+- `cloud-api migrate --env-file /path/to/.env` 只允许作为排障或人工修复入口，不得作为正常部署的初始化前置条件。
 
 ## 百度网盘远端目录约束
 
@@ -212,3 +221,23 @@ chcp 65001
 解决方案：后续执行 uv 命令时设置 `UV_LINK_MODE=copy`，显式使用复制模式，避免重复出现 hardlink fallback 警告。
 
 后续约束：Python 客户端依赖仍必须使用 uv 管理；在 `client/` 下执行 `uv add`、`uv remove`、`uv sync` 或 `uv run` 时优先设置 `UV_LINK_MODE=copy`，不得改用 `pip install` 绕过 uv。
+
+### 2026-06-05：PySide6 从默认源下载过慢导致 uv 超时
+
+问题：新增 PySide6 和 qrcode 依赖后，`uv add`/`uv sync` 从默认源下载 PySide6 大体积 wheel 时多次超过 2-5 分钟超时，并留下后台 `uv` 进程。
+
+原因：PySide6 依赖包含 `pyside6-addons`、`pyside6-essentials` 等大文件，当前网络访问默认 PyPI 源速度不稳定。
+
+解决方案：在 `client/pyproject.toml` 配置 `tool.uv.index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"`，继续配合 `UV_LINK_MODE=copy` 执行 `uv sync`，依赖同步在 82 秒内完成。
+
+后续约束：后续客户端依赖安装和同步优先使用 `client/pyproject.toml` 中配置的 PyPI 镜像；若 uv 命令超时，先检查并结束遗留 `uv` 进程，再重试，不得改用 `pip install` 绕过 uv。
+
+### 2026-06-05：真实云端 PostgreSQL 未执行迁移导致设备注册失败
+
+问题：真实云端 `https://backup.baichengedu.com/v1/healthz` 和 `/v1/readyz` 返回 200，但调用 `/v1/devices/register` 返回 500，服务器日志显示 `ERROR: relation "devices" does not exist (SQLSTATE 42P01)`。
+
+原因：服务进程能连接 PostgreSQL，所以原 `/readyz` 只做 Ping 会误报可用；目标数据库未执行 `001_cloud_sync.sql`，缺少 `devices` 等关键表。
+
+解决方案：补充 Go 单二进制内置迁移和 schema readiness 检查；`cloud-api serve` 启动时自动检查 PostgreSQL schema，缺少关键表/列或检查失败时自动执行内置迁移并复查；`/v1/readyz` 后续必须同时检查 PostgreSQL 可连接和关键表存在。
+
+后续约束：真实云端联调前必须确认新版服务已重启且 `/v1/readyz` 返回 200；遇到 `relation ... does not exist` 或 `schema_not_ready` 时优先检查启动日志中的自动迁移结果和 PostgreSQL 数据库是否连错，`cloud-api migrate` 只作为排障手动入口，不得仅凭 `/readyz` 旧版本 200 判断数据库 schema 可用。

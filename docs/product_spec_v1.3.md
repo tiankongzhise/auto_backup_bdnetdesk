@@ -557,11 +557,13 @@ Go 云端服务运行约束：
 - 环境文件内容参考 `cloud-api/.env.example`，真实 PostgreSQL DSN 和密码不得提交到仓库。
 - `APP_ENV=production` 只用于结构化日志标识当前部署环境，不改变 PostgreSQL 连接选择或安全策略。
 - 云端 PostgreSQL 迁移位于 `cloud-api/migrations/postgres`。
+- 云端服务端二进制内置 PostgreSQL 迁移，`cloud-api serve` 启动时必须自动检查 schema，缺少关键表/列或检查失败时自动执行内置迁移并复查。
+- `cloud-api migrate --env-file /path/to/.env` 仅作为排障或人工修复入口，不得作为二进制正常部署后的初始化前置条件。
 - 客户端本地 SQLite `sync_outbox` 迁移位于 `client/migrations/sqlite`，不属于 Go 服务端迁移。
 - 结构化日志不得输出 Device Token、百度 token、用户密码、PostgreSQL 密码、完整 DSN、明文原始路径或完整敏感 payload。
 - PostgreSQL 启动和连接失败日志必须包含脱敏后的 `env_file_mode`、`env_files_loaded`、`postgres_config_source`、`postgres_host`、`postgres_port`、`postgres_database`、`postgres_user`、`postgres_sslmode`、`postgres_password_set` 和 `postgres_defaulted_fields`，用于部署排查。
 - `GET /v1/healthz` 只表示进程存活。
-- `GET /v1/readyz` 必须检查 PostgreSQL 可用性。
+- `GET /v1/readyz` 必须检查 PostgreSQL 可用性和关键 schema 是否已迁移；服务已启动但缺少关键表/列时返回 `schema_not_ready`，不得只因数据库可 ping 就返回 ready。
 
 systemd 示例：
 

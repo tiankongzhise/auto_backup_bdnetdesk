@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -308,6 +309,123 @@ LIMIT 10
 
 func (s *PostgresStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
+}
+
+func (s *PostgresStore) CheckSchema(ctx context.Context) (SchemaReadiness, error) {
+	required := map[string][]string{
+		"devices": {
+			"device_id",
+			"device_token_hash",
+			"device_name",
+			"hostname",
+			"os_version",
+			"client_version",
+			"revoked_at",
+		},
+		"cloud_entities": {
+			"entity_id",
+			"entity_type",
+			"schema_version",
+			"data_version",
+			"revision_id",
+			"updated_by_device_id",
+			"canonical_record_sha256",
+			"payload_json",
+		},
+		"entity_revisions": {
+			"event_id",
+			"entity_id",
+			"revision_id",
+			"apply_status",
+			"payload_json",
+		},
+		"content_objects": {
+			"content_id",
+			"file_sha256",
+			"size_bytes",
+			"latest_entity_id",
+		},
+		"archive_objects": {
+			"archive_sha256",
+			"archive_size",
+			"remote_path",
+			"remote_verified",
+			"latest_entity_id",
+		},
+		"baidu_accounts": {
+			"account_id",
+			"baidu_uid",
+			"encrypted_token_json",
+			"encryption_method",
+			"token_version",
+		},
+		"baidu_auth_sessions": {
+			"session_id",
+			"requested_by_device_id",
+			"state",
+			"device_code",
+			"authorization_code",
+		},
+		"baidu_account_device_bindings": {
+			"account_id",
+			"device_id",
+		},
+		"baidu_token_refresh_leases": {
+			"account_id",
+			"lease_id",
+			"holder_device_id",
+			"expires_at",
+		},
+	}
+
+	rows, err := s.pool.Query(ctx, `
+SELECT table_name, column_name
+FROM information_schema.columns
+WHERE table_schema = current_schema()
+`)
+	if err != nil {
+		return SchemaReadiness{}, err
+	}
+	defer rows.Close()
+
+	seen := map[string]map[string]bool{}
+	for rows.Next() {
+		var tableName string
+		var columnName string
+		if err := rows.Scan(&tableName, &columnName); err != nil {
+			return SchemaReadiness{}, err
+		}
+		if seen[tableName] == nil {
+			seen[tableName] = map[string]bool{}
+		}
+		seen[tableName][columnName] = true
+	}
+	if err := rows.Err(); err != nil {
+		return SchemaReadiness{}, err
+	}
+
+	var missingTables []string
+	var missingColumns []string
+	for tableName, columns := range required {
+		tableColumns, ok := seen[tableName]
+		if !ok {
+			missingTables = append(missingTables, tableName)
+			continue
+		}
+		for _, columnName := range columns {
+			if !tableColumns[columnName] {
+				missingColumns = append(missingColumns, tableName+"."+columnName)
+			}
+		}
+	}
+	sort.Strings(missingTables)
+	sort.Strings(missingColumns)
+
+	return SchemaReadiness{
+		Ready:          len(missingTables) == 0 && len(missingColumns) == 0,
+		MissingTables:  missingTables,
+		MissingColumns: missingColumns,
+	}, nil
 }
 
 func (s *PostgresStore) CreateBaiduAuthSession(ctx context.Context, session BaiduAuthSession) error {

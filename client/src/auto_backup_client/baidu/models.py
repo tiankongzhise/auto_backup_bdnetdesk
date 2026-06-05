@@ -9,6 +9,19 @@ JSONDict = dict[str, Any]
 
 
 @dataclass(frozen=True)
+class DeviceRegistration:
+    device_id: str
+    device_token: str
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "DeviceRegistration":
+        return cls(
+            device_id=str(data.get("device_id", "")),
+            device_token=str(data.get("device_token", "")),
+        )
+
+
+@dataclass(frozen=True)
 class BaiduAuthSession:
     session_id: str
     flow: str

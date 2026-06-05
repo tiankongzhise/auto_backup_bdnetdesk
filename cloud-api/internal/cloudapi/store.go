@@ -2,6 +2,12 @@ package cloudapi
 
 import "context"
 
+type SchemaReadiness struct {
+	Ready          bool     `json:"ready"`
+	MissingTables  []string `json:"missing_tables,omitempty"`
+	MissingColumns []string `json:"missing_columns,omitempty"`
+}
+
 type Store interface {
 	RegisterDevice(ctx context.Context, device Device, tokenHash string) error
 	DeviceByTokenHash(ctx context.Context, tokenHash string) (Device, bool, error)
@@ -20,4 +26,5 @@ type Store interface {
 	UpdateBaiduAccountToken(ctx context.Context, accountID string, deviceID string, expectedVersion int64, update BaiduAccount) (BaiduAccount, bool, error)
 	AcquireBaiduRefreshLease(ctx context.Context, accountID string, deviceID string, leaseID string, durationSeconds int64) (BaiduRefreshLease, bool, error)
 	Ping(ctx context.Context) error
+	CheckSchema(ctx context.Context) (SchemaReadiness, error)
 }

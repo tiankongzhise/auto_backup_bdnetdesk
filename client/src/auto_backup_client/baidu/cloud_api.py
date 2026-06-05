@@ -12,6 +12,7 @@ from auto_backup_client.baidu.models import (
     BaiduEncryptedToken,
     BaiduRefreshLease,
     CompleteAuthResult,
+    DeviceRegistration,
     format_datetime,
 )
 
@@ -160,6 +161,39 @@ class BaiduCloudClient:
         error_code = str(data.get("error", "http_error")) if isinstance(data, dict) else "http_error"
         message = str(data.get("message", "")) if isinstance(data, dict) else response.text
         raise CloudAPIError(response.status_code, error_code, message)
+
+
+def register_device(
+    base_url: str,
+    *,
+    device_name: str,
+    hostname: str = "",
+    os_version: str = "",
+    client_version: str = "",
+    http_client: httpx.Client | None = None,
+    timeout: float = 20.0,
+) -> DeviceRegistration:
+    client = http_client or httpx.Client(timeout=timeout)
+    owns_client = http_client is None
+    try:
+        response = client.post(
+            base_url.rstrip("/") + "/v1/devices/register",
+            json={
+                "device_name": device_name,
+                "hostname": hostname,
+                "os_version": os_version,
+                "client_version": client_version,
+            },
+        )
+        if response.status_code >= 400:
+            BaiduCloudClient._raise_api_error(response)
+        data = response.json()
+        if not isinstance(data, dict):
+            raise CloudAPIError(response.status_code, "invalid_response", "response body must be a JSON object")
+        return DeviceRegistration.from_json(data)
+    finally:
+        if owns_client:
+            client.close()
 
 
 def _b64url_encode(value: bytes) -> str:

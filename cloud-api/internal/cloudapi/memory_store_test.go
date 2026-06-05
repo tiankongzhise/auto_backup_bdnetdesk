@@ -277,6 +277,16 @@ func (s *memoryStore) Ping(_ context.Context) error {
 	return s.err
 }
 
+func (s *memoryStore) CheckSchema(_ context.Context) (SchemaReadiness, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.err != nil {
+		return SchemaReadiness{}, s.err
+	}
+	return SchemaReadiness{Ready: true}, nil
+}
+
 func (s *memoryStore) CreateBaiduAuthSession(_ context.Context, session BaiduAuthSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

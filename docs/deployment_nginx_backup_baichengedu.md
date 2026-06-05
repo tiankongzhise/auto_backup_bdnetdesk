@@ -85,7 +85,7 @@ POSTGRES_SSLMODE=disable
 然后在宝塔的启动命令或进程守护命令中显式指定：
 
 ```bash
-/www/server/auto-backup-bdnetdesk/cloud-api --env-file /www/server/auto-backup-bdnetdesk/.env
+/www/server/auto-backup-bdnetdesk/cloud-api serve --env-file /www/server/auto-backup-bdnetdesk/.env
 ```
 
 服务也会在未显式指定时自动尝试读取当前工作目录、二进制所在目录下的 `cloud-api.env`/`.env`，Linux 下还会尝试 `/etc/auto-backup-bdnetdesk/cloud-api.env`。显式 `--env-file` 更适合宝塔，因为启动工作目录可能不稳定。
@@ -108,6 +108,22 @@ postgres_defaulted_fields
 ```
 
 日志不会输出完整 DSN、数据库密码、百度 App Secret 或 token。
+
+## PostgreSQL 迁移
+
+服务端二进制已内置 `cloud-api/migrations/postgres` 下的 PostgreSQL 迁移。`cloud-api serve` 启动时会自动检查 PostgreSQL schema；首次部署、数据库缺表或 schema 检查异常时，会自动执行内置迁移并复查。
+
+正常部署启动命令：
+
+```bash
+/www/server/auto-backup-bdnetdesk/cloud-api serve --env-file /www/server/auto-backup-bdnetdesk/.env
+```
+
+自动迁移会创建 `schema_migrations`，按文件名顺序执行 `001_cloud_sync.sql` 和 `002_baidu_auth.sql`，已执行且校验一致的迁移会跳过。迁移执行使用 PostgreSQL 事务级 advisory lock，避免多实例同时启动时重复抢写。
+
+`cloud-api migrate --env-file /www/server/auto-backup-bdnetdesk/.env` 只保留为排障或人工修复命令，不作为二进制部署后的正常初始化前置条件。
+
+`GET /v1/readyz` 会同时检查 PostgreSQL 连接和关键表字段。服务已启动但仍缺少 `devices`、`baidu_accounts` 等表时，会返回 `schema_not_ready` 和缺失表/列清单；这时应检查启动日志中的自动迁移错误和实际连接的 PostgreSQL 配置，不要只凭旧版本 `/readyz` 返回 200 判断数据库可用。
 
 ## RSA 备选模式
 

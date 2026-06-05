@@ -1,3 +1,9 @@
+from auto_backup_client.baidu.auth_workflow import (
+    BaiduAuthWorkflow,
+    PasswordWrappingMaterial,
+    session_status_label,
+    token_validity_label,
+)
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient
 from auto_backup_client.baidu.crypto import (
     BAIDU_ENCRYPTION_PASSWORD,
@@ -16,12 +22,16 @@ from auto_backup_client.baidu.refresh import (
 __all__ = [
     "BAIDU_ENCRYPTION_PASSWORD",
     "BAIDU_ENCRYPTION_RSA",
+    "BaiduAuthWorkflow",
     "BaiduCloudClient",
     "BaiduOAuthTokenClient",
     "PlainBaiduToken",
+    "PasswordWrappingMaterial",
     "RefreshLeaseUnavailable",
     "decrypt_token_envelope",
     "derive_password_wrapping_key",
     "encrypt_password_token",
     "refresh_baidu_account_token",
+    "session_status_label",
+    "token_validity_label",
 ]
