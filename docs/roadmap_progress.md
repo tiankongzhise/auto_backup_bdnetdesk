@@ -8,17 +8,17 @@ PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动�
 
 ## 当前工作项
 
-- 修复 password 模式授权材料持久化：客户端必须能在 UI 退出后根据用户密码和持久化 KDF 参数重新派生同一个 wrapping key；优先使用 Windows DPAPI/凭据管理器保存敏感材料，测试 `.env` 仅限本机忽略文件。
-- 修复或绕过当前 Windows Go 工具链异常；恢复 `cloud-api/` 下 `go test ./...` 常规验收。
+- 本轮修复 Windows Go 工具链自检失败：定位当前 `C:\Program Files\Go` 标准库缺失/缓存工具链异常，优先使用仓库内可复现脚本或干净工具链恢复 `go list runtime` 与 `go test ./...`。
+- 本轮补齐 password 模式授权材料持久化：客户端完成授权时持久化 account 级 KDF salt/参数，重启后可根据用户密码重新派生同一个 wrapping key；优先使用 Windows DPAPI 保护本地凭据文件，不把用户密码或 wrapping key 落入仓库。
 - 继续使用真实 `https://backup.baichengedu.com` API 和已入库授权验证 token 本地解密、百度容量/用户信息读取、预上传、分片上传和 create 链路。
 - 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库或敏感日志。
 
 ## 本次验收标准
 
-- password 模式授权完成后，客户端重启仍能读取持久化 KDF 参数并用用户密码解密云端密文 token。
-- 本地测试 `.env` 仍保持 Git 忽略状态，不进入提交；正式凭据存储优先使用 Windows DPAPI/凭据管理器。
+- `cloud-api/` 下 `go list runtime` 能通过，`go test ./...` 在恢复后的 Windows Go 工具链下通过。
+- password 模式授权完成后，客户端会按 `account_id` 保存 KDF salt/参数；客户端重启后读取该材料并用用户密码解密云端密文 token。
+- 本地凭据材料文件使用 Windows DPAPI 保护；非 Windows 或测试场景必须显式 opt-in 才允许明文持久化，`.env` 和真实敏感材料仍保持 Git 忽略状态。
 - `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run pytest` 和 `uv run python -m compileall src tests` 通过。
-- `cloud-api/` 下 `go list runtime` 和 `go test ./...` 在干净 Go 工具链下通过。
 - 真实云端已入库百度账号的账号选择、密文 token 元数据读取和刷新租约互斥继续通过。
 
 ## 开发排期
@@ -41,6 +41,25 @@ PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动�
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### Windows 系统 Go 工具链修复
+
+- 按用户要求停止项目内绕过方式，直接排查系统默认 `C:\Program Files\Go\bin\go.exe`。
+- 确认 `C:\Program Files\Go\src\runtime` 等标准库目录和文件实际存在；早期 `package runtime is not in std` 现象与沙箱无法读取用户级 Go 配置/缓存权限有关，不能作为系统 Go 缺标准库文件的最终结论。
+- 使用默认系统 Go 1.26.2 运行 `go list runtime` 可通过，但清缓存后 `go test ./...` 在标准库 `internal/profile` 编译阶段触发 compiler internal error。
+- 下载官方 `go1.26.3.windows-amd64.msi` 并验证 Google LLC 签名有效；普通非管理员静默 MSI 安装日志返回 1603，未替换系统 Go。
+- 通过管理员 UAC 安装 Go 1.26.3 后，注册表和 `go version` 均显示 1.26.3；但清理 Go 构建缓存后，标准库 `math/big`、`vendor/golang.org/x/net/idna` 编译仍触发 compiler/runtime 崩溃。
+- 由于本项目 `cloud-api/go.mod` 要求 `go 1.25.0`，改用官方维护的 Go 1.25 补丁线；下载并验签 `go1.25.10.windows-amd64.msi`，通过管理员 UAC 卸载 1.26.3 并安装 1.25.10。
+- 已确认注册表显示 `Go Programming Language amd64 go1.25.10`，`go version` 返回 `go1.25.10 windows/amd64`。
+- 已验证在 `cloud-api/` 下执行 `go clean -cache` 后，`go list runtime` 通过，`go test ./...` 通过。
+- 将系统 Go 1.26.x 冷缓存编译标准库崩溃、非管理员 MSI 返回 1603 但不会替换系统 Go 的问题沉淀到 `AGENTS.MD`。
+
+提交摘要：本次提交记录并固化 Windows 系统 Go 工具链修复结果，系统默认 Go 已从不稳定的 1.26.x 切换到与项目 `go.mod` 匹配的官方 Go 1.25.10，恢复 `cloud-api/` 的本地 Go 常规验收。
+
+后续待办：
+
+- 后续 Windows 本地 Go 验收优先使用官方 Go 1.25 最新补丁线，并在测试前执行 `go version` 与 `go list runtime`。
+- 继续补齐 password 模式 KDF salt/凭据持久化。
 
 ### 初始化项目仓库与产品文档
 

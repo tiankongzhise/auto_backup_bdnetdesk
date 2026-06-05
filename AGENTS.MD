@@ -262,6 +262,16 @@ chcp 65001
 
 后续约束：后续执行 Go 测试前先运行 `go version` 和 `go list runtime` 做工具链自检；若标准库自检失败，不得把 `go test` 失败误判为项目代码失败，应先修复本机 Go 工具链或换干净环境验证。
 
+### 2026-06-05：系统 Go 1.26.x 冷缓存编译标准库崩溃
+
+问题：按用户要求彻底修复系统 Go 后，确认 `C:\Program Files\Go\src\runtime` 等标准库文件实际存在；在非沙箱管理员环境下 `go list runtime` 可通过，但默认系统 Go 1.26.2 执行 `go test ./...` 时在标准库 `internal/profile` 编译阶段触发 compiler internal error。升级到官方 Go 1.26.3 并清理 Go 构建缓存后，仍在标准库 `math/big`、`vendor/golang.org/x/net/idna` 编译阶段触发 compiler/runtime 崩溃。
+
+原因：早期 `package runtime is not in std` 现象叠加了沙箱无法读取用户级 `C:\Users\3700x\AppData\Roaming\go\env` 与默认 Go 构建缓存权限问题；真正阻塞本地测试的根因是当前 Windows Go 1.26.x 工具链在本机冷缓存编译标准库时不稳定，不是项目代码回归。
+
+解决方案：下载并验签官方 `go1.25.10.windows-amd64.msi`，通过管理员 UAC 卸载 Go 1.26.3 并安装 Go 1.25.10；安装后确认注册表显示 `Go Programming Language amd64 go1.25.10`，`go version` 返回 `go1.25.10 windows/amd64`，执行 `go clean -cache` 后 `go list runtime` 和 `cloud-api/` 下 `go test ./...` 均通过。
+
+后续约束：本项目 `cloud-api/go.mod` 当前要求 `go 1.25.0`，Windows 本地 Go 验收优先使用官方 Go 1.25 最新补丁线；不得把 Go 1.26.x 在本机标准库冷编译时的 internal compiler error 误判为项目代码失败。系统级 Go MSI 安装/卸载必须使用管理员权限并检查 MSI 日志，静默非管理员安装可能在日志中返回 1603 且不会实际替换 `C:\Program Files\Go`。
+
 ### 2026-06-05：PySide6 授权 UI 后台任务生命周期导致完成授权后闪退
 
 问题：真实百度授权完成后点击 UI 的“完成授权”，云端账号和密文 token 已成功入库，但 PySide6 窗口和承载 PowerShell 进程退出。
