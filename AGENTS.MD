@@ -152,3 +152,23 @@ chcp 65001
 解决方案：删除本地生成的 `cloud-api.exe`，并在 `.gitignore` 中忽略 `*.exe`。
 
 后续约束：后续仅做编译检查时，优先使用 `go build -o` 输出到临时目录；不得提交本地构建出的 `.exe` 二进制。
+
+### 2026-06-05：Windows PowerShell 5.1 读取 UTF-8 无 BOM 中文文件乱码
+
+问题：在 PowerShell 中已设置 UTF-8 控制台编码后，使用 `Get-Content -Raw` 读取中文 Markdown 仍出现乱码。
+
+原因：当前环境是 Windows PowerShell 5.1，读取 UTF-8 无 BOM 文本时未显式指定 `-Encoding UTF8` 可能按系统默认 ANSI 编码解码；控制台输出编码不等同于文件读取编码。
+
+解决方案：读取项目中文文本文件时使用 `Get-Content -Raw -Encoding UTF8 -LiteralPath ...`；脚本内部读取 `go.mod` 等文本也显式使用 `-Encoding UTF8`。
+
+后续约束：PowerShell 命令除设置 `$OutputEncoding`、`[Console]::OutputEncoding`、`[Console]::InputEncoding` 和 `chcp 65001` 外，读取中文或项目文本文件时必须显式指定 `-Encoding UTF8`。
+
+### 2026-06-05：Windows PowerShell 5.1 不支持 `System.IO.Path.GetRelativePath`
+
+问题：改造根目录 `go_build.ps1` 时，原计划使用 `[System.IO.Path]::GetRelativePath(...)` 输出相对路径。
+
+原因：当前环境是 Windows PowerShell 5.1 / .NET Framework，该 API 属于较新的 .NET 版本，不适合作为本项目通用脚本依赖。
+
+解决方案：`go_build.ps1` 改用 `System.Uri.MakeRelativeUri(...)` 计算相对路径，保持 Windows PowerShell 5.1 兼容。
+
+后续约束：项目通用 PowerShell 脚本必须优先兼容 Windows PowerShell 5.1；使用 .NET API 前应确认该 API 在 5.1 环境可用。

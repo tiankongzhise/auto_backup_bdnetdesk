@@ -4,23 +4,21 @@
 
 ## 当前阶段
 
-Go 云端服务目录整理、部署说明和数据库一致性规则修正已完成。
+Go 云端服务构建脚本适配已完成。
 
 ## 当前工作项
 
-- 完成 Go 云端服务完整收拢到 `cloud-api/` 目录。
-- 完成客户端 SQLite `sync_outbox` 迁移移动到客户端目录，避免和云端迁移混放。
-- 完成 Go 二进制部署时 PostgreSQL 连接来源和 systemd 环境文件示例。
-- 完成当前云端数据库 revision 投影与审计层的一致性口径说明。
-- 完成进度记录规则修正，要求完成记录进入同一个功能 commit。
+- 完成根目录通用 `go_build.ps1` 对本项目 `cloud-api/` Go module 的适配。
+- 完成默认生成服务端部署用 `linux/amd64` Go 二进制文件。
+- 完成构建产物输出到项目级部署产物目录，避免在源码目录或仓库根目录散落二进制。
+- 完成构建脚本文档、忽略规则和本次工具问题沉淀。
 
 ## 本次验收标准
 
-- 根目录只保留项目级文档和客户端/云端顶层目录，Go 服务端代码集中在 `cloud-api/`。
-- `cloud-api/.env.example` 说明 Go 服务端通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接目标数据库。
-- README 和产品规格包含二进制部署到服务器后的 PostgreSQL 连接配置说明。
-- 产品规格明确本地/云端一致性以 `entity_id`、`revision_id`、`data_version`、`canonical_record_sha256` 校对。
-- `AGENTS.MD` 和本进度文件不再要求 commit 后产生新的未提交进度变更。
+- 在仓库根目录执行 `.\go_build.ps1` 可成功构建 `cloud-api/cmd/cloud-api`。
+- 默认输出路径为 `dist/cloud-api/linux-amd64/cloud-api`，二进制名称与 systemd 示例保持一致。
+- 脚本支持显式指定 `-ModuleDir`、`-ServiceName`、`-OutputDir`、`-GoOS`、`-GoArch` 和 `-OutputName`。
+- Go 缓存和构建产物不纳入 Git 提交，不污染 `cloud-api/` 源码目录。
 - 在 `cloud-api/` 下执行 `go test ./...` 通过。
 
 ## 开发排期
@@ -100,4 +98,24 @@ Go 云端服务目录整理、部署说明和数据库一致性规则修正已�
 
 - SQLite schema 阶段补齐本地核心业务表，并决定云端继续使用 JSONB 投影、增加同名物理表，或增加视图/索引表。
 - 后续构建检查优先使用 `go build -o` 输出到临时目录，避免生成本地 `.exe` 污染工作区。
+- 继续搭建 Python 客户端项目骨架、配置加载和日志脱敏。
+
+### Go 服务端部署构建脚本适配
+
+- 新增根目录 `go_build.ps1`，默认从仓库根目录自动定位 `cloud-api/` Go module，并自动识别唯一的 `cmd/cloud-api/main.go` 服务入口。
+- 默认构建目标为 `linux/amd64`，启用 `CGO_ENABLED=0`、`-trimpath`、`-buildvcs=false` 和 `-ldflags="-s -w"`，生成适合服务器部署的精简单二进制。
+- 默认输出路径为 `dist/cloud-api/linux-amd64/cloud-api`，二进制名称与 README 和产品规格中的 systemd `ExecStart=/opt/auto-backup-bdnetdesk/cloud-api` 保持一致。
+- 支持 `-ModuleDir`、`-ServiceName`、`-OutputDir`、`-OutputName`、`-GoOS`、`-GoArch`、`-NameSource` 和 `-CompressWithUpx` 参数，保留通用构建脚本能力。
+- 将 Go 构建缓存统一放入仓库根目录 `.cache/go-build` 和 `.cache/go-mod`，并在 `.gitignore` 中忽略 `.cache/` 与 `dist/`。
+- 在 `.gitattributes` 中补充 `*.ps1 text eol=lf`，保持 PowerShell 脚本符合项目 LF 约束。
+- 更新 README，补充从仓库根目录执行 `.\go_build.ps1` 生成服务端部署二进制的说明。
+- 将本轮遇到的 Windows PowerShell 5.1 UTF-8 文件读取和 .NET API 兼容性问题沉淀到 `AGENTS.MD`。
+- 已验证在仓库根目录执行 `.\go_build.ps1` 成功生成 `dist/cloud-api/linux-amd64/cloud-api`。
+- 已验证在 `cloud-api/` 下执行 `go test ./...` 通过。
+
+提交摘要：根目录通用 Go 构建脚本已适配本项目 `cloud-api/` 服务端模块，可直接生成 Linux amd64 部署二进制，构建缓存和产物已隔离并忽略。
+
+后续待办：
+
+- 后续发布阶段可增加二进制 SHA256 校验文件、版本号注入和部署包打包流程。
 - 继续搭建 Python 客户端项目骨架、配置加载和日志脱敏。

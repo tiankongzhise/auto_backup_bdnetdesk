@@ -24,6 +24,14 @@ cd cloud-api
 go run ./cmd/cloud-api
 ```
 
+从仓库根目录构建服务端部署二进制：
+
+```powershell
+.\go_build.ps1
+```
+
+默认生成 `dist/cloud-api/linux-amd64/cloud-api`，用于 Linux amd64 服务器部署；可通过 `-GoOS`、`-GoArch`、`-OutputDir`、`-OutputName`、`-ModuleDir` 和 `-ServiceName` 调整目标平台、输出位置和服务入口。
+
 云端 PostgreSQL 迁移文件位于 `cloud-api/migrations/postgres`；客户端本地 `sync_outbox` 迁移契约位于 `client/migrations/sqlite`。
 
 二进制部署到服务器后，服务通过环境变量决定连接哪台 PostgreSQL。推荐在服务器创建 `/etc/auto-backup-bdnetdesk/cloud-api.env`，并在 systemd 中使用：
