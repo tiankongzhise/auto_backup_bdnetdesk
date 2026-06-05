@@ -2,7 +2,7 @@
 
 Windows 桌面端百度网盘加密备份工具。
 
-本项目目标是将用户选择的文件和文件夹，以加密压缩包形式备份到百度网盘指定位置，并通过本地 SQLite 与云端 PostgreSQL 双写记录，实现多设备去重、断点续传、来源映射、数据库与百度网盘校对、原始数据清理记录和恢复。
+本项目目标是将用户选择的文件和文件夹，以加密压缩包形式备份到百度网盘指定位置，并通过本地 SQLite 与 Go 云端 API + PostgreSQL 双写记录，实现多设备去重、断点续传、来源映射、数据库与百度网盘校对、原始数据清理记录和恢复。
 
 ## 当前状态
 
@@ -14,6 +14,16 @@ Windows 桌面端百度网盘加密备份工具。
 - `docs/product_spec_v1.3.md`：完整产品与技术规格。
 - `docs/roadmap_progress.md`：开发排期和进度记录。
 - `.env.example`：本地开发环境变量示例。
+
+## 云端同步服务
+
+Go 云端服务入口为 `cmd/cloud-api`，默认监听 `:8080`，通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接外部 PostgreSQL。
+
+```powershell
+go run ./cmd/cloud-api
+```
+
+数据库迁移文件位于 `migrations/postgres`；客户端本地 `sync_outbox` 迁移契约位于 `migrations/sqlite`。
 
 ## 敏感信息
 

@@ -90,7 +90,7 @@ chcp 65001
 
 - 本地 SQLite 是任务执行主库。
 - 只要本地数据库落盘成功，任务即可继续执行。
-- 云端 PostgreSQL 通过 outbox 异步同步，保证最终一致。
+- 客户端本地 `sync_outbox` 通过云端 API 异步同步到 PostgreSQL，保证最终一致。
 - 客户端不得直连云端数据库，必须通过云端 API 访问。
 - 本地数据库与云端数据库需要双写并带版本控制。
 - 本地/云端版本冲突不得自动覆盖，必须进入校对流程。
@@ -131,3 +131,13 @@ chcp 65001
 解决方案：本仓库设置 `core.autocrlf=false`，并在 `.gitattributes` 中使用 `* text=auto eol=lf`，同时对 `.md`、`.txt`、`.env`、`.py`、`.json`、`.yml`、`.yaml` 明确指定 LF。
 
 后续约束：本项目不得依赖全局 Git 换行配置；发现换行警告时必须优先检查仓库本地 `core.autocrlf` 和 `.gitattributes`。
+
+### 2026-06-05：本地缺少 sqlc 命令
+
+问题：落地 Go 云端同步服务时，检查本地工具链发现 `sqlc` 命令不存在。
+
+原因：当前开发环境只有 Go 工具链，尚未安装 sqlc 代码生成器。
+
+解决方案：本次提交保留 `sqlc.yaml` 和 `internal/cloudapi/queries` 查询文件作为生成入口，同时先用 `pgx` 手写窄数据层，保证项目可以直接 `go test ./...`。
+
+后续约束：需要启用 sqlc 生成代码前，先安装 sqlc 并在单独提交中切换数据层；不得在未验证生成结果时删除当前可编译的 pgx 数据层。

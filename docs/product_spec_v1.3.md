@@ -10,8 +10,8 @@
 
 - 客户端：Python 3.12 + PySide6。
 - 本地数据库：SQLite。
-- 云端服务：FastAPI + PostgreSQL。
-- HTTP：httpx。
+- 云端服务：Go + PostgreSQL，使用 chi、pgx/pgxpool 和 sqlc；部署形态为单二进制 + 外部 PostgreSQL。
+- HTTP：客户端使用 httpx；云端使用 Go net/http + chi。
 - 加密压缩：7-Zip AES-256。
 - 打包：PyInstaller 或 Nuitka。
 - Rust：v1.3 不强制使用；若哈希/扫描性能不足，再用 Rust 写扩展模块。
@@ -380,7 +380,7 @@ failed
 
 ## 5. 本地与云端数据库双写
 
-本地 SQLite 是任务执行主库。只要本地事务落盘成功，任务即可继续。云端 PostgreSQL 通过异步 outbox 同步，保证最终一致。
+本地 SQLite 是任务执行主库。只要本地事务落盘成功，任务即可继续。客户端本地 `sync_outbox` 通过 Go 云端 Cloud Sync API 异步写入 PostgreSQL，保证最终一致。云端服务负责 revision 接收、幂等写入、版本冲突检测、跨设备查询和灾备重建，不保存用户明文密码。
 
 所有核心实体本地和云端都必须存在：
 
@@ -430,10 +430,216 @@ last_synced_revision_id
 1. 本地业务表写入成功。
 2. 同一 SQLite 事务写入 `sync_outbox`。
 3. 后台同步器读取 outbox。
-4. 调用云端 API。
+4. 调用 Go 云端 Cloud Sync API。
 5. 云端按 revision 幂等写入。
 6. 成功后本地标记 `sync_status=synced`。
 7. 失败保持 `sync_pending`，稍后重试。
+
+云端 API 固定接口：
+
+```text
+POST /v1/devices/register
+POST /v1/sync/revisions
+GET /v1/contents/{content_id}
+GET /v1/archives/{archive_sha256}
+GET /v1/reconcile/entities/{entity_id}
+GET /v1/healthz
+GET /v1/readyz
+```
+
+认证规则：
+
+- 设备注册后由云端生成 `device_id` 和 Device Token。
+- 后续请求使用 `Authorization: Bearer <device_token>`。
+- 云端只保存 token 哈希，支持按设备吊销。
+- 客户端不得保存 PostgreSQL 连接串，不得直连云端数据库。
+
+术语边界：
+
+- `sync_outbox` 只存在于客户端本地 SQLite。
+- 云端 Go 服务不是“远端 outbox”，而是 Cloud Sync API / Revision Ingest。
+- 客户端后台同步器负责读取本地 outbox、调用云端 API、根据逐条结果更新本地同步状态。
+- 云端 Go 服务负责认证、revision 幂等接收、PostgreSQL 落库、版本冲突检测和查询。
+
+客户端 `sync_outbox` 表字段固定：
+
+```text
+event_id
+entity_type
+entity_id
+revision_id
+operation
+payload_json
+status
+retry_count
+next_retry_at
+last_error
+created_at
+updated_at
+```
+
+`sync_outbox.status` 固定：
+
+```text
+pending
+syncing
+synced
+sync_conflict
+retryable
+failed_terminal
+```
+
+`operation` 固定：
+
+```text
+upsert
+delete
+```
+
+本地写入约束：
+
+- 业务表写入和 `sync_outbox` 写入必须在同一个 SQLite 事务中完成。
+- `event_id` 全局唯一。
+- `entity_id + revision_id` 本地唯一，用于防止同一 revision 被重复入队。
+- 后台同步器只读取 `pending` 和到期的 `retryable` 事件。
+- 云端返回 `synced` 或 `duplicate` 后，本地业务记录标记 `sync_status=synced`，outbox 标记 `synced`。
+- 云端返回 `conflict` 后，本地业务记录和 outbox 均进入 `sync_conflict`。
+- 云端不可用或返回可重试错误时，本地不得误标记 synced，必须增加 `retry_count` 并写入 `next_retry_at`。
+
+Go 云端服务运行约束：
+
+- 服务入口固定为 `cmd/cloud-api`。
+- 默认监听 `CLOUD_API_ADDR=:8080`。
+- PostgreSQL 连接优先使用 `POSTGRES_DSN`；未设置时使用 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_SSLMODE` 组合。
+- 结构化日志不得输出 Device Token、百度 token、用户密码、明文原始路径或完整敏感 payload。
+- `GET /v1/healthz` 只表示进程存活。
+- `GET /v1/readyz` 必须检查 PostgreSQL 可用性。
+
+设备注册接口：
+
+```text
+POST /v1/devices/register
+```
+
+请求字段：
+
+```text
+device_name
+hostname
+os_version
+client_version
+```
+
+响应字段：
+
+```text
+device_id
+device_token
+```
+
+规则：
+
+- `device_name` 必填。
+- `device_token` 只在注册响应中返回一次。
+- 云端只保存 `device_token` 的 SHA256 哈希。
+- token 被吊销后，所有需要认证的接口必须返回 401。
+
+批量 revision 同步接口：
+
+```text
+POST /v1/sync/revisions
+```
+
+请求字段：
+
+```text
+events[]
+  event_id
+  entity_type
+  entity_id
+  revision_id
+  schema_version
+  data_version
+  operation
+  canonical_record_sha256
+  payload
+  updated_at
+  deleted_at
+```
+
+规则：
+
+- 单次请求最多提交 100 条事件。
+- `schema_version > 0`。
+- `data_version > 0`。
+- `canonical_record_sha256` 必须为 64 位小写十六进制 SHA256。
+- `payload` 必须是合法 UTF-8 JSON。
+- `delete` 操作必须使用 tombstone，不物理删除云端业务记录。
+
+响应字段：
+
+```text
+results[]
+  event_id
+  entity_id
+  revision_id
+  status
+  reason
+  cloud_data_version
+  cloud_revision_id
+```
+
+`status` 固定：
+
+```text
+synced
+duplicate
+conflict
+rejected
+```
+
+同步结果语义：
+
+- `synced`：云端已接受并写入当前 revision。
+- `duplicate`：云端已存在相同 `event_id` 或相同 `entity_id + revision_id`，客户端可安全视为成功。
+- `conflict`：云端已有更高版本，或同版本但 revision/hash 不一致；客户端必须进入校对流程。
+- `rejected`：事件字段非法或业务索引 payload 缺少必填字段；客户端不得重试同一无效 payload。
+- PostgreSQL 不可用时接口返回 503 和 `retryable_error`，客户端保持 `sync_pending` 或转入 `retryable`。
+
+云端 PostgreSQL 表：
+
+- `devices`：设备身份、token 哈希、吊销状态、最后访问时间。
+- `cloud_entities`：所有核心同步实体的当前版本投影。
+- `entity_revisions`：所有已接收 revision 的不可变记录，用于幂等、审计和冲突定位。
+- `content_objects`：内容去重索引，唯一键为 `content_id`。
+- `archive_objects`：归档去重索引，唯一键为 `archive_sha256`。
+
+云端唯一约束：
+
+```text
+devices.device_token_hash
+entity_revisions.event_id
+entity_revisions(entity_id, revision_id)
+content_objects.content_id
+archive_objects.archive_sha256
+```
+
+云端写入规则：
+
+- 写入 revision 前必须按 `entity_id` 串行化同一实体的并发写入。
+- 相同 `event_id` 重复提交不得重复写业务状态。
+- 相同 `entity_id + revision_id` 重复提交不得重复写业务状态。
+- 云端当前 `data_version` 大于客户端提交版本时，返回 `conflict`。
+- 云端当前 `data_version` 等于客户端提交版本但 `revision_id` 和 `canonical_record_sha256` 不一致时，返回 `conflict`。
+- `content_objects` 事件必须在 payload 中包含 `content_id`、`file_sha256`、`size_bytes`。
+- `archives` 或 `archive_objects` 事件必须在 payload 中包含 `archive_sha256`。
+
+查询接口语义：
+
+- `GET /v1/contents/{content_id}`：查询云端是否已有内容对象，用于跨设备去重候选判断。
+- `GET /v1/archives/{archive_sha256}`：查询云端是否已有 archive，用于避免重复上传和校对远端状态。
+- `GET /v1/reconcile/entities/{entity_id}`：返回云端当前实体版本和最近 revision 摘要，用于本地/云端冲突定位。
+- 查询接口必须要求 Device Token 认证。
 
 冲突规则：
 
