@@ -6,7 +6,7 @@ Windows 桌面端百度网盘加密备份工具。
 
 ## 当前状态
 
-项目已完成产品规格、初始化文档、Go 云端同步服务基础接口、部署构建脚本和百度网盘云端授权管理接口。
+项目已完成产品规格、初始化文档、Go 云端同步服务基础接口、部署构建脚本和百度网盘云端授权管理接口。仓库以公开项目形式发布，采用 GNU Lesser General Public License v2.1 授权。
 
 ## 文档入口
 
@@ -15,6 +15,7 @@ Windows 桌面端百度网盘加密备份工具。
 - `docs/roadmap_progress.md`：开发排期和进度记录。
 - `.env.example`：本地开发环境变量示例。
 - `docs/deployment_nginx_backup_baichengedu.md`：`backup.baichengedu.com`、nginx 反代和百度回调部署示例。
+- `LICENSE`：GNU Lesser General Public License v2.1 授权文本。
 
 ## 云端同步服务
 
@@ -69,3 +70,7 @@ rsa_oaep_sha256_aes256gcm_v1
 不要提交 `.env`、真实数据库连接串、百度 token、用户密码、本地 SQLite 数据库、缓存文件、日志或密钥文件。
 
 `.env.example` 只提供占位示例。百度 access token、refresh token 和用户备份密码应由客户端使用 Windows DPAPI 或 Windows 凭据管理器保存。
+
+## 许可证
+
+本项目使用 GNU Lesser General Public License v2.1 授权，完整条款见 `LICENSE`。

@@ -4,24 +4,24 @@
 
 ## 当前阶段
 
-Go 云端服务百度网盘账号授权管理已完成。
+GitHub 公开仓库发布准备已完成。
 
 ## 当前工作项
 
-- 将本地 Git 主分支从 `master` 重命名为 `main`，与后续 GitHub 默认分支对齐。
-- 在 `cloud-api/` 新增百度网盘设备码授权与授权码回调接口。
-- 新增 PostgreSQL 授权账号、授权会话、设备绑定和 token 刷新租约迁移。
-- 将百度 access token 与 refresh token 只以密文保存到 PostgreSQL，客户端取回后本地解密使用。
-- 更新 `.env.example`、`cloud-api/.env.example`、README 和产品规格中的百度授权、回调域名、nginx 反代说明。
+- 将本地项目发布到 GitHub 公开仓库。
+- 使用 SSH 作为 GitHub remote 连接方式。
+- 为仓库补充 GNU Lesser General Public License v2.1 授权文本。
+- 根据项目当前功能完善 README 授权说明、GitHub 仓库简介和 topics。
+- 发布前检查工作区状态、未跟踪文件和敏感信息风险。
 
 ## 本次验收标准
 
-- 当前本地分支名称为 `main`。
-- 服务端提供百度授权 session 创建、轮询、完成、回调、账号列表、账号选择、密文 token 读取/更新和刷新租约接口。
-- 密文 token 响应必须包含 `encryption_method`，客户端可以判断使用密码派生密钥还是 RSA 私钥解密。
-- 服务端测试覆盖设备码 session、授权码 callback、password/RSA 加密元数据、多设备选择同一账号、刷新租约互斥和敏感信息不回显。
-- `.env.example` 不再要求客户端填写百度 token 或百度 App Secret；服务端 env 示例包含 `backup.baichengedu.com` 回调配置。
-- 在 `cloud-api/` 下执行 `go test ./...` 通过，根目录 `.\go_build.ps1` 构建通过。
+- GitHub 上存在公开仓库 `tiankongzhise/auto_backup_bdnetdesk`。
+- 本地 `origin` remote 使用 `git@github.com:tiankongzhise/auto_backup_bdnetdesk.git`。
+- GitHub 默认分支和本地推送分支为 `main`。
+- 仓库包含 LGPL-2.1 标准 `LICENSE` 文件，README 说明授权方式。
+- GitHub 仓库简介和 topics 能反映 Windows、百度网盘、加密备份、SQLite、Go、PostgreSQL 等项目特征。
+- 推送前后工作区保持干净，未提交 `.env`、真实 token、数据库、缓存、日志或密钥文件。
 
 ## 开发排期
 
@@ -148,3 +148,21 @@ Go 云端服务百度网盘账号授权管理已完成。
 - 在客户端实现 refresh token 刷新流程：先获取云端刷新租约，本地解密 refresh token，调用百度 token 接口后用 `PUT /v1/baidu/accounts/{account_id}/token` 回写新密文。
 - 使用真实百度开放平台 App Key 在服务器上手动验证设备码端点、授权码回调、用户信息端点和 scope 配置。
 - 后续上传阶段继续实现百度预上传、分片上传和创建文件流程。
+
+### GitHub 公开仓库发布与 LGPL-2.1 授权
+
+- 确认 `gh` 已登录 GitHub 账号 `tiankongzhise`，Git 操作协议为 SSH。
+- 确认 `ssh -T git@github.com` 返回 GitHub SSH 认证成功提示。
+- 确认本地工作区发布前干净，且没有未跟踪文件。
+- 新增标准 LGPL-2.1 `LICENSE` 文件。
+- 更新 README，补充公开发布状态、许可证入口和 LGPL-2.1 授权说明。
+- 计划创建 GitHub 公开仓库 `tiankongzhise/auto_backup_bdnetdesk`，使用 SSH remote 推送 `main` 分支。
+- 计划配置仓库简介为 Windows 桌面端百度网盘加密备份工具，并设置与项目技术栈和功能匹配的 topics。
+
+提交摘要：本次提交补充公开发布所需的 LGPL-2.1 授权文件、README 许可证说明和发布进度记录，为后续通过 SSH 推送到 GitHub 公开仓库做准备。
+
+后续待办：
+
+- 创建并推送 GitHub 公开仓库。
+- 在 GitHub 配置仓库简介和 topics。
+- 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
