@@ -241,3 +241,33 @@ chcp 65001
 解决方案：补充 Go 单二进制内置迁移和 schema readiness 检查；`cloud-api serve` 启动时自动检查 PostgreSQL schema，缺少关键表/列或检查失败时自动执行内置迁移并复查；`/v1/readyz` 后续必须同时检查 PostgreSQL 可连接和关键表存在。
 
 后续约束：真实云端联调前必须确认新版服务已重启且 `/v1/readyz` 返回 200；遇到 `relation ... does not exist` 或 `schema_not_ready` 时优先检查启动日志中的自动迁移结果和 PostgreSQL 数据库是否连错，`cloud-api migrate` 只作为排障手动入口，不得仅凭 `/readyz` 旧版本 200 判断数据库 schema 可用。
+
+### 2026-06-05：uv 默认缓存和受管 Python 目录受沙箱权限影响
+
+问题：在 `client/` 下执行 `uv sync` 时，uv 默认访问 `C:\Users\3700x\AppData\Local\uv\cache` 失败；执行 `uv run` 时读取 `C:\Users\3700x\AppData\Roaming\uv\python` 受沙箱权限限制失败。
+
+原因：当前工作区写权限只覆盖仓库和临时目录，uv 默认缓存和受管 Python 元数据位于用户目录；同时本机 uv 缓存目录状态会触发 “当文件已存在时，无法创建该文件”。
+
+解决方案：后续 uv 命令继续设置 `UV_LINK_MODE=copy`，并显式设置 `UV_CACHE_DIR` 到仓库内 `.cache/uv`；若 uv 仍需读取用户目录下的受管 Python 信息，则按权限流程申请提升后运行，不改用 `pip install`。
+
+后续约束：客户端依赖同步和测试命令优先使用 `UV_LINK_MODE=copy`、`UV_CACHE_DIR=<repo>/.cache/uv`；`.cache/`、`.venv/` 和 pytest/egg 缓存不得提交。
+
+### 2026-06-05：当前 Windows Go 工具链阻塞本地 Go 测试
+
+问题：本轮真实云端联调后，本地执行 `go test ./...` 失败；进一步检查发现 `go list runtime` 也返回 `package runtime is not in std (C:\Program Files\Go\src\runtime)`。尝试 `GOTOOLCHAIN=go1.25.0` 下载并使用 `go.mod` 指定工具链后，编译标准库时出现 Go compiler internal compiler error 和访问异常。
+
+原因：问题发生在 Go 标准库查询和工具链编译阶段，早于项目代码测试断言；判断为当前 Windows Go 安装或本机工具链环境异常，不是本项目 Go 代码回归。
+
+解决方案：本轮保留真实云端 API 联调结果作为服务端已部署版本验证依据；本机需要重新安装或切换到干净 Go 工具链后，再恢复 `cloud-api/` 下 `go test ./...` 作为常规验收。
+
+后续约束：后续执行 Go 测试前先运行 `go version` 和 `go list runtime` 做工具链自检；若标准库自检失败，不得把 `go test` 失败误判为项目代码失败，应先修复本机 Go 工具链或换干净环境验证。
+
+### 2026-06-05：PySide6 授权 UI 后台任务生命周期导致完成授权后闪退
+
+问题：真实百度授权完成后点击 UI 的“完成授权”，云端账号和密文 token 已成功入库，但 PySide6 窗口和承载 PowerShell 进程退出。
+
+原因：授权 UI 的后台 `QRunnable` 没有由页面持有，Qt 自动删除和 Python 对象回收可能导致 worker signal 生命周期不稳定；同时账号刷新、轮询和完成授权共用同一个 `httpx.Client` 并发执行，增加了 UI 回调不确定性。
+
+解决方案：`Worker` 改为 `setAutoDelete(False)`，页面保存 `_workers` 列表直到 `finished` 信号后再清理；真实 API 调用增加 `_api_lock` 串行化；按钮 busy 状态改为按操作局部锁定，避免账号刷新锁住设备码创建。
+
+后续约束：PySide6 后台任务必须由 UI 对象持有到完成；跨线程信号对象不得只依赖局部变量生命周期；共享 `httpx.Client` 的真实 API 调用需要串行化或改为每个 worker 独立 client。

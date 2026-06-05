@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import sys
+import threading
 import traceback
 import webbrowser
 from collections.abc import Callable
@@ -56,11 +57,13 @@ class BaiduSettingsPageConfig:
 class WorkerSignals(QObject, Generic[T]):
     succeeded = Signal(object)
     failed = Signal(str)
+    finished = Signal()
 
 
 class Worker(QRunnable, Generic[T]):
     def __init__(self, task: Callable[[], T]) -> None:
         super().__init__()
+        self.setAutoDelete(False)
         self._task = task
         self.signals: WorkerSignals[T] = WorkerSignals()
 
@@ -71,15 +74,19 @@ class Worker(QRunnable, Generic[T]):
         except Exception as exc:
             detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()
             self.signals.failed.emit(detail)
+        finally:
+            self.signals.finished.emit()
 
 
 class BaiduSettingsPage(QWidget):
     def __init__(self, config: BaiduSettingsPageConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
-        self._cloud_client = BaiduCloudClient(config.cloud_api_base_url, config.device_token)
+        self._cloud_client = BaiduCloudClient(config.cloud_api_base_url, config.device_token, timeout=15.0)
         self._workflow = BaiduAuthWorkflow(self._cloud_client)
+        self._api_lock = threading.Lock()
         self._thread_pool = QThreadPool.globalInstance()
+        self._workers: list[Worker[object]] = []
         self._accounts: list[BaiduAccount] = []
         self._session: AuthSessionState | None = None
         self._last_material: PasswordWrappingMaterial | None = None
@@ -226,7 +233,12 @@ class BaiduSettingsPage(QWidget):
 
     @Slot()
     def load_accounts(self) -> None:
-        self._run_task(self._workflow.load_accounts, self._on_accounts_loaded, "正在读取真实云端账号列表...")
+        self._run_task(
+            self._workflow.load_accounts,
+            self._on_accounts_loaded,
+            "正在读取真实云端账号列表...",
+            busy_buttons=(self.reload_button, self.select_button),
+        )
 
     @Slot()
     def select_current_account(self) -> None:
@@ -239,6 +251,7 @@ class BaiduSettingsPage(QWidget):
             lambda: self._workflow.select_account(account.account_id),
             self._on_account_selected,
             "正在选择真实云端账号...",
+            busy_buttons=(self.reload_button, self.select_button),
         )
 
     @Slot()
@@ -250,6 +263,7 @@ class BaiduSettingsPage(QWidget):
             self._workflow.start_device_code_session,
             self._on_session_started,
             "正在向真实云端创建设备码授权 session...",
+            busy_buttons=(self.start_auth_button,),
         )
 
     @Slot()
@@ -273,6 +287,7 @@ class BaiduSettingsPage(QWidget):
             lambda: self._workflow.complete_password_session(session_id, authorization_password=password),
             self._on_session_completed,
             "正在完成授权并提交密文 token 到真实云端...",
+            busy_buttons=(self.complete_button,),
         )
 
     @Slot()
@@ -282,32 +297,50 @@ class BaiduSettingsPage(QWidget):
             return
         webbrowser.open(self._session.user_action_url)
 
-    def _run_task(self, task: Callable[[], T], on_success: Callable[[T], None], busy_text: str) -> None:
+    def _run_task(
+        self,
+        task: Callable[[], T],
+        on_success: Callable[[T], None],
+        busy_text: str,
+        *,
+        busy_buttons: tuple[QPushButton, ...] = (),
+    ) -> None:
         self.status_label.setText(busy_text)
-        self._set_busy(True)
-        worker: Worker[T] = Worker(task)
-        worker.signals.succeeded.connect(lambda result: self._finish_success(result, on_success))
-        worker.signals.failed.connect(self._finish_failure)
+        self._set_buttons_enabled(busy_buttons, False)
+
+        def locked_task() -> T:
+            with self._api_lock:
+                return task()
+
+        worker: Worker[T] = Worker(locked_task)
+        self._workers.append(worker)
+        worker.signals.succeeded.connect(lambda result: self._finish_success(result, on_success, busy_buttons))
+        worker.signals.failed.connect(lambda message: self._finish_failure(message, busy_buttons))
+        worker.signals.finished.connect(lambda worker=worker: self._forget_worker(worker))
         self._thread_pool.start(worker)
 
-    def _finish_success(self, result: object, on_success: Callable[[object], None]) -> None:
-        self._set_busy(False)
+    def _finish_success(
+        self,
+        result: object,
+        on_success: Callable[[object], None],
+        busy_buttons: tuple[QPushButton, ...],
+    ) -> None:
+        self._set_buttons_enabled(busy_buttons, True)
         on_success(result)
 
-    def _finish_failure(self, message: str) -> None:
-        self._set_busy(False)
+    def _finish_failure(self, message: str, busy_buttons: tuple[QPushButton, ...]) -> None:
+        self._set_buttons_enabled(busy_buttons, True)
         self.status_label.setText(f"操作失败：{message}")
         QMessageBox.warning(self, "操作失败", message)
 
-    def _set_busy(self, busy: bool) -> None:
-        for button in (
-            self.reload_button,
-            self.select_button,
-            self.start_auth_button,
-            self.open_url_button,
-            self.complete_button,
-        ):
-            button.setEnabled(not busy)
+    @staticmethod
+    def _set_buttons_enabled(buttons: tuple[QPushButton, ...], enabled: bool) -> None:
+        for button in buttons:
+            button.setEnabled(enabled)
+
+    def _forget_worker(self, worker: Worker[object]) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
 
     def _on_accounts_loaded(self, accounts: list[BaiduAccount]) -> None:
         self._accounts = accounts

@@ -4,25 +4,22 @@
 
 ## 当前阶段
 
-PySide6 百度设置页、真实云端联调 CLI 和服务端启动自检自动迁移已完成；真实授权完成链路等待服务器部署并重启新二进制后继续。
+PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动迁移和真实百度授权入库联调已完成；当前真实云端已有一个 token 有效的百度账号可用于账号选择、密文 token 元数据和刷新租约测试。下一步需要修复 password 模式 KDF salt/凭据持久化，再进入百度 token 本地解密和上传链路联调。
 
 ## 当前工作项
 
-- 将本轮新构建的 `dist/cloud-api/linux-amd64/cloud-api` 部署到真实服务器，并用 `cloud-api serve --env-file /实际路径/.env` 或等效进程守护命令重启服务。
-- 重启时服务自动检查 PostgreSQL schema，缺少关键表/列或 schema 检查失败时自动执行内置迁移并复查；不得依赖人工先执行初始化命令。
-- 新二进制重启并确认 `/v1/readyz` 返回 200 后，继续使用真实 `https://backup.baichengedu.com` API 跑设备注册、账号列表、设备码授权、授权完成和账号选择链路。
-- 真实联调过程中继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库或敏感日志。
+- 修复 password 模式授权材料持久化：客户端必须能在 UI 退出后根据用户密码和持久化 KDF 参数重新派生同一个 wrapping key；优先使用 Windows DPAPI/凭据管理器保存敏感材料，测试 `.env` 仅限本机忽略文件。
+- 修复或绕过当前 Windows Go 工具链异常；恢复 `cloud-api/` 下 `go test ./...` 常规验收。
+- 继续使用真实 `https://backup.baichengedu.com` API 和已入库授权验证 token 本地解密、百度容量/用户信息读取、预上传、分片上传和 create 链路。
+- 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库或敏感日志。
 
 ## 本次验收标准
 
-- Python 客户端百度设置页所有源码、测试和客户端专用说明集中位于 `client/` 目录。
-- UI 能展示云端返回的百度账号列表和当前设备选择状态。
-- UI 能创建设备码授权 session，展示百度官方授权地址、用户码和二维码，并轮询授权状态。
-- 授权完成后 UI 能调用客户端核心库完成本地 wrapping key 加密提交，并展示账号已选中状态。
-- 新增真实联调脚本覆盖账号加载、账号选择、设备码 session 创建、授权状态轮询和 complete 提交流程；自动化单元测试只覆盖不依赖云端的 UI 状态和输入校验。
-- 真实服务器启动时必须自动补齐内置 PostgreSQL 迁移；自动迁移后 `/v1/readyz` 返回 200，若复查仍缺表/列则服务启动失败并输出脱敏日志。
-- `cloud-api migrate` 仅作为排障和人工修复入口，不作为二进制正常部署初始化前置条件。
-- 真实服务器联调不提交 Device Token、百度 App Secret、access token、refresh token、用户密码或本地数据库。
+- password 模式授权完成后，客户端重启仍能读取持久化 KDF 参数并用用户密码解密云端密文 token。
+- 本地测试 `.env` 仍保持 Git 忽略状态，不进入提交；正式凭据存储优先使用 Windows DPAPI/凭据管理器。
+- `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run pytest` 和 `uv run python -m compileall src tests` 通过。
+- `cloud-api/` 下 `go list runtime` 和 `go test ./...` 在干净 Go 工具链下通过。
+- 真实云端已入库百度账号的账号选择、密文 token 元数据读取和刷新租约互斥继续通过。
 
 ## 开发排期
 
@@ -255,3 +252,30 @@ PySide6 百度设置页、真实云端联调 CLI 和服务端启动自检自动�
 - 重启后确认 `https://backup.baichengedu.com/v1/readyz` 返回 200，不再返回 `schema_not_ready`。
 - 继续使用真实联调 CLI 或 PySide6 UI 跑设备码授权，完成百度官方页面授权、密文 token 入库和账号选择状态验证。
 - 新二进制重启前不要继续用客户端授权流程判断 UI 或云端授权是否失败，因为当前线上失败根因是旧服务没有自动补齐 PostgreSQL schema。
+
+### 真实云端百度授权入库与后续接口联调
+
+- 真实服务器已重新部署并重启新版 Go 服务；启动日志确认 `.env` 已加载，PostgreSQL 连接到 `bdnetdesk_backup_db/bdnetdesk_backup_service`，启动自检发现缺表后自动执行内置 `001_cloud_sync.sql` 和 `002_baidu_auth.sql` 迁移并复查通过。
+- 已验证真实 `https://backup.baichengedu.com/v1/healthz` 与 `/v1/readyz` 均返回 HTTP 200，readyz 不再仅代表数据库可 ping，而是包含关键 schema 可用性。
+- 已在真实云端注册临时设备并验证 `/v1/devices/register` 不再因 PostgreSQL 缺表返回 500。
+- 已验证真实设备码授权 session 可创建，返回百度官方授权地址、用户码和二维码地址；设备码授权在百度官方页面完成后，云端成功保存密文 token。
+- 已确认真实云端账号列表中已有 1 个百度账号，`token_valid=true`、`token_version=1`、`last_verify_status=valid`；输出记录只保留脱敏 UID 和状态，不记录 Device Token、access token、refresh token、wrapping key 或密文 envelope 正文。
+- 已基于该已入库授权继续测试真实云端后续接口：账号选择成功，密文 token 元数据可读取，刷新租约第一台设备获取成功，第二台设备并发获取返回 409 且 `acquired=false`，互斥行为符合预期。
+- 发现 password 模式当前缺少持久化 KDF salt/参数：UI 完成授权时用随机 salt 派生 wrapping key，但云端密文 token envelope 不包含 `password_kdf.salt`，UI 退出后仅凭用户密码无法重新派生同一 key 解密刚才已入库 token。
+- 已按用户要求在本机创建 `client/.env` 保存测试授权密码和真实云端 base URL，确认该文件被 `.gitignore` 忽略；该本地文件只用于后续联调，不纳入提交。
+- 修复 PySide6 百度设置页后台任务生命周期：`QRunnable` 改为禁用自动删除，页面持有 worker 到 `finished` 后清理，并通过 `_api_lock` 串行化共用 `httpx.Client` 的真实 API 调用。
+- 修复 UI busy 状态过粗问题：账号列表刷新只锁账号相关按钮，设备码创建和完成授权只锁对应按钮，避免账号刷新时阻塞“创建设备码”。
+- 将 uv 用户目录权限、当前 Windows Go 工具链异常、PySide6 worker 生命周期问题沉淀到 `AGENTS.MD`。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run pytest` 通过，11 个测试通过。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m compileall src tests` 通过。
+- 已尝试恢复本地 Go 测试：当前 `go1.26.2` 环境连 `go list runtime` 都返回 `package runtime is not in std`；改用 `GOTOOLCHAIN=go1.25.0` 后标准库编译出现 compiler internal error，判断为本机 Go 工具链/环境问题，需换干净 Go 工具链后恢复 `cloud-api/` 下 `go test ./...`。
+
+提交摘要：本次提交完成真实云端百度授权入库和后续云端接口联调，修复 PySide6 授权 UI 后台任务生命周期和按钮 busy 状态问题，并记录本机 uv/Go 工具链约束；已入库授权可继续用于账号选择、密文 token 元数据和刷新租约测试，但进入百度上传前必须补齐 password KDF 参数持久化以恢复 token 本地解密能力。
+
+后续待办：
+
+- 补齐 password 模式 KDF salt/参数持久化方案；优先使用 Windows DPAPI/凭据管理器保存敏感材料，避免仅依赖 `.env`。
+- 对已入库真实账号重新完成一次带持久化 KDF 参数的新授权，或提供受控 re-encrypt 流程，让客户端重启后能用用户密码解密云端密文 token。
+- 修复本机 Go 工具链或切换干净 Go 环境后，恢复 `cloud-api/` 下 `go test ./...` 常规验收。
+- 在 token 可本地解密后，继续真实百度容量/用户信息、预上传、分片上传和 create 链路联调。
