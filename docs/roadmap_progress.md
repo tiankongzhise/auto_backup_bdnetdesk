@@ -4,25 +4,22 @@
 
 ## 当前阶段
 
-PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取和百度上传核心链路均已完成验证；本轮真实 `real-batch` 已覆盖小文件、跨分片文件、冲突检测和删除清理主链路。
+PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成和可恢复上传编排均已完成本地验证；下一步进入上传账本同步 worker、真实 `upload-resumable` 联调和百度远端 `list/listall` 校对设计。
 
 ## 当前工作项
 
-- 已在 `AGENTS.MD` 补充开发前必须阅读 Git 历史，以及官方 API 文档浏览失败后依次使用 `curl.exe`、Python 脚本获取并记录溯源的约束。
-- 已新增 `docs/baidu_netdisk_openapi_reference.md`，记录百度官方用户信息、容量、预上传、获取上传域名、分片上传和创建文件接口的来源 URL、获取方式、官方更新时间、关键参数和本轮实现边界。
-- 本轮已实现百度上传核心链路：容量检查、预上传 `precreate`、上传域名 `locateupload`、分片上传 `superfile2`、创建文件 `create`、真实批测文件删除清理和失败重试边界。
-- 真实 `iotqueryuinfo` 当前对本授权应用或路径返回 HTTP 404，已从 `real-batch` 必经步骤拆出；`uinfo` 仅保留为独立排查命令，不再阻断上传批测主链路。
-- 上传链路必须复用当前已验证的本机 DPAPI Device Token 凭据、account 级 KDF 参数；token 过期刷新继续通过云端刷新租约机制和运行时百度 App Secret 完成，不得保存敏感材料。
-- 本轮后续进入上传状态 SQLite、断点续传、uploadid 恢复、`.meta.json`/`job.index.json` 生成和远端校对流程。
-- 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库、上传临时缓存或敏感日志。
+- 下一轮实现 `sync_outbox` 后台同步 worker，将本地 `upload_sessions`、`upload_parts` 和 `remote_objects` revision 通过 Go 云端 Cloud Sync API 异步推送到 PostgreSQL。
+- 使用真实云端账号和真实百度 API 对 `upload-resumable` 做一次临时 archive、`.meta.json`、`job.index.json` 端到端联调，验证后必须调用百度删除接口清理远端测试文件。
+- 设计百度远端 `list/listall` 校对和自动修复边界，明确只校对 `/apps/{appname}/backups/{yyyy}/{MM}/{dd}/{device_id}/{job_id}/` 下对象。
+- 后续继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库、上传临时缓存或敏感日志。
 
 ## 本次验收标准
 
-- 百度上传核心库和必要 CLI 验证入口已新增，输出不包含 access token、refresh token、wrapping key、Device Token 或本地敏感路径。
-- 真实百度上传链路已完成小文件、跨分片文件、同路径冲突和删除清理验证，并按产品约束使用日期、设备、任务组织远端路径。
-- 上传请求契约以 `docs/baidu_netdisk_openapi_reference.md` 为离线依据；真实 `iotqueryuinfo` 404 差异已在完成记录中说明，上传主链路不再依赖该接口。
-- `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run python -m pytest` 和 `uv run python -m compileall src tests` 已通过。
-- `cloud-api/` 下 `go version` 为 Go 1.25 补丁线，提升权限后 `go list runtime` 和 `go test ./...` 已通过。
+- `sync_outbox` worker 需要支持 pending/retryable 批量发送、云端幂等成功回写、冲突标记和失败重试时间。
+- 真实 `upload-resumable` 联调输出不得包含 access token、refresh token、wrapping key、Device Token、本地敏感路径或本地 SQLite 路径。
+- 远端校对实现前必须重新获取百度官方 `list/listall` 文档或记录无法获取官方文档的实现依据。
+- `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run python -m pytest` 和 `uv run python -m compileall src tests` 需要继续通过。
+- `cloud-api/` 下先执行 `go version`、`go list runtime` 自检，再执行 `go test ./...`。
 
 ## 开发排期
 
@@ -30,20 +27,46 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 | --- | --- | --- |
 | 0 | 仓库初始化、项目记忆、产品文档、进度文件 | 已完成 |
 | 1 | Python 项目骨架、配置加载、日志脱敏、基础目录结构 | 已完成 |
-| 2 | SQLite schema、版本字段、客户端 `sync_outbox`、迁移机制 | 未开始 |
+| 2 | SQLite schema、版本字段、客户端 `sync_outbox`、迁移机制 | 部分完成：已补齐上传账本和 outbox 同事务写入；后台同步 worker 待开发 |
 | 3 | Go Cloud Sync API、PostgreSQL schema、revision 幂等写入、设备认证 | 已完成 |
 | 4 | PySide6 基础 UI、任务页、设置页 | 部分完成：百度设置页已完成 |
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
 | 6 | 去重索引、本地/云端内容对象、来源引用 | 未开始 |
 | 7 | 7-Zip 加密压缩、manifest、标准/严格验证 | 未开始 |
-| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：OAuth、扫码授权、本机凭据、token 解密、容量读取和上传核心链路已完成；断点续传数据库态待开发 |
-| 9 | 断点续传、上传恢复、失败重试 | 未开始 |
+| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：OAuth、扫码授权、本机凭据、token 解密、容量读取、上传核心链路和元数据上传入口已完成 |
+| 9 | 断点续传、上传恢复、失败重试 | 部分完成：已实现本地 `uploadid` 恢复、缺失分片续传和账本状态；真实 `upload-resumable` 联调待执行 |
 | 10 | 缓存额度、动态清理等级、缓存 artifact 管理 | 未开始 |
 | 11 | 来源与远端映射、数据库/百度校对 UI | 未开始 |
 | 12 | 原始数据清理记录、恢复到原路径/手动路径 | 未开始 |
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### SQLite 上传账本、断点续传与元数据生成
+
+- 新增 `client/src/auto_backup_client/sqlite_store.py`，提供客户端 SQLite 迁移执行、WAL、foreign keys、显式事务、版本字段构造、规范化记录 SHA256 和业务表与 `sync_outbox` 同事务写入入口。
+- 新增 `client/migrations/sqlite/002_upload_state.sql`，落地 `upload_sessions`、`upload_parts` 和 `remote_objects`，包含 `schema_version`、`data_version`、`revision_id`、`updated_at`、`sync_status`、`deleted_at`、`canonical_record_sha256` 和 `last_synced_revision_id`。
+- 新增 `client/src/auto_backup_client/baidu/metadata.py`，生成稳定 JSON 的 `.meta.json` 和 `job.index.json`，只包含 archive、job、device、远端路径引用、fs_id 和 hash 等非敏感字段。
+- 新增 `client/src/auto_backup_client/baidu/resumable_upload.py`，实现可恢复上传编排：本地账本建档、复用本地 `uploadid` 调用百度 `precreate`、`uploadid` 失效后重新预上传、按百度返回的缺失 `block_list` 上传分片、创建 archive 后上传 `.meta.json` 和 `job.index.json`。
+- `canonical_record_sha256` 排除 `revision_id`、schema/data version、更新时间、同步状态、`local_archive_path`、`uploadid` 和本地错误消息，避免本地控制字段或敏感路径影响云端业务内容校对。
+- 扩展 `client/src/auto_backup_client/baidu/upload_cli.py`，新增 `upload-resumable` 命令，默认读取 `LOCAL_SQLITE_PATH`，输出账号 ID、token version、对象 hash、分片计数和 fs_id，不输出 access token、refresh token、wrapping key、Device Token、本地敏感路径或本地 SQLite 路径。
+- 扩展 `client/src/auto_backup_client/settings.py` 和 `client/README.md`，补充 `LOCAL_DATA_DIR`、`LOCAL_SQLITE_PATH`、`LOCAL_CACHE_DIR` 和本地 SQLite 上传账本说明。
+- 更新 `docs/baidu_netdisk_openapi_reference.md`，说明当前已补齐本地账本、续传和元数据入口，远端 `list/listall` 校对仍属后续阶段。
+- 新增测试覆盖 SQLite 迁移幂等、事务回滚、业务表与 `sync_outbox` 同事务写入、规范化 hash 排除控制/本地字段、元数据稳定 JSON 脱敏、复用 `uploadid` 续传、空缺失分片列表不重复上传、`uploadid` 失效后重新 `precreate` 和 `upload-resumable` 输出脱敏。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m pytest` 通过，37 个测试通过。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`，`go list runtime` 通过，`go test ./...` 通过。
+- 本轮未执行真实 `upload-resumable` 上传联调；入口已准备好，后续执行时必须使用真实云端账号和真实百度 API 上传临时 archive、`.meta.json`、`job.index.json`，验证后调用百度删除接口清理远端测试文件。
+
+提交摘要：本次提交补齐客户端本地 SQLite 上传账本、断点续传编排和远端元数据生成能力，让 archive 上传可以在本地记录 `uploadid`、分片状态、远端对象和 outbox revision，并新增 `upload-resumable` 真实联调入口。
+
+后续待办：
+
+- 实现客户端 `sync_outbox` 后台同步 worker，把本地 revision 批量推送到 Go 云端 Cloud Sync API，并处理幂等成功、冲突和重试。
+- 使用真实云端账号执行 `upload-resumable` 端到端联调，并清理本批远端临时测试文件。
+- 获取百度官方 `list/listall` 文档，设计远端对象校对、缺失/不一致标记和人工修复入口。
 
 ### 百度上传核心链路与真实批测入口
 

@@ -189,6 +189,7 @@
 
 ## 本轮实现边界
 
-- 本轮先落地小文件真实验证入口和核心库：`precreate -> locateupload -> superfile2 -> create`。
-- 本轮不提交本地 SQLite 上传状态表；断点续传数据库态、uploadid 恢复、远端校对和 `.meta.json`/`job.index.json` 完整生产流程后续阶段补齐。
-- 自动化测试只覆盖纯本地路径规则和分片 MD5 计算；百度接口契约、上传、冲突和删除清理必须通过真实百度网盘 API 联调验证。
+- 已先落地小文件真实验证入口和核心库：`precreate -> locateupload -> superfile2 -> create`。
+- 后续已补齐本地 SQLite 上传账本、`uploadid` 恢复、百度返回缺失分片 `block_list` 续传、`.meta.json` 和 `job.index.json` 生成入口。
+- 当前仍不实现百度 `list/listall` 远端校对和自动修复；后续校对必须继续以真实百度网盘 API 行为为准。
+- 自动化测试覆盖纯本地路径规则、分片 MD5、SQLite 账本事务、续传分片选择和输出脱敏；百度接口契约、真实上传、冲突和删除清理必须通过真实百度网盘 API 联调验证。

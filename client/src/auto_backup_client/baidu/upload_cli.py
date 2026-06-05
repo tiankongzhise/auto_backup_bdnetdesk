@@ -4,6 +4,7 @@ import argparse
 import getpass
 import hashlib
 import os
+import sqlite3
 import tempfile
 import sys
 import uuid
@@ -21,7 +22,10 @@ from auto_backup_client.baidu.upload import (
     build_archive_remote_path,
     compute_file_block_plan,
 )
+from auto_backup_client.baidu.resumable_upload import BaiduResumableUploader, ResumableArchiveInput
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
+from auto_backup_client.settings import ClientSettings
+from auto_backup_client.sqlite_store import SQLiteClientStore
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -51,6 +55,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     upload_parser.add_argument("--part-size-mib", type=int, default=4, choices=(4, 16, 32))
     upload_parser.add_argument("--check-quota", action="store_true", help="上传前读取容量并检查剩余空间。")
 
+    resumable_parser = subparsers.add_parser("upload-resumable", help="使用本地 SQLite 上传账本执行可恢复上传。")
+    resumable_parser.add_argument("local_path", help="要上传的本地 archive 文件路径。")
+    resumable_parser.add_argument("account_id", nargs="?", default="", help="账号 ID；省略时使用当前设备已选择账号。")
+    resumable_parser.add_argument("--root-dir", default=DEFAULT_BACKUP_ROOT_DIR, help="百度备份根目录，必须位于 /apps/{appname} 下。")
+    resumable_parser.add_argument("--device-id", default="", help="远端路径中的 device_id；默认使用本机云端 device_id。")
+    resumable_parser.add_argument("--job-id", default="", help="远端路径中的 job_id；默认生成 upload-resumable-*。")
+    resumable_parser.add_argument("--archive-seq", type=int, default=1)
+    resumable_parser.add_argument("--archive-type", default="payload", choices=("payload", "manifest_only", "mixed"))
+    resumable_parser.add_argument("--manifest-id", default="")
+    resumable_parser.add_argument("--part-size-mib", type=int, default=4, choices=(4, 16, 32))
+    resumable_parser.add_argument("--sqlite-path", default="", help="本地 SQLite 路径；默认读取 LOCAL_SQLITE_PATH。")
+    resumable_parser.add_argument("--check-quota", action="store_true", help="上传前读取容量并检查剩余空间。")
+
     batch_parser = subparsers.add_parser("real-batch", help="生成测试文件并真实上传/冲突/删除清理。")
     batch_parser.add_argument("account_id", nargs="?", default="", help="账号 ID；省略时使用当前设备已选择账号。")
     batch_parser.add_argument("--root-dir", default=DEFAULT_BACKUP_ROOT_DIR, help="百度备份根目录，必须位于 /apps/{appname} 下。")
@@ -67,9 +84,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _uinfo(args)
         if args.command == "upload-file":
             return _upload_file(args)
+        if args.command == "upload-resumable":
+            return _upload_resumable(args)
         if args.command == "real-batch":
             return _real_batch(args)
-    except (CloudAPIError, BaiduNetdiskError, ValueError, OSError) as exc:
+    except (CloudAPIError, BaiduNetdiskError, ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
         _print(f"操作失败: {exc}")
         return 1
     return 2
@@ -147,6 +166,58 @@ def _upload_file(args: argparse.Namespace) -> int:
     _print(f"fs_id: {result.created.fs_id}")
     _print(f"remote_md5: {result.created.md5}")
     _print("上传链路完成: precreate -> locateupload -> superfile2 -> create")
+    return 0
+
+
+def _upload_resumable(args: argparse.Namespace) -> int:
+    password = _read_authorization_password(args.password_env)
+    credentials, source = _resolve_credentials(args)
+    settings = ClientSettings.from_env()
+    sqlite_path = Path(args.sqlite_path.strip() or settings.local_sqlite_path)
+    store = SQLiteClientStore(sqlite_path)
+    store.migrate()
+    local_path = Path(args.local_path)
+    plan = compute_file_block_plan(local_path, part_size=args.part_size_mib * 1024 * 1024)
+    job_id = args.job_id.strip() or f"upload-resumable-{uuid.uuid4().hex[:12]}"
+    device_id = args.device_id.strip() or credentials.device_id or "unknown-device"
+
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+        decrypted = _decrypt_selected_token(cloud, args.account_id, password)
+    with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
+        if args.check_quota:
+            quota = baidu.get_quota()
+            if quota.available < plan.size:
+                raise BaiduNetdiskError("baidu netdisk available quota is smaller than local file size", error_code="quota_not_enough")
+        uploader = BaiduResumableUploader(store=store, baidu=baidu, updated_by_device_id=device_id)
+        result = uploader.upload(
+            ResumableArchiveInput(
+                local_path=local_path,
+                job_id=job_id,
+                device_id=device_id,
+                account_id=decrypted.encrypted.account_id,
+                archive_seq=args.archive_seq,
+                archive_type=args.archive_type,
+                manifest_id=args.manifest_id,
+                root_dir=args.root_dir,
+                part_size=args.part_size_mib * 1024 * 1024,
+            )
+        )
+    _print(f"Device Token 来源: {source}")
+    _print(f"account_id: {decrypted.encrypted.account_id}")
+    _print(f"token_version: {decrypted.encrypted.token_version}")
+    _print(f"job_id: {job_id}")
+    _print(f"upload_session_id: {result.upload_session_id}")
+    _print(f"archive_sha256: {result.archive_sha256}")
+    _print(f"part_count: {len(plan.parts)}")
+    _print(f"uploaded_part_count: {len(result.uploaded_partseqs)}")
+    _print(f"reused_uploadid: {result.reused_uploadid}")
+    _print(f"archive_fs_id: {result.created.fs_id}")
+    _print(f"meta_fs_id: {result.meta_created.fs_id}")
+    _print(f"job_index_fs_id: {result.job_index_created.fs_id}")
+    _print(f"remote_archive_path_sha256: {hashlib.sha256(result.remote_archive_path.encode('utf-8')).hexdigest()}")
+    _print(f"remote_meta_path_sha256: {hashlib.sha256(result.remote_meta_path.encode('utf-8')).hexdigest()}")
+    _print(f"remote_job_index_path_sha256: {hashlib.sha256(result.remote_job_index_path.encode('utf-8')).hexdigest()}")
+    _print("可恢复上传完成: sqlite -> precreate/resume -> parts -> create -> meta -> job.index")
     return 0
 
 

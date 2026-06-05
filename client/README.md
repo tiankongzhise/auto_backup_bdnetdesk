@@ -13,6 +13,9 @@
 - `src/auto_backup_client/baidu/crypto.py`：百度密文 token envelope 的本地加解密。
 - `src/auto_backup_client/baidu/kdf_store.py`：password 模式 account 级 KDF 参数持久化，Windows 默认使用 DPAPI 保护。
 - `src/auto_backup_client/baidu/refresh.py`：refresh token 租约、百度 token 刷新和云端版本回写流程。
+- `src/auto_backup_client/sqlite_store.py`：客户端 SQLite 迁移、事务和 `sync_outbox` 同事务写入基础设施。
+- `src/auto_backup_client/baidu/metadata.py`：百度远端 `.meta.json` 和 `job.index.json` 非敏感稳定 JSON 生成工具。
+- `src/auto_backup_client/baidu/resumable_upload.py`：基于 SQLite 上传账本的 `uploadid` 断点续传编排。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
 ## PySide6 百度设置页
@@ -58,10 +61,23 @@ $env:UV_LINK_MODE='copy'
 $env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
 uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD quota
 uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD upload-file .\path\to\archive.7z --check-quota
+uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD upload-resumable .\path\to\archive.7z --check-quota
 uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD real-batch
 ```
 
 `real-batch` 会生成临时小文件和跨 4 MiB 分片文件，执行容量检查、上传、同路径冲突检测，并默认使用百度文件管理删除接口清理本批远端测试文件。`uinfo` 只保留为独立排查命令；当前真实授权应用或路径调用官方 `iotqueryuinfo` 接口可能返回 HTTP 404，不作为上传批测前置条件。
+
+`upload-resumable` 会按 `LOCAL_SQLITE_PATH` 初始化本地 SQLite，写入 `upload_sessions`、`upload_parts`、`remote_objects` 和 `sync_outbox`，并真实上传 archive、`.meta.json`、`job.index.json`。输出只包含账号 ID、token 版本、对象哈希、计数和 fs_id，不输出 access token、refresh token、wrapping key、Device Token 或本地敏感路径。
+
+## 本地 SQLite 上传账本
+
+默认路径沿用仓库根目录 `.env.example`：
+
+- `LOCAL_DATA_DIR=./var/data`
+- `LOCAL_SQLITE_PATH=./var/data/backup_state.sqlite3`
+- `LOCAL_CACHE_DIR=./var/cache`
+
+本地 SQLite 是任务执行主库，运行态数据库不得提交。迁移文件位于 `client/migrations/sqlite/`，当前包含 `sync_outbox`、`upload_sessions`、`upload_parts` 和 `remote_objects`。业务表写入会与 `sync_outbox` 入队在同一个 SQLite 事务内完成，后台云端同步 worker 后续阶段再接入。
 
 ## Device Token 凭据存储
 
