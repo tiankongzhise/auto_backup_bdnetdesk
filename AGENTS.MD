@@ -122,4 +122,12 @@ chcp 65001
 
 ## 已沉淀问题
 
-暂无。
+### 2026-06-05：Git 自动换行与项目 LF 约束冲突
+
+问题：初始化提交时 Git 提示 `.editorconfig`、`.env.example`、`.gitattributes`、`.gitignore` 的 LF 会在后续被替换为 CRLF。
+
+原因：当前仓库继承了 `core.autocrlf=true`，与项目文档要求的 UTF-8 + LF 文本文件约束冲突。
+
+解决方案：本仓库设置 `core.autocrlf=false`，并在 `.gitattributes` 中使用 `* text=auto eol=lf`，同时对 `.md`、`.txt`、`.env`、`.py`、`.json`、`.yml`、`.yaml` 明确指定 LF。
+
+后续约束：本项目不得依赖全局 Git 换行配置；发现换行警告时必须优先检查仓库本地 `core.autocrlf` 和 `.gitattributes`。

@@ -53,4 +53,11 @@
 - 新增 `.gitignore`，排除 `.env`、本地数据库、日志、缓存和密钥目录。
 - 新增 `README.md`、`.editorconfig` 和 `.gitattributes`。
 
+### 修正 Git 换行策略
+
+- 发现初始化提交时 Git 提示部分文本文件后续可能被 CRLF 替换。
+- 已将仓库本地 `core.autocrlf` 设置为 `false`。
+- 已在 `.gitattributes` 中使用 `* text=auto eol=lf`，并对常见文本文件类型明确指定 LF。
+- 已将该问题和后续约束补充到 `AGENTS.MD`。
+
 下一步计划：搭建 Python 项目骨架、配置加载、日志脱敏和基础目录结构。
