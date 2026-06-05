@@ -172,3 +172,13 @@ chcp 65001
 解决方案：`go_build.ps1` 改用 `System.Uri.MakeRelativeUri(...)` 计算相对路径，保持 Windows PowerShell 5.1 兼容。
 
 后续约束：项目通用 PowerShell 脚本必须优先兼容 Windows PowerShell 5.1；使用 .NET API 前应确认该 API 在 5.1 环境可用。
+
+### 2026-06-05：Git 提交后自动维护传入不兼容 `--detach` 参数
+
+问题：提交 LGPL-2.1 发布信息后，提交本身成功，但随后 Git 输出 `git maintenance run` 的 `unknown option 'detach'` 报错。
+
+原因：当前 Git for Windows 为 `2.54.0.windows.1`，本仓库没有显式 maintenance/gc/scalar 配置，hooks 也只有 sample；单独执行 `git maintenance run --auto` 正常，报错判断来自提交后的自动维护流程尝试传入当前 `git maintenance run` 子命令不支持的 `--detach` 参数。
+
+解决方案：在本仓库设置 `maintenance.auto=false`，避免提交后自动触发该不兼容维护流程；需要维护时可手动执行 `git maintenance run --auto`。
+
+后续约束：后续若提交后再次出现 maintenance 参数兼容性报错，优先检查 `git config --show-origin --get-regexp '^(maintenance|gc|scalar)\.'` 和 Git for Windows 版本；不要把该报错误判为提交失败，应先用 `git log --oneline -1` 和 `git status --short --branch` 确认提交状态。

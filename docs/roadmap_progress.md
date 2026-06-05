@@ -156,10 +156,13 @@ GitHub 公开仓库发布准备已完成。
 - 确认本地工作区发布前干净，且没有未跟踪文件。
 - 新增标准 LGPL-2.1 `LICENSE` 文件。
 - 更新 README，补充公开发布状态、许可证入口和 LGPL-2.1 授权说明。
+- 发现提交后 Git 自动维护传入不兼容 `--detach` 参数，已在仓库本地设置 `maintenance.auto=false`，并将问题沉淀到 `AGENTS.MD`。
 - 计划创建 GitHub 公开仓库 `tiankongzhise/auto_backup_bdnetdesk`，使用 SSH remote 推送 `main` 分支。
 - 计划配置仓库简介为 Windows 桌面端百度网盘加密备份工具，并设置与项目技术栈和功能匹配的 topics。
 
 提交摘要：本次提交补充公开发布所需的 LGPL-2.1 授权文件、README 许可证说明和发布进度记录，为后续通过 SSH 推送到 GitHub 公开仓库做准备。
+
+提交摘要：本次提交记录 Git for Windows 提交后自动维护的 `--detach` 参数兼容性问题，并通过仓库本地 `maintenance.auto=false` 约束后续提交流程，避免将维护报错误判为提交失败。
 
 后续待办：
 
