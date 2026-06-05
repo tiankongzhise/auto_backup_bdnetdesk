@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"auto_backup_bdnetdesk/internal/cloudapi"
+	"auto_backup_bdnetdesk/cloud-api/internal/cloudapi"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )

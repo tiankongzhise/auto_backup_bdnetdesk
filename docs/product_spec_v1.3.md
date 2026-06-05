@@ -382,7 +382,7 @@ failed
 
 本地 SQLite 是任务执行主库。只要本地事务落盘成功，任务即可继续。客户端本地 `sync_outbox` 通过 Go 云端 Cloud Sync API 异步写入 PostgreSQL，保证最终一致。云端服务负责 revision 接收、幂等写入、版本冲突检测、跨设备查询和灾备重建，不保存用户明文密码。
 
-所有核心实体本地和云端都必须存在：
+所有核心实体必须作为同步实体在本地 SQLite 和云端 PostgreSQL 中可表达、可查询、可校对：
 
 - devices
 - backup_jobs
@@ -508,12 +508,25 @@ delete
 
 Go 云端服务运行约束：
 
-- 服务入口固定为 `cmd/cloud-api`。
+- 服务端代码必须集中在 `cloud-api/` 目录，不得散放到仓库根目录。
+- 服务入口固定为 `cloud-api/cmd/cloud-api`。
 - 默认监听 `CLOUD_API_ADDR=:8080`。
 - PostgreSQL 连接优先使用 `POSTGRES_DSN`；未设置时使用 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_SSLMODE` 组合。
+- 二进制部署到服务器后，通过 systemd `EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env` 或同等环境注入方式决定连接哪台 PostgreSQL。
+- 环境文件内容参考 `cloud-api/.env.example`，真实 PostgreSQL DSN 和密码不得提交到仓库。
+- 云端 PostgreSQL 迁移位于 `cloud-api/migrations/postgres`。
+- 客户端本地 SQLite `sync_outbox` 迁移位于 `client/migrations/sqlite`，不属于 Go 服务端迁移。
 - 结构化日志不得输出 Device Token、百度 token、用户密码、明文原始路径或完整敏感 payload。
 - `GET /v1/healthz` 只表示进程存活。
 - `GET /v1/readyz` 必须检查 PostgreSQL 可用性。
+
+systemd 示例：
+
+```ini
+[Service]
+EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env
+ExecStart=/opt/auto-backup-bdnetdesk/cloud-api
+```
 
 设备注册接口：
 
@@ -613,6 +626,16 @@ rejected
 - `entity_revisions`：所有已接收 revision 的不可变记录，用于幂等、审计和冲突定位。
 - `content_objects`：内容去重索引，唯一键为 `content_id`。
 - `archive_objects`：归档去重索引，唯一键为 `archive_sha256`。
+
+数据库一致性口径：
+
+- 当前 Go 云端数据库是 revision 投影与审计层，不等同于已经为所有本地业务表建立同名云端物理表。
+- 所有核心实体必须作为同步实体在本地 SQLite 和云端 PostgreSQL 中可表达、可查询、可校对。
+- v1.3 一致性校对以 `entity_id`、`revision_id`、`data_version`、`canonical_record_sha256` 为准。
+- `cloud_entities` 保存每个同步实体的当前版本 JSONB 投影，`entity_revisions` 保存不可变 revision 历史。
+- `content_objects` 和 `archive_objects` 是为了跨设备去重与远端校对额外建立的索引表。
+- 后续 SQLite schema 阶段必须补齐本地核心业务表，并明确云端继续使用 JSONB 投影、增加同名物理表，或增加视图/索引表的最终方案。
+- 校对页不得仅凭“是否存在同名云端物理表”判断本地/云端一致；必须按 revision、版本号和规范化记录哈希判断。
 
 云端唯一约束：
 

@@ -1,4 +1,4 @@
-module auto_backup_bdnetdesk
+module auto_backup_bdnetdesk/cloud-api
 
 go 1.25.0
 

@@ -1,27 +1,27 @@
 # 开发排期与进度
 
-本文件用于记录项目开发排期、当前进度和提交后的完成情况。每次开发开始时和 commit 后都必须更新本文件。
+本文件用于记录项目开发排期、当前进度和提交完成情况。每次开发开始前必须更新当前工作项、计划修改范围和验收标准；每个小功能完成后，必须先更新完成记录、提交摘要和后续待办，再将本文件与代码和文档一起纳入同一个 commit。
 
 ## 当前阶段
 
-Go 云端同步服务与 outbox 同步边界已完成。
+Go 云端服务目录整理、部署说明和数据库一致性规则修正已完成。
 
 ## 当前工作项
 
-- 完成云端服务技术栈从 FastAPI 到 Go + PostgreSQL 的调整。
-- 完成客户端 `sync_outbox` 与云端 Cloud Sync API 的职责边界补充。
-- 完成 Go Cloud Sync API 单二进制服务骨架。
-- 完成 PostgreSQL 云端同步 schema、revision 幂等写入和查询接口。
-- 完成设备 token 认证、同步接口和基础测试。
+- 完成 Go 云端服务完整收拢到 `cloud-api/` 目录。
+- 完成客户端 SQLite `sync_outbox` 迁移移动到客户端目录，避免和云端迁移混放。
+- 完成 Go 二进制部署时 PostgreSQL 连接来源和 systemd 环境文件示例。
+- 完成当前云端数据库 revision 投影与审计层的一致性口径说明。
+- 完成进度记录规则修正，要求完成记录进入同一个功能 commit。
 
 ## 本次验收标准
 
-- 产品规格文档明确 Go 替代 FastAPI 作为 v1.3 唯一云端 API。
-- 开发排期包含客户端 `sync_outbox` 和 Go Cloud Sync API 阶段。
-- Go 服务提供设备注册、设备 token 认证、批量 revision 同步、内容/归档查询、校对摘要和健康检查接口。
-- PostgreSQL 迁移包含 `devices`、`cloud_entities`、`entity_revisions`、`content_objects`、`archive_objects`。
-- Go 单元测试覆盖认证、幂等重复提交、版本冲突和基础查询。
-- `go test ./...` 通过。
+- 根目录只保留项目级文档和客户端/云端顶层目录，Go 服务端代码集中在 `cloud-api/`。
+- `cloud-api/.env.example` 说明 Go 服务端通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接目标数据库。
+- README 和产品规格包含二进制部署到服务器后的 PostgreSQL 连接配置说明。
+- 产品规格明确本地/云端一致性以 `entity_id`、`revision_id`、`data_version`、`canonical_record_sha256` 校对。
+- `AGENTS.MD` 和本进度文件不再要求 commit 后产生新的未提交进度变更。
+- 在 `cloud-api/` 下执行 `go test ./...` 通过。
 
 ## 开发排期
 
@@ -66,13 +66,13 @@ Go 云端同步服务与 outbox 同步边界已完成。
 
 - 将产品规格中的云端服务从 FastAPI + PostgreSQL 调整为 Go + PostgreSQL。
 - 在产品规格第 5 节补充客户端 `sync_outbox`、Go Cloud Sync API、Device Token、PostgreSQL 表、幂等写入、冲突检测和查询接口的详细契约。
-- 新增 `cmd/cloud-api` 单二进制入口，使用 chi 路由、pgx/pgxpool 连接 PostgreSQL。
+- 新增 `cloud-api/cmd/cloud-api` 单二进制入口，使用 chi 路由、pgx/pgxpool 连接 PostgreSQL。
 - 新增设备注册接口，云端只保存 Device Token 哈希，后续接口通过 Bearer Token 认证。
 - 新增批量 revision 同步接口，支持 `entity_id + revision_id` 幂等、`data_version` 冲突检测和逐条同步结果返回。
 - 新增内容对象、归档对象和校对摘要查询接口。
-- 新增 PostgreSQL 迁移 `migrations/postgres/001_cloud_sync.sql`，包含 `devices`、`cloud_entities`、`entity_revisions`、`content_objects`、`archive_objects`。
-- 新增 SQLite 迁移 `migrations/sqlite/001_sync_outbox.sql`，明确客户端本地 `sync_outbox` 表契约。
-- 新增 `sqlc.yaml` 和 SQL 查询文件作为后续 sqlc 生成入口；当前环境缺少 sqlc，保留可编译的 pgx 手写数据层。
+- 新增 PostgreSQL 迁移 `cloud-api/migrations/postgres/001_cloud_sync.sql`，包含 `devices`、`cloud_entities`、`entity_revisions`、`content_objects`、`archive_objects`。
+- 新增 SQLite 迁移 `client/migrations/sqlite/001_sync_outbox.sql`，明确客户端本地 `sync_outbox` 表契约。
+- 新增 `cloud-api/sqlc.yaml` 和 SQL 查询文件作为后续 sqlc 生成入口；当前环境缺少 sqlc，保留可编译的 pgx 手写数据层。
 - 新增 Go 单元测试，覆盖设备认证、重复 revision 幂等、版本冲突、内容查询、归档查询和非法 payload 拒绝。
 
 提交摘要：Go 云端 API 已具备 v1.3 outbox 同步接收、幂等写入、冲突检测和基础查询能力；客户端仍禁止直连 PostgreSQL。
@@ -82,3 +82,22 @@ Go 云端同步服务与 outbox 同步边界已完成。
 - 搭建 Python 客户端项目骨架、配置加载和日志脱敏。
 - 在客户端 SQLite 仓储层实现业务写入与 `sync_outbox` 同事务提交。
 - 安装并验证 sqlc 后，可在单独提交中将 Go 数据层切换为生成代码。
+
+### Go 服务目录整理与数据库一致性规则修正
+
+- 将 Go 云端服务的 `go.mod`、`go.sum`、`sqlc.yaml`、`cmd/`、`internal/` 和 PostgreSQL 迁移统一移动到 `cloud-api/`。
+- 将客户端本地 SQLite `sync_outbox` 迁移移动到 `client/migrations/sqlite/001_sync_outbox.sql`，明确其不属于 Go 服务端迁移。
+- 将 Go module 调整为 `auto_backup_bdnetdesk/cloud-api`，并修正服务入口 import。
+- 新增 `cloud-api/.env.example`，说明 Go 服务端通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接目标 PostgreSQL。
+- 更新 README 和产品规格，补充二进制部署到服务器后的 systemd `EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env` 配置方式。
+- 更新产品规格的一致性口径：当前云端数据库是 `cloud_entities + entity_revisions` 的 revision 投影与审计层，不等同于所有本地业务表已建立同名云端物理表；校对以 `entity_id`、`revision_id`、`data_version`、`canonical_record_sha256` 为准。
+- 修正 `AGENTS.MD` 和本文件的进度规则，要求功能完成记录在提交前写入，并与代码和文档进入同一个 commit。
+- 发现 `go build ./cmd/cloud-api` 在 Windows 下会生成 `cloud-api.exe`，已删除本地构建产物并在 `.gitignore` 中忽略 `*.exe`，同时将该约束沉淀到 `AGENTS.MD`。
+
+提交摘要：Go 云端服务目录已收拢，部署配置来源和数据库一致性边界已明确，进度文件提交规则已改为提交前更新。
+
+后续待办：
+
+- SQLite schema 阶段补齐本地核心业务表，并决定云端继续使用 JSONB 投影、增加同名物理表，或增加视图/索引表。
+- 后续构建检查优先使用 `go build -o` 输出到临时目录，避免生成本地 `.exe` 污染工作区。
+- 继续搭建 Python 客户端项目骨架、配置加载和日志脱敏。

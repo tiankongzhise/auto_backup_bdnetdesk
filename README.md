@@ -17,13 +17,24 @@ Windows 桌面端百度网盘加密备份工具。
 
 ## 云端同步服务
 
-Go 云端服务入口为 `cmd/cloud-api`，默认监听 `:8080`，通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接外部 PostgreSQL。
+Go 云端服务源码集中在 `cloud-api/` 目录，入口为 `cloud-api/cmd/cloud-api`。服务默认监听 `:8080`，通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接外部 PostgreSQL。
 
 ```powershell
+cd cloud-api
 go run ./cmd/cloud-api
 ```
 
-数据库迁移文件位于 `migrations/postgres`；客户端本地 `sync_outbox` 迁移契约位于 `migrations/sqlite`。
+云端 PostgreSQL 迁移文件位于 `cloud-api/migrations/postgres`；客户端本地 `sync_outbox` 迁移契约位于 `client/migrations/sqlite`。
+
+二进制部署到服务器后，服务通过环境变量决定连接哪台 PostgreSQL。推荐在服务器创建 `/etc/auto-backup-bdnetdesk/cloud-api.env`，并在 systemd 中使用：
+
+```ini
+[Service]
+EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env
+ExecStart=/opt/auto-backup-bdnetdesk/cloud-api
+```
+
+环境文件内容参考 `cloud-api/.env.example`。真实 PostgreSQL 密码和 DSN 不得提交到仓库。
 
 ## 敏感信息
 
