@@ -547,15 +547,19 @@ Go 云端服务运行约束：
 
 - 服务端代码必须集中在 `cloud-api/` 目录，不得散放到仓库根目录。
 - 服务入口固定为 `cloud-api/cmd/cloud-api`。
-- 默认监听 `CLOUD_API_ADDR=:8080`。
+- 默认监听 `CLOUD_API_ADDR=:8080`。生产反代场景推荐使用 `127.0.0.1:8080` 或 `127.0.0.1:9321`，只暴露给本机 nginx/宝塔反代；裸端口如 `9321` 会被服务自动兼容为 `:9321`。
 - 对外服务域名固定为 `backup.baichengedu.com`，生产 `PUBLIC_BASE_URL=https://backup.baichengedu.com`。
 - PostgreSQL 连接优先使用 `POSTGRES_DSN`；未设置时使用 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_SSLMODE` 组合。
 - 百度开放平台配置由服务端环境变量提供：`BAIDU_APP_KEY`、`BAIDU_APP_SECRET`、`BAIDU_SCOPE`、`BAIDU_REDIRECT_URI`、`BAIDU_AUTHORIZE_URL`、`BAIDU_DEVICE_CODE_URL`、`BAIDU_TOKEN_URL`、`BAIDU_USERINFO_URL`。
-- 二进制部署到服务器后，通过 systemd `EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env` 或同等环境注入方式决定连接哪台 PostgreSQL。
+- 二进制部署到服务器后，通过进程环境变量、systemd `EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env`、启动参数 `--env-file /path/to/cloud-api.env` 或 `CLOUD_API_ENV_FILE=/path/to/cloud-api.env` 决定连接哪台 PostgreSQL。
+- 服务启动时 `.env`/环境文件只填充缺失变量，不覆盖 systemd、宝塔面板或 Shell 已注入的非空环境变量。
+- 未显式指定环境文件时，服务自动尝试当前工作目录和二进制所在目录下的 `cloud-api.env`/`.env`，Linux 下额外尝试 `/etc/auto-backup-bdnetdesk/cloud-api.env`。
 - 环境文件内容参考 `cloud-api/.env.example`，真实 PostgreSQL DSN 和密码不得提交到仓库。
+- `APP_ENV=production` 只用于结构化日志标识当前部署环境，不改变 PostgreSQL 连接选择或安全策略。
 - 云端 PostgreSQL 迁移位于 `cloud-api/migrations/postgres`。
 - 客户端本地 SQLite `sync_outbox` 迁移位于 `client/migrations/sqlite`，不属于 Go 服务端迁移。
-- 结构化日志不得输出 Device Token、百度 token、用户密码、明文原始路径或完整敏感 payload。
+- 结构化日志不得输出 Device Token、百度 token、用户密码、PostgreSQL 密码、完整 DSN、明文原始路径或完整敏感 payload。
+- PostgreSQL 启动和连接失败日志必须包含脱敏后的 `env_file_mode`、`env_files_loaded`、`postgres_config_source`、`postgres_host`、`postgres_port`、`postgres_database`、`postgres_user`、`postgres_sslmode`、`postgres_password_set` 和 `postgres_defaulted_fields`，用于部署排查。
 - `GET /v1/healthz` 只表示进程存活。
 - `GET /v1/readyz` 必须检查 PostgreSQL 可用性。
 
@@ -565,6 +569,12 @@ systemd 示例：
 [Service]
 EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env
 ExecStart=/opt/auto-backup-bdnetdesk/cloud-api
+```
+
+宝塔或其他进程守护工具如果环境变量注入不稳定，优先使用：
+
+```text
+ExecStart=/opt/auto-backup-bdnetdesk/cloud-api --env-file /www/server/auto-backup-bdnetdesk/.env
 ```
 
 nginx 对外反代：

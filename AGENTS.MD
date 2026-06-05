@@ -182,3 +182,13 @@ chcp 65001
 解决方案：在本仓库设置 `maintenance.auto=false`，避免提交后自动触发该不兼容维护流程；需要维护时可手动执行 `git maintenance run --auto`。
 
 后续约束：后续若提交后再次出现 maintenance 参数兼容性报错，优先检查 `git config --show-origin --get-regexp '^(maintenance|gc|scalar)\.'` 和 Git for Windows 版本；不要把该报错误判为提交失败，应先用 `git log --oneline -1` 和 `git status --short --branch` 确认提交状态。
+
+### 2026-06-05：宝塔面板环境变量未进入 Go 服务进程
+
+问题：Go 云端服务部署到宝塔面板后，日志显示连接 PostgreSQL 时使用默认 `auto_backup_user/auto_backup_bdnetdesk`，实际 `.env` 中配置的数据库用户和库名未生效。
+
+原因：服务原先只通过 `os.Getenv` 读取进程环境变量，不会主动读取 `.env` 文件；宝塔面板环境变量配置未可靠注入到服务进程时，代码会回退到默认 PostgreSQL 分项配置，导致连接到错误用户和库名。
+
+解决方案：Go 服务新增 `--env-file /path/to/.env` 和 `CLOUD_API_ENV_FILE` 显式环境文件加载能力，未显式指定时自动尝试工作目录、二进制目录下的 `cloud-api.env`/`.env`，Linux 下额外尝试 `/etc/auto-backup-bdnetdesk/cloud-api.env`；`.env` 只填充缺失变量，不覆盖已注入的非空进程环境变量。启动和 PostgreSQL 连接失败日志新增脱敏配置摘要。
+
+后续约束：宝塔部署优先在启动命令中显式添加 `--env-file /实际路径/.env`，不要只依赖面板环境变量注入；排查数据库连接问题时优先查看 `env_files_loaded`、`postgres_config_source`、`postgres_user`、`postgres_database` 和 `postgres_defaulted_fields`，不得在日志中输出完整 DSN、数据库密码、百度 App Secret 或 token。

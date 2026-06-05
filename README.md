@@ -19,7 +19,7 @@ Windows 桌面端百度网盘加密备份工具。
 
 ## 云端同步服务
 
-Go 云端服务源码集中在 `cloud-api/` 目录，入口为 `cloud-api/cmd/cloud-api`。服务默认监听 `:8080`，通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接外部 PostgreSQL。
+Go 云端服务源码集中在 `cloud-api/` 目录，入口为 `cloud-api/cmd/cloud-api`。服务默认监听 `:8080`，通过 `POSTGRES_DSN` 或 PostgreSQL 分项环境变量连接外部 PostgreSQL。`CLOUD_API_ADDR` 使用 Go 监听地址格式，推荐生产反代场景填写 `127.0.0.1:9321`；只填写裸端口如 `9321` 时，服务会自动按 `:9321` 兼容处理。
 
 ```powershell
 cd cloud-api
@@ -36,7 +36,13 @@ go run ./cmd/cloud-api
 
 云端 PostgreSQL 迁移文件位于 `cloud-api/migrations/postgres`；客户端本地 `sync_outbox` 迁移契约位于 `client/migrations/sqlite`。百度账号授权、密文 token、设备绑定和刷新租约表由 `cloud-api/migrations/postgres/002_baidu_auth.sql` 提供。
 
-二进制部署到服务器后，服务通过环境变量决定连接哪台 PostgreSQL。推荐在服务器创建 `/etc/auto-backup-bdnetdesk/cloud-api.env`，并在 systemd 中使用：
+二进制部署到服务器后，服务通过环境变量决定连接哪台 PostgreSQL。服务启动时支持三种配置来源：
+
+- 已注入到进程的环境变量，优先级最高。
+- 启动参数 `--env-file /path/to/cloud-api.env` 或环境变量 `CLOUD_API_ENV_FILE=/path/to/cloud-api.env`。
+- 未显式指定时，自动尝试读取当前工作目录、二进制所在目录下的 `cloud-api.env`/`.env`，Linux 下还会尝试 `/etc/auto-backup-bdnetdesk/cloud-api.env`。
+
+`.env`/环境文件只填充当前进程缺失的变量，不覆盖已由 systemd、宝塔面板或 Shell 注入的非空环境变量。推荐在服务器创建 `/etc/auto-backup-bdnetdesk/cloud-api.env`，并在 systemd 中使用：
 
 ```ini
 [Service]
@@ -44,7 +50,13 @@ EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env
 ExecStart=/opt/auto-backup-bdnetdesk/cloud-api
 ```
 
-环境文件内容参考 `cloud-api/.env.example`。真实 PostgreSQL 密码、DSN、百度 App Secret 和 token 不得提交到仓库。
+如果宝塔面板的环境变量注入不可靠，可以直接在启动命令中指定：
+
+```bash
+/opt/auto-backup-bdnetdesk/cloud-api --env-file /www/server/auto-backup-bdnetdesk/.env
+```
+
+环境文件内容参考 `cloud-api/.env.example`。`APP_ENV=production` 只用于日志标识当前部署环境，不影响 PostgreSQL 连接选择。真实 PostgreSQL 密码、DSN、百度 App Secret 和 token 不得提交到仓库。
 
 ## 百度网盘授权
 

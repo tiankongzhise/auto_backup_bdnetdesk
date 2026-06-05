@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-GitHub 公开仓库发布已完成。
+Go 云端服务宝塔部署配置读取修复已完成，后续继续 Python 客户端百度授权与上传流程开发。
 
 ## 当前工作项
 
@@ -169,4 +169,28 @@ GitHub 公开仓库发布已完成。
 
 后续待办：
 
+- 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
+
+### Go 云端服务宝塔部署配置读取修复
+
+- 确认宝塔部署失败原因：原 Go 服务只通过 `os.Getenv` 读取进程环境变量，不会主动读取 `.env` 文件；宝塔面板变量未进入服务进程时，服务回退到默认 `auto_backup_user/auto_backup_bdnetdesk` PostgreSQL 配置。
+- 新增 `--env-file /path/to/.env` 启动参数和 `CLOUD_API_ENV_FILE` 环境变量，支持显式加载服务器环境文件。
+- 未显式指定环境文件时，服务自动尝试当前工作目录、二进制所在目录下的 `cloud-api.env`/`.env`，Linux 下额外尝试 `/etc/auto-backup-bdnetdesk/cloud-api.env`。
+- `.env` 加载只填充缺失变量，不覆盖 systemd、宝塔或 Shell 已经注入的非空进程环境变量。
+- 新增 `APP_ENV`、`LOG_LEVEL`、监听地址、环境文件加载情况、PostgreSQL 配置来源和脱敏连接摘要的启动日志。
+- PostgreSQL 连接池创建、Ping 失败日志补充 `postgres_config_source`、`postgres_host`、`postgres_port`、`postgres_database`、`postgres_user`、`postgres_sslmode`、`postgres_password_set` 和 `postgres_defaulted_fields`，不输出完整 DSN 或密码。
+- `CLOUD_API_ADDR` 支持裸端口兼容，配置为 `9321` 时自动归一化为 `:9321`；文档仍推荐反代部署使用 `127.0.0.1:9321`。
+- 更新 `cloud-api/.env.example`、README、产品规格和 `backup.baichengedu.com` 部署文档，补充宝塔 `--env-file` 启动方式、`APP_ENV=production` 作用和日志排查字段。
+- 将宝塔环境变量未进入 Go 服务进程的问题沉淀到 `AGENTS.MD`。
+- 新增配置加载单元测试，覆盖显式 env 文件、进程环境优先、`POSTGRES_DSN` 优先和裸端口归一化。
+- 已验证在 `cloud-api/` 下执行 `go test ./...` 通过。
+- 已验证在仓库根目录执行 `.\go_build.ps1` 成功生成 `dist/cloud-api/linux-amd64/cloud-api`。
+- 已验证 `git diff --check` 通过。
+
+提交摘要：Go 云端服务现已支持宝塔等面板部署场景下自行读取指定 `.env` 文件，并在启动和 PostgreSQL 连接失败日志中输出脱敏配置摘要，便于确认环境文件是否加载、实际连接到哪个数据库用户和库名。
+
+后续待办：
+
+- 宝塔部署时优先使用 `cloud-api --env-file /实际路径/.env`，并将 `APP_ENV` 设置为 `production`、`CLOUD_API_ADDR` 设置为 `127.0.0.1:9321` 或实际反代端口。
+- 使用服务器真实 PostgreSQL 配置重新启动服务，并通过日志确认 `env_files_loaded` 非空、`postgres_config_source` 和 `postgres_user/postgres_database` 与预期一致。
 - 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
