@@ -60,3 +60,30 @@ def test_cloud_client_raises_structured_api_error() -> None:
         assert exc.error_code == "token_version_conflict"
     else:
         raise AssertionError("expected CloudAPIError")
+
+
+def test_refresh_lease_conflict_is_parsed_as_business_result() -> None:
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    409,
+                    json={
+                        "acquired": False,
+                        "account_id": "bacc_1",
+                        "lease_id": "lease-first",
+                        "holder_device_id": "dev_first",
+                        "expires_at": "2026-06-05T08:05:00Z",
+                    },
+                )
+            )
+        ),
+    )
+
+    lease = cloud.acquire_refresh_lease("bacc_1", lease_id="lease-second")
+
+    assert lease.acquired is False
+    assert lease.lease_id == "lease-first"
+    assert lease.holder_device_id == "dev_first"

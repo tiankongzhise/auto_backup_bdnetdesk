@@ -7,7 +7,7 @@
 - Go 云端服务已部署并可访问 `https://backup.baichengedu.com`。
 - 新版 Go 云端服务已重启；`cloud-api serve` 启动时会自动检查并执行内置 PostgreSQL 迁移，不需要在客户端联调前手动初始化数据库。
 - `https://backup.baichengedu.com/v1/readyz` 返回 200；如果返回 `schema_not_ready`，先检查服务器启动日志中的自动迁移错误和实际 PostgreSQL 连接配置，不要继续客户端授权联调。
-- 已通过设备注册接口拿到本机 `device_token`。
+- 如运行时没有提供 `CLOUD_API_DEVICE_TOKEN`，客户端会自动注册当前设备，并把 Device Token 保存到本机 DPAPI 凭据文件。
 - 真实 Device Token、百度 App Secret、access token、refresh token 和用户备份密码只允许在运行时输入或保存在 Windows DPAPI/凭据管理器，不得写入仓库文件。
 
 ## 验收步骤
@@ -21,9 +21,9 @@
    uv run pytest
    ```
 
-2. 使用 `BaiduCloudClient` 调用 `create_auth_session(flow="device_code")`，确认返回 `user_code`、`verification_url` 和 `qrcode_url`，响应中不包含百度 `device_code`、access token 或 refresh token。
+2. 使用 PySide6 UI 或 `BaiduCloudClient` 调用 `create_auth_session(flow="device_code")`，确认返回扫码授权材料，响应中不包含百度 `device_code`、access token 或 refresh token。
 
-3. 在百度官方授权页完成授权后，调用 `complete_auth_session(...)`。password 模式下只传入本地派生出的 32 字节 wrapping key；不得传入或保存用户明文密码。客户端会按 `account_id` 保存 KDF salt 和 Argon2id 参数，用于后续用同一授权密码重新派生同一个 wrapping key。
+3. 在 PySide6 UI 中输入授权密码，点击“生成扫码授权”，使用百度 App 扫码确认授权。UI 轮询到授权可完成后会自动调用 `complete_auth_session(...)`，password 模式下只传入本地派生出的 32 字节 wrapping key；不得传入或保存用户明文密码。客户端会按 `account_id` 保存 KDF salt 和 Argon2id 参数，用于后续用同一授权密码重新派生同一个 wrapping key。
 
 4. 重启客户端进程后，调用 `token-check` 或 UI “验证解密”，确认本地 KDF 参数可以重新派生 wrapping key，并成功解密云端密文 token。明文 token 只存在于进程内存，不写日志、不写 `.env`、不写数据库或缓存文件。
 
@@ -37,20 +37,27 @@ password 模式只持久化 KDF salt、Argon2id 参数、`account_id` 和 token 
 - 如需改存储位置，可设置 `AUTO_BACKUP_BAIDU_KDF_STORE_PATH`。
 - 非 Windows 或自动化测试只有显式设置 `AUTO_BACKUP_BAIDU_KDF_STORE_ALLOW_PLAINTEXT=true` 或代码传入 `allow_plaintext=True` 时才允许明文测试存储；真实联调不得使用明文模式。
 
+## Device Token 凭据存储
+
+当前设备的 Device Token 只用于云端 API Bearer 认证，不得写入仓库文件。
+
+- Windows 默认保存到 `%LOCALAPPDATA%\auto_backup_bdnetdesk\credentials\device_credentials.json`，并使用当前用户 DPAPI 保护。
+- 如需改存储位置，可设置 `AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_PATH`。
+- 非 Windows 或自动化测试只有显式设置 `AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_ALLOW_PLAINTEXT=true` 或代码传入 `allow_plaintext=True` 时才允许明文测试存储；真实联调不得使用明文模式。
+
 ## 真实 CLI 联调
 
 ```powershell
 cd client
 $env:UV_LINK_MODE='copy'
 uv run python -m auto_backup_client.baidu.real_auth_cli health
-$env:CLOUD_API_DEVICE_TOKEN='<runtime-only-device-token>'
 $env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
 uv run python -m auto_backup_client.baidu.real_auth_cli accounts
 uv run python -m auto_backup_client.baidu.real_auth_cli device-code --password-env BAIDU_AUTH_PASSWORD
 uv run python -m auto_backup_client.baidu.real_auth_cli token-check --password-env BAIDU_AUTH_PASSWORD
 ```
 
-没有 Device Token 时，可加 `--register-ephemeral-device` 临时注册设备；脚本只在当前进程内使用返回的 token，不写入文件。`token-check` 只输出账号 ID、token version、过期时间、token type 和 scope 等脱敏元数据，不输出 access token 或 refresh token。
+CLI 会优先使用运行时 `CLOUD_API_DEVICE_TOKEN`，否则复用本机 DPAPI Device Token 凭据；如本机尚无凭据，会自动注册当前设备并保存。需要一次性临时设备时，可加 `--register-ephemeral-device`，脚本只在当前进程内使用返回的 token，不写入文件。`token-check` 只输出账号 ID、token version、过期时间、token type 和 scope 等脱敏元数据，不输出 access token 或 refresh token。
 
 ## PySide6 UI 联调
 
@@ -58,11 +65,10 @@ uv run python -m auto_backup_client.baidu.real_auth_cli token-check --password-e
 cd client
 $env:UV_LINK_MODE='copy'
 $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
-$env:CLOUD_API_DEVICE_TOKEN='<runtime-only-device-token>'
 uv run python -m auto_backup_client.ui.baidu_settings
 ```
 
-页面会调用真实云端 API 展示账号列表、选择账号、创建设备码授权 session、显示授权地址/用户码/二维码，并在授权完成后提交本地派生 wrapping key 完成密文 token 入库。完成授权后可重启页面，输入同一授权密码并点击“验证解密”，确认 KDF 参数持久化材料可恢复云端密文 token 本地解密能力。
+页面会调用真实云端 API 展示账号列表、选择账号、生成扫码授权二维码，并在扫码确认授权后自动提交本地派生 wrapping key 完成密文 token 入库。完成授权后可重启页面，输入同一授权密码并点击“验证解密”，确认 KDF 参数持久化材料可恢复云端密文 token 本地解密能力。
 
 ## 需要人工停顿的场景
 

@@ -13,6 +13,7 @@ import httpx
 
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow, generate_ephemeral_device_name
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError, register_device
+from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -50,11 +51,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "select":
         return _select(args.base_url, _resolve_device_token(args), args.account_id)
     if args.command == "device-code":
-        token = _resolve_device_token(args, allow_empty=True)
-        if not token and args.register_ephemeral_device:
+        if args.register_ephemeral_device:
+            token = _resolve_device_token(args, allow_empty=True, allow_store=False)
             token = _register_ephemeral(args.base_url, args.device_name)
-        if not token:
-            raise SystemExit("CLOUD_API_DEVICE_TOKEN is required unless --register-ephemeral-device is used")
+        else:
+            token = _resolve_device_token(args)
         return _device_code(
             args.base_url,
             token,
@@ -80,8 +81,14 @@ def _add_token_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _resolve_device_token(args: argparse.Namespace, *, allow_empty: bool = False) -> str:
+def _resolve_device_token(args: argparse.Namespace, *, allow_empty: bool = False, allow_store: bool = True) -> str:
     token = os.environ.get(args.device_token_env, "").strip()
+    if token:
+        return token
+    if allow_store:
+        credentials, source = resolve_or_register_device_credentials(cloud_api_base_url=args.base_url)
+        _print(f"Device Token 来源: {source}")
+        return credentials.device_token
     if not token and not allow_empty:
         raise SystemExit(f"{args.device_token_env} is required")
     return token

@@ -24,10 +24,10 @@ class ClientSettings:
             baidu_token_url=_read_text(source, "BAIDU_TOKEN_URL", DEFAULT_BAIDU_TOKEN_URL),
         )
 
-    def validate(self) -> None:
+    def validate(self, *, require_device_token: bool = True) -> None:
         if not self.cloud_api_base_url:
             raise ValueError("CLOUD_API_BASE_URL is required")
-        if not self.device_token:
+        if require_device_token and not self.device_token:
             raise ValueError("CLOUD_API_DEVICE_TOKEN is required")
         if not self.baidu_token_url:
             raise ValueError("BAIDU_TOKEN_URL is required")

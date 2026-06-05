@@ -135,17 +135,29 @@ class BaiduCloudClient:
         payload: dict[str, Any] = {"duration_seconds": duration_seconds}
         if lease_id:
             payload["lease_id"] = lease_id
-        data = self._request("POST", f"/v1/baidu/accounts/{account_id}/refresh-lease", json=payload)
+        data = self._request(
+            "POST",
+            f"/v1/baidu/accounts/{account_id}/refresh-lease",
+            expected_error_statuses={409},
+            json=payload,
+        )
         return BaiduRefreshLease.from_json(data)
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        expected_error_statuses: set[int] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         response = self._client.request(
             method,
             self._base_url + path,
             headers={"Authorization": f"Bearer {self._device_token}"},
             **kwargs,
         )
-        if response.status_code >= 400:
+        if response.status_code >= 400 and response.status_code not in (expected_error_statuses or set()):
             self._raise_api_error(response)
         data = response.json()
         if not isinstance(data, dict):

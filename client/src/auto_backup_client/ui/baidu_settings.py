@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+import httpx
 import qrcode
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QPixmap
@@ -44,6 +45,7 @@ from auto_backup_client.baidu.auth_workflow import (
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient
 from auto_backup_client.baidu.kdf_store import PasswordKDFRecord
 from auto_backup_client.baidu.models import BaiduAccount
+from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.settings import ClientSettings
 
 
@@ -54,6 +56,8 @@ T = TypeVar("T")
 class BaiduSettingsPageConfig:
     cloud_api_base_url: str
     device_token: str
+    device_id: str = ""
+    device_credential_source: str = ""
     poll_interval_seconds: int = 5
 
 
@@ -94,6 +98,7 @@ class BaiduSettingsPage(QWidget):
         self._session: AuthSessionState | None = None
         self._last_material: PasswordWrappingMaterial | None = None
         self._last_kdf_record: PasswordKDFRecord | None = None
+        self._completion_in_progress = False
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(max(1, config.poll_interval_seconds) * 1000)
         self._poll_timer.timeout.connect(self.poll_current_session)
@@ -140,9 +145,13 @@ class BaiduSettingsPage(QWidget):
         group = QGroupBox("云端连接")
         form = QFormLayout(group)
         self.base_url_label = QLabel(self._config.cloud_api_base_url)
-        self.device_token_label = QLabel("已从运行环境加载")
+        self.device_token_label = QLabel("已加载（不显示明文）")
+        self.device_source_label = QLabel(self._config.device_credential_source or "运行环境")
         form.addRow("云端 API", self.base_url_label)
         form.addRow("Device Token", self.device_token_label)
+        form.addRow("凭据来源", self.device_source_label)
+        if self._config.device_id:
+            form.addRow("Device ID", QLabel(self._config.device_id))
         return group
 
     def _build_accounts_group(self) -> QGroupBox:
@@ -173,18 +182,18 @@ class BaiduSettingsPage(QWidget):
         return group
 
     def _build_auth_group(self) -> QGroupBox:
-        group = QGroupBox("新增设备码授权")
+        group = QGroupBox("扫码确认授权")
         layout = QVBoxLayout(group)
 
         controls = QHBoxLayout()
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("用于本地派生 token wrapping key")
-        self.start_auth_button = QPushButton("创建设备码")
+        self.start_auth_button = QPushButton("生成扫码授权")
         self.start_auth_button.clicked.connect(self.start_device_authorization)
         self.open_url_button = QPushButton("打开授权页")
         self.open_url_button.clicked.connect(self.open_authorization_url)
-        self.complete_button = QPushButton("完成授权")
+        self.complete_button = QPushButton("检查并保存授权")
         self.complete_button.clicked.connect(self.complete_current_session)
         controls.addWidget(QLabel("授权密码"))
         controls.addWidget(self.password_input, stretch=1)
@@ -195,17 +204,15 @@ class BaiduSettingsPage(QWidget):
 
         session_row = QHBoxLayout()
         self.session_status_label = QLabel("未创建授权 session")
-        self.user_code_label = QLabel("")
         self.expires_label = QLabel("")
         session_row.addWidget(self.session_status_label)
-        session_row.addWidget(self.user_code_label)
         session_row.addWidget(self.expires_label)
         session_row.addStretch(1)
         layout.addLayout(session_row)
 
         qr_row = QHBoxLayout()
         self.qrcode_label = QLabel()
-        self.qrcode_label.setFixedSize(220, 220)
+        self.qrcode_label.setFixedSize(240, 240)
         self.qrcode_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qrcode_label.setStyleSheet("border: 1px solid #c7cdd4; background: #ffffff;")
         self.url_text = QTextEdit()
@@ -284,6 +291,7 @@ class BaiduSettingsPage(QWidget):
         if not self.password_input.text():
             self._show_warning("请先输入授权密码，用于本地派生 wrapping key。")
             return
+        self._completion_in_progress = False
         self._run_task(
             self._workflow.start_device_code_session,
             self._on_session_started,
@@ -303,11 +311,14 @@ class BaiduSettingsPage(QWidget):
         if not self._session:
             self._show_warning("请先创建设备码授权 session。")
             return
+        if self._completion_in_progress:
+            return
         password = self.password_input.text()
         if not password:
             self._show_warning("请先输入授权密码。")
             return
         session_id = self._session.session.session_id
+        self._completion_in_progress = True
         self._run_task(
             lambda: self._workflow.complete_password_session(session_id, authorization_password=password),
             self._on_session_completed,
@@ -355,6 +366,8 @@ class BaiduSettingsPage(QWidget):
 
     def _finish_failure(self, message: str, busy_buttons: tuple[QPushButton, ...]) -> None:
         self._set_buttons_enabled(busy_buttons, True)
+        if self._completion_in_progress and self._session and self._session.session.status in {"pending", "authorized"}:
+            self._completion_in_progress = False
         self.status_label.setText(f"操作失败：{message}")
         QMessageBox.warning(self, "操作失败", message)
 
@@ -405,17 +418,20 @@ class BaiduSettingsPage(QWidget):
         self._session = state
         self._render_session_state()
         self._poll_timer.start()
-        self.status_label.setText("设备码已创建，请在百度官方页面完成授权。")
+        self.status_label.setText("扫码授权已创建，请用百度 App 扫码并确认授权。")
 
     def _on_session_polled(self, state: AuthSessionState) -> None:
         self._session = state
         self._render_session_state()
         if state.terminal:
             self._poll_timer.stop()
+        elif state.session.status == "authorized":
+            self.complete_current_session()
         self.status_label.setText(f"授权状态：{session_status_label(state.session.status)}")
 
     def _on_session_completed(self, completion: PasswordAuthCompletion) -> None:
         result = completion.result
+        self._completion_in_progress = False
         self._last_material = completion.material
         self._last_kdf_record = completion.kdf_record
         self._session = AuthSessionState(
@@ -436,29 +452,38 @@ class BaiduSettingsPage(QWidget):
             return
         session = self._session.session
         self.session_status_label.setText(session_status_label(session.status))
-        self.user_code_label.setText(f"用户码：{session.user_code}" if session.user_code else "")
         self.expires_label.setText(f"过期时间：{session.expires_at.isoformat()}")
-        url = self._session.user_action_url
+        action_url = _preferred_action_url(self._session)
+        qr_source = _preferred_qr_source(self._session)
         lines = [
             f"session_id: {session.session_id}",
             f"status: {session.status}",
             f"scope: {session.scope}",
-            f"verification_url: {session.verification_url}",
-            f"qrcode_url: {session.qrcode_url}",
+            f"authorization_url: {action_url}",
         ]
         self.url_text.setPlainText("\n".join(line for line in lines if line.split(": ", 1)[1]))
-        self._render_qrcode(url or session.qrcode_url)
+        self._render_qrcode(qr_source)
 
     def _render_qrcode(self, value: str) -> None:
         if not value:
             self.qrcode_label.setText("无二维码")
             self.qrcode_label.setPixmap(QPixmap())
             return
-        image = qrcode.make(value)
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
         pixmap = QPixmap()
-        pixmap.loadFromData(buffer.getvalue(), "PNG")
+        if _looks_like_url(value):
+            try:
+                with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+                    response = client.get(value)
+                content_type = response.headers.get("content-type", "")
+                if response.status_code < 400 and "image" in content_type:
+                    pixmap.loadFromData(response.content)
+            except Exception:
+                pixmap = QPixmap()
+        if pixmap.isNull():
+            image = qrcode.make(value)
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            pixmap.loadFromData(buffer.getvalue(), "PNG")
         self.qrcode_label.setPixmap(
             pixmap.scaled(
                 self.qrcode_label.size(),
@@ -473,17 +498,38 @@ class BaiduSettingsPage(QWidget):
 
 def run_baidu_settings_app(settings: ClientSettings | None = None) -> int:
     loaded = settings or ClientSettings.from_env()
-    loaded.validate()
+    loaded.validate(require_device_token=False)
+    credentials, source = resolve_or_register_device_credentials(
+        cloud_api_base_url=loaded.cloud_api_base_url,
+        provided_device_token=loaded.device_token,
+    )
     app = QApplication.instance() or QApplication(sys.argv)
     page = BaiduSettingsPage(
         BaiduSettingsPageConfig(
             cloud_api_base_url=loaded.cloud_api_base_url,
-            device_token=loaded.device_token,
+            device_token=credentials.device_token,
+            device_id=credentials.device_id,
+            device_credential_source=source,
         )
     )
     page.resize(1040, 820)
     page.show()
     return app.exec()
+
+
+def _preferred_action_url(state: AuthSessionState) -> str:
+    session = state.session
+    return session.auth_url or session.verification_url or state.user_action_url or session.qrcode_url
+
+
+def _preferred_qr_source(state: AuthSessionState) -> str:
+    session = state.session
+    return session.qrcode_url or session.auth_url or state.user_action_url or session.verification_url
+
+
+def _looks_like_url(value: str) -> bool:
+    lowered = value.strip().lower()
+    return lowered.startswith("https://") or lowered.startswith("http://")
 
 
 if __name__ == "__main__":

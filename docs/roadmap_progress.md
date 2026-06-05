@@ -4,20 +4,20 @@
 
 ## 当前阶段
 
-PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动迁移、真实百度授权入库联调和 password 模式 KDF 参数持久化已完成；当前真实云端已有一个 token 有效的百度账号可用于账号选择、密文 token 元数据和刷新租约测试。下一步需要对真实账号重新完成一次带 KDF 参数持久化的新授权，或用受控 re-encrypt 流程补齐本机 KDF 材料，再进入百度 token 本地解密和上传链路联调。
+PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥和真实百度用户信息/容量读取均已完成验证；服务功能验证已完成，可以进入下一阶段百度上传链路开发。
 
 ## 当前工作项
 
-- 使用真实 `https://backup.baichengedu.com` API 对带 KDF 参数的新授权账号执行 `token-check` 或 UI “验证解密”，确认客户端重启后可用同一授权密码解密云端密文 token。
-- 在 token 可本地解密后，继续验证百度容量/用户信息读取、预上传、分片上传和 create 链路。
-- 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库或敏感日志。
+- 下一阶段开始实现百度上传核心链路：容量/账号信息复用、预上传 `precreate`、分片上传 `superfile2`、创建文件 `create` 和失败重试边界。
+- 上传链路必须复用当前已验证的本机 DPAPI Device Token 凭据、account 级 KDF 参数和云端刷新租约机制。
+- 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库、上传临时缓存或敏感日志。
 
 ## 本次验收标准
 
-- 真实云端账号重新授权后，本机 KDF store 中存在对应 `account_id` 的 KDF 参数，`token-check` 或 UI “验证解密”可在客户端重启后解密云端密文 token。
+- 新增百度上传核心库和必要 CLI/UI 验证入口，不输出 access token、refresh token、wrapping key 或上传敏感路径。
+- 真实百度上传链路至少完成小文件 `precreate -> superfile2 -> create` 验证，并按产品约束使用日期、设备、任务组织远端路径。
 - `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run pytest` 和 `uv run python -m compileall src tests` 通过。
 - `cloud-api/` 下 `go version` 为 Go 1.25 补丁线，`go list runtime` 和 `go test ./...` 保持通过。
-- 真实云端已入库百度账号的账号选择、密文 token 元数据读取和刷新租约互斥继续通过。
 
 ## 开发排期
 
@@ -31,7 +31,7 @@ PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动�
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
 | 6 | 去重索引、本地/云端内容对象、来源引用 | 未开始 |
 | 7 | 7-Zip 加密压缩、manifest、标准/严格验证 | 未开始 |
-| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：云端授权管理、客户端授权核心库、百度设置页和真实联调 CLI 已完成 |
+| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：OAuth、扫码授权、本机凭据、token 解密和服务功能验证已完成；上传链路待开发 |
 | 9 | 断点续传、上传恢复、失败重试 | 未开始 |
 | 10 | 缓存额度、动态清理等级、缓存 artifact 管理 | 未开始 |
 | 11 | 来源与远端映射、数据库/百度校对 UI | 未开始 |
@@ -39,6 +39,30 @@ PySide6 百度设置页、真实云端联调 CLI、服务端启动自检自动�
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### 扫码授权、本机设备凭据与服务功能验证
+
+- 新增 `client/src/auto_backup_client/device_credentials.py`，当前设备没有运行时 `CLOUD_API_DEVICE_TOKEN` 时会自动注册真实云端设备，并将 Device Token 保存到本机 DPAPI 凭据文件。
+- PySide6 百度设置页改为扫码确认授权优先：页面生成扫码授权二维码，不再要求用户输入用户码；扫码确认后 UI 会自动完成密文 token 入库和本机 KDF 参数保存。
+- CLI 真实联调入口改为优先使用运行时 Device Token，否则复用本机 DPAPI Device Token 凭据；本机无凭据时自动注册并保存当前设备，显式 `--register-ephemeral-device` 才使用一次性临时设备。
+- 修复客户端刷新租约解析：真实云端第二设备并发获取 `refresh-lease` 返回 409 时，客户端现在解析为 `BaiduRefreshLease(acquired=False)` 业务结果，而不是泛型 `CloudAPIError`。
+- 更新 `.env.example`、`client/README.md` 和 `client/docs/baidu_auth_manual_validation.md`，补充自动注册当前设备、Device Token DPAPI 凭据路径、扫码授权和 CLI 复用本机凭据说明。
+- 已使用 PySide6 UI 完成当前设备真实百度扫码授权，新授权账号 token 有效且已选中；本机 KDF store 可在新进程中用同一授权密码解密云端密文 token。
+- 已验证真实 `https://backup.baichengedu.com/v1/healthz` 与 `/v1/readyz` 均返回 HTTP 200。
+- 已验证真实云端账号列表、账号选择、密文 token 元数据读取和刷新租约互斥：第一设备获取刷新租约成功，第二设备并发获取返回 `acquired=false` 且租约 ID 与第一设备一致。
+- 已用解密后的真实百度 access token 验证百度网盘 `uinfo` 和 `quota` 接口均返回 HTTP 200，确认授权 token 可被百度真实 API 接受。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run pytest` 通过，21 个测试通过。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m compileall src tests` 通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`，`go list runtime` 通过，`go test ./...` 通过。
+
+提交摘要：本次提交完成当前设备扫码授权、本机 Device Token DPAPI 凭据持久化、CLI/UI 凭据复用和真实服务功能验证，并修复客户端刷新租约 409 响应解析，让后续百度上传链路可以直接复用已验证的账号、token 解密和租约互斥能力。
+
+后续待办：
+
+- 开始实现百度上传核心链路：容量/账号信息复用、预上传 `precreate`、分片上传 `superfile2`、创建文件 `create` 和失败重试边界。
+- 上传测试继续只输出脱敏状态，不输出 access token、refresh token、wrapping key、Device Token 或敏感本地/远端路径。
+- 后续上传远端目录必须遵循 `/apps/{appname}/backups/{yyyy}/{MM}/{dd}/{device_id}/{job_id}/` 组织规则。
 
 ### password 模式 KDF 参数持久化与恢复解密
 
