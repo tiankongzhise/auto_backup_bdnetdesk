@@ -4,20 +4,25 @@
 
 ## 当前阶段
 
-PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥和真实百度用户信息/容量读取均已完成验证；服务功能验证已完成，可以进入下一阶段百度上传链路开发。
+PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取和百度上传核心链路均已完成验证；本轮真实 `real-batch` 已覆盖小文件、跨分片文件、冲突检测和删除清理主链路。
 
 ## 当前工作项
 
-- 下一阶段开始实现百度上传核心链路：容量/账号信息复用、预上传 `precreate`、分片上传 `superfile2`、创建文件 `create` 和失败重试边界。
-- 上传链路必须复用当前已验证的本机 DPAPI Device Token 凭据、account 级 KDF 参数和云端刷新租约机制。
+- 已在 `AGENTS.MD` 补充开发前必须阅读 Git 历史，以及官方 API 文档浏览失败后依次使用 `curl.exe`、Python 脚本获取并记录溯源的约束。
+- 已新增 `docs/baidu_netdisk_openapi_reference.md`，记录百度官方用户信息、容量、预上传、获取上传域名、分片上传和创建文件接口的来源 URL、获取方式、官方更新时间、关键参数和本轮实现边界。
+- 本轮已实现百度上传核心链路：容量检查、预上传 `precreate`、上传域名 `locateupload`、分片上传 `superfile2`、创建文件 `create`、真实批测文件删除清理和失败重试边界。
+- 真实 `iotqueryuinfo` 当前对本授权应用或路径返回 HTTP 404，已从 `real-batch` 必经步骤拆出；`uinfo` 仅保留为独立排查命令，不再阻断上传批测主链路。
+- 上传链路必须复用当前已验证的本机 DPAPI Device Token 凭据、account 级 KDF 参数；token 过期刷新继续通过云端刷新租约机制和运行时百度 App Secret 完成，不得保存敏感材料。
+- 本轮后续进入上传状态 SQLite、断点续传、uploadid 恢复、`.meta.json`/`job.index.json` 生成和远端校对流程。
 - 后续联调继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库、上传临时缓存或敏感日志。
 
 ## 本次验收标准
 
-- 新增百度上传核心库和必要 CLI/UI 验证入口，不输出 access token、refresh token、wrapping key 或上传敏感路径。
-- 真实百度上传链路至少完成小文件 `precreate -> superfile2 -> create` 验证，并按产品约束使用日期、设备、任务组织远端路径。
-- `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run pytest` 和 `uv run python -m compileall src tests` 通过。
-- `cloud-api/` 下 `go version` 为 Go 1.25 补丁线，`go list runtime` 和 `go test ./...` 保持通过。
+- 百度上传核心库和必要 CLI 验证入口已新增，输出不包含 access token、refresh token、wrapping key、Device Token 或本地敏感路径。
+- 真实百度上传链路已完成小文件、跨分片文件、同路径冲突和删除清理验证，并按产品约束使用日期、设备、任务组织远端路径。
+- 上传请求契约以 `docs/baidu_netdisk_openapi_reference.md` 为离线依据；真实 `iotqueryuinfo` 404 差异已在完成记录中说明，上传主链路不再依赖该接口。
+- `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run python -m pytest` 和 `uv run python -m compileall src tests` 已通过。
+- `cloud-api/` 下 `go version` 为 Go 1.25 补丁线，提升权限后 `go list runtime` 和 `go test ./...` 已通过。
 
 ## 开发排期
 
@@ -31,7 +36,7 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
 | 6 | 去重索引、本地/云端内容对象、来源引用 | 未开始 |
 | 7 | 7-Zip 加密压缩、manifest、标准/严格验证 | 未开始 |
-| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：OAuth、扫码授权、本机凭据、token 解密和服务功能验证已完成；上传链路待开发 |
+| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：OAuth、扫码授权、本机凭据、token 解密、容量读取和上传核心链路已完成；断点续传数据库态待开发 |
 | 9 | 断点续传、上传恢复、失败重试 | 未开始 |
 | 10 | 缓存额度、动态清理等级、缓存 artifact 管理 | 未开始 |
 | 11 | 来源与远端映射、数据库/百度校对 UI | 未开始 |
@@ -39,6 +44,30 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### 百度上传核心链路与真实批测入口
+
+- 新增 `client/src/auto_backup_client/baidu/upload.py`，封装百度网盘容量读取、文件分片规划、远端路径构造、`precreate`、`locateupload`、`superfile2`、`create` 和 `filemanager/delete`。
+- 远端路径按 `/apps/{appname}/backups/{yyyy}/{MM}/{dd}/{device_id}/{job_id}/archives/{archive_seq}-{archive_sha256}.7z` 构造，继续禁止使用 `archive_sha256` 前缀作为目录分桶。
+- 上传核心库固定 `User-Agent: pan.baidu.com`，`rtype=0`，`block_list` 按分片顺序提交；返回和 CLI 输出不包含 access token、refresh token、wrapping key、Device Token 或本地敏感路径。
+- 新增 `client/src/auto_backup_client/baidu/upload_cli.py`，提供 `quota`、独立 `uinfo`、`upload-file` 和 `real-batch` 真实联调入口，默认复用本机 DPAPI Device Token 凭据和 account 级 KDF 参数。
+- `real-batch` 会生成小文件和跨 4 MiB 分片文件，执行 `quota -> small upload -> multipart upload -> conflict`，并默认调用百度 `filemanager/delete` 清理本批远端测试文件。
+- 真实联调发现按 2026-05-15 官方“获取用户信息”页调用 `GET https://pan.baidu.com/rest/2.0/xpan/nas?method=iotqueryuinfo`，当前真实授权应用或路径返回 HTTP 404；因此已将 `uinfo` 从 `real-batch` 必经步骤拆出，只保留为独立排查命令。
+- 新增 `docs/baidu_netdisk_openapi_reference.md`，记录百度官方用户信息、容量、预上传、获取上传域名、分片上传、创建文件和删除接口的来源、官方更新时间、关键参数、本轮实现边界与 `iotqueryuinfo` 真实差异。
+- 在 `AGENTS.MD` 补充 Git 历史阅读约束、官方 API 文档获取顺序，以及百度上传链路真实 API/真实删除清理验收约束。
+- 新增客户端测试覆盖远端路径布局、分片 MD5 顺序、`precreate` 待上传分片序号处理，以及 `real-batch` 不再依赖 `uinfo` 探针的控制流。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下提升权限执行 `uv run python -m pytest` 通过，27 个测试通过；提升权限原因是当前沙箱内无法启动 `.venv\Scripts\python.exe` 子进程，问题已沉淀到 `AGENTS.MD`。
+- 已验证 `client/` 下提升权限执行 `uv run python -m compileall src tests` 通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`；沙箱内 `go list runtime` 仍受标准库读取权限影响，提升权限后 `go list runtime` 返回 `runtime`，`go test ./...` 通过。
+- 已使用本机 DPAPI Device Token 凭据和真实百度授权账号执行 `real-batch`，真实百度 API 完成容量检查、小文件上传、跨 4 MiB 分片上传、同路径冲突检测和 `filemanager/delete` 清理；清理返回 `cleanup_delete_errno=0`，远端测试文件已删除。
+
+提交摘要：本次提交落地百度上传核心库和真实批测 CLI，将官方但当前 404 的 `iotqueryuinfo` 从上传批测必经链路拆出，让上传验收聚焦容量、预上传、分片上传、创建文件、冲突检测和删除清理主链路。
+
+后续待办：
+
+- 后续补齐上传状态 SQLite 表、断点续传、uploadid 恢复、`.meta.json`/`job.index.json` 生成和远端校对流程。
+- 继续保持 `uinfo` 仅作为独立探针；除非后续官方或真实应用权限修正其 404 行为，不得重新作为上传主链路前置条件。
 
 ### 扫码授权、本机设备凭据与服务功能验证
 

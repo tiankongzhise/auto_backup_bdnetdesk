@@ -48,6 +48,21 @@ uv run python -m auto_backup_client.baidu.real_auth_cli token-check --password-e
 
 如果需要一次性临时设备，可使用 `--register-ephemeral-device` 在真实云端临时注册设备，token 只在当前进程内使用，不会写入文件。
 
+## 百度上传真实联调 CLI
+
+上传入口会先通过真实云端解密当前选中账号的百度 token，再调用真实百度网盘 API。授权密码只通过运行时输入或指定环境变量提供，不写入仓库文件。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
+uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD quota
+uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD upload-file .\path\to\archive.7z --check-quota
+uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_PASSWORD real-batch
+```
+
+`real-batch` 会生成临时小文件和跨 4 MiB 分片文件，执行容量检查、上传、同路径冲突检测，并默认使用百度文件管理删除接口清理本批远端测试文件。`uinfo` 只保留为独立排查命令；当前真实授权应用或路径调用官方 `iotqueryuinfo` 接口可能返回 HTTP 404，不作为上传批测前置条件。
+
 ## Device Token 凭据存储
 
 当前设备的 Device Token 只用于云端 API Bearer 认证，不得写入仓库文件。

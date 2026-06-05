@@ -9,8 +9,41 @@
 - `AGENTS.MD`
 - `docs/roadmap_progress.md`
 - 当前相关产品文档或技术文档
+- Git 最近提交历史和关键提交摘要
 
 阅读后再开始修改代码、文档或配置。
+
+## Git 历史阅读约束
+
+每次进入新阶段或开始修改前，必须阅读 Git 历史，了解项目实际演进过程、已完成能力、已踩坑和提交边界。
+
+建议至少执行并阅读：
+
+```powershell
+git log --oneline --decorate -n 20
+git log --date=short --pretty=format:'%h%x09%ad%x09%s' -n 20
+```
+
+如当前工作项依赖近期能力，还必须阅读相关关键提交：
+
+```powershell
+git show --stat --summary --format=fuller <commit>
+```
+
+后续约束：不得只依据当前文件快照推断项目进度；涉及架构、授权、凭据、上传、迁移、部署或测试链路时，必须结合 Git 历史和 `docs/roadmap_progress.md` 判断上下文。
+
+## 官方 API 文档获取约束
+
+涉及百度网盘、OpenAI、云端服务、依赖库或其他外部 API/SDK 的接口开发时，必须优先获取官方文档并记录实现依据。
+
+获取顺序：
+
+1. 先使用可用的浏览/搜索工具打开官方文档 URL。
+2. 如果浏览工具无法访问，使用 `curl.exe -L` 获取官方文档内容。
+3. 如果 `curl.exe` 仍失败，使用 Python 脚本基于 `urllib` 或 `httpx` 获取。
+4. 如果以上方式都失败，必须在 `docs/roadmap_progress.md` 或相关开发说明中警示“未获取到官方文档内容”，并明确本次实现依据来自项目既有规格、历史提交、已验证接口行为或其他来源。
+
+后续约束：不得在无法获取官方文档时假装已经核验；涉及外部 API 参数、错误码、鉴权、请求体或响应体时，必须保留可追溯依据，方便后续校对和回滚。
 
 ## 沙箱问题沉淀
 
@@ -66,7 +99,8 @@ chcp 65001
 
 - 当前 `https://backup.baichengedu.com` 真实云端 API 已部署可用。
 - 后续客户端与百度授权、账号选择、token 回写、上传、同步等联调必须使用真实云端 API 链路，不得以模拟云端 API 作为联调验收依据。
-- 自动化单元测试可以覆盖纯本地输入校验、UI 状态和无网络逻辑，但凡验证客户端与云端接口契约、授权链路、账号状态或同步结果，必须走真实云端 API。
+- 自动化单元测试可以覆盖纯本地输入校验、路径构造、分片计算、UI 状态和无网络逻辑；但凡验证客户端与云端接口契约、授权链路、账号状态、百度上传/删除 API 行为或同步结果，必须走真实云端 API 或真实百度网盘 API，不得使用 mock API 作为验收依据。
+- 百度上传链路测试必须生成临时测试文件真实上传，覆盖小文件、跨分片文件、冲突等关键场景；测试完成后使用百度官方文件管理删除接口清理本批远端测试文件。测试数据库脏数据上线前可整体删除，不作为本阶段阻塞。
 - 真实联调产生的 Device Token、百度授权 token、用户密码、wrapping key、本地数据库和日志敏感内容不得提交到仓库。
 
 ## 进度记录
@@ -251,6 +285,16 @@ chcp 65001
 解决方案：后续 uv 命令继续设置 `UV_LINK_MODE=copy`，并显式设置 `UV_CACHE_DIR` 到仓库内 `.cache/uv`；若 uv 仍需读取用户目录下的受管 Python 信息，则按权限流程申请提升后运行，不改用 `pip install`。
 
 后续约束：客户端依赖同步和测试命令优先使用 `UV_LINK_MODE=copy`、`UV_CACHE_DIR=<repo>/.cache/uv`；`.cache/`、`.venv/` 和 pytest/egg 缓存不得提交。
+
+### 2026-06-05：uv venv Python 启动器在沙箱内无法创建进程
+
+问题：在 `client/` 下已设置 `UV_LINK_MODE=copy` 和仓库内 `UV_CACHE_DIR` 后，`uv run pytest`、`uv run python --version` 和 `uv run python -m pytest` 均失败，提示无法使用 `client\.venv\Scripts\python.exe` 创建进程，错误尾部显示乱码问号。
+
+原因：`uv sync` 可在沙箱内完成，但当前沙箱对 `.venv\Scripts\python.exe` 子进程启动仍有限制；同一 `uv run` 命令提升权限后可正常启动并运行测试。
+
+解决方案：本轮按权限流程提升后执行 `uv run python -m pytest` 和 `uv run python -m compileall src tests`，均通过；继续使用 uv 管理依赖，不改用 `pip install`。
+
+后续约束：若 `uv sync` 成功但 `uv run` 在沙箱内出现 “Unable to create process using ...\.venv\Scripts\python.exe”，不得误判为测试失败；应使用相同环境变量提升运行同一 `uv run ...` 命令完成验收，并在输出中确认测试断言结果。
 
 ### 2026-06-05：当前 Windows Go 工具链阻塞本地 Go 测试
 
