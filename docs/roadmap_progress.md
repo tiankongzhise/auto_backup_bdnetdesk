@@ -4,24 +4,21 @@
 
 ## 当前阶段
 
-GitHub 公开仓库发布准备已完成。
+GitHub 公开仓库发布已完成。
 
 ## 当前工作项
 
-- 将本地项目发布到 GitHub 公开仓库。
-- 使用 SSH 作为 GitHub remote 连接方式。
-- 为仓库补充 GNU Lesser General Public License v2.1 授权文本。
-- 根据项目当前功能完善 README 授权说明、GitHub 仓库简介和 topics。
-- 发布前检查工作区状态、未跟踪文件和敏感信息风险。
+- 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
+- 在客户端实现 refresh token 刷新流程：获取云端刷新租约、本地解密 refresh token、调用百度 token 接口并回写新密文。
+- 使用真实百度开放平台 App Key 在服务器上手动验证设备码端点、授权码回调、用户信息端点和 scope 配置。
 
 ## 本次验收标准
 
-- GitHub 上存在公开仓库 `tiankongzhise/auto_backup_bdnetdesk`。
-- 本地 `origin` remote 使用 `git@github.com:tiankongzhise/auto_backup_bdnetdesk.git`。
-- GitHub 默认分支和本地推送分支为 `main`。
-- 仓库包含 LGPL-2.1 标准 `LICENSE` 文件，README 说明授权方式。
-- GitHub 仓库简介和 topics 能反映 Windows、百度网盘、加密备份、SQLite、Go、PostgreSQL 等项目特征。
-- 推送前后工作区保持干净，未提交 `.env`、真实 token、数据库、缓存、日志或密钥文件。
+- Python 客户端提供百度账号选择、新增授权、设备码二维码展示、授权轮询和授权完成状态展示。
+- 客户端能按服务端 `encryption_method` 在本地解密密文 token，不把明文 token 写入 `.env` 或持久化明文文件。
+- refresh token 更新流程使用云端刷新租约和 `expected_token_version`，避免并发覆盖。
+- 使用真实百度开放平台配置完成一次端到端授权验证。
+- 新增客户端侧授权流程测试或可重复执行的手动验收说明。
 
 ## 开发排期
 
@@ -157,15 +154,19 @@ GitHub 公开仓库发布准备已完成。
 - 新增标准 LGPL-2.1 `LICENSE` 文件。
 - 更新 README，补充公开发布状态、许可证入口和 LGPL-2.1 授权说明。
 - 发现提交后 Git 自动维护传入不兼容 `--detach` 参数，已在仓库本地设置 `maintenance.auto=false`，并将问题沉淀到 `AGENTS.MD`。
-- 计划创建 GitHub 公开仓库 `tiankongzhise/auto_backup_bdnetdesk`，使用 SSH remote 推送 `main` 分支。
-- 计划配置仓库简介为 Windows 桌面端百度网盘加密备份工具，并设置与项目技术栈和功能匹配的 topics。
+- 已创建 GitHub 公开仓库 `tiankongzhise/auto_backup_bdnetdesk`。
+- 已将本地 `origin` 设置为 SSH 地址 `git@github.com:tiankongzhise/auto_backup_bdnetdesk.git`。
+- 已推送本地 `main` 分支到 `origin/main`，GitHub 默认分支确认为 `main`。
+- 已配置仓库简介：Windows 桌面端百度网盘加密备份工具，使用本地 SQLite、Go 云端 API 和 PostgreSQL 实现多设备同步、加密归档与最终一致校对。
+- 已配置 topics：`backup`、`baidu-netdisk`、`encrypted-backup`、`golang`、`postgresql`、`pyside6`、`sqlite`、`windows`。
+- 已核验 GitHub 识别许可证为 `GNU Lesser General Public License v2.1`，仓库可见性为 `PUBLIC`。
 
 提交摘要：本次提交补充公开发布所需的 LGPL-2.1 授权文件、README 许可证说明和发布进度记录，为后续通过 SSH 推送到 GitHub 公开仓库做准备。
 
 提交摘要：本次提交记录 Git for Windows 提交后自动维护的 `--detach` 参数兼容性问题，并通过仓库本地 `maintenance.auto=false` 约束后续提交流程，避免将维护报错误判为提交失败。
 
+提交摘要：本次提交记录 GitHub 公开仓库已创建、SSH remote 已配置、`main` 已推送、仓库简介与 topics 已配置，并把当前工作项切换到客户端百度授权与上传流程。
+
 后续待办：
 
-- 创建并推送 GitHub 公开仓库。
-- 在 GitHub 配置仓库简介和 topics。
 - 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
