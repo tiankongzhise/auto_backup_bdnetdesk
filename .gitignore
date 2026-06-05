@@ -11,8 +11,11 @@ dist/
 *.log
 logs/
 .cache/
+.venv/
+.pytest_cache/
 __pycache__/
 *.pyc
+*.egg-info/
 
 *.7z
 *.zip

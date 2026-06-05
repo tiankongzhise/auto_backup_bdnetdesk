@@ -52,6 +52,16 @@ chcp 65001
 - 每次开发开始前必须更新 `docs/roadmap_progress.md` 的当前工作项、计划范围和验收标准。
 - 每个小功能完成后，必须先更新 `docs/roadmap_progress.md` 的完成记录、提交摘要和后续待办，再将代码、文档和进度文件一起纳入同一个 commit。
 
+## Python 客户端依赖管理约束
+
+- Python 客户端代码、测试、依赖声明和客户端专用文档必须集中放在 `client/` 目录。
+- Python 客户端虚拟环境和依赖必须使用 uv 管理。
+- 新增依赖使用 `uv add`，移除依赖使用 `uv remove`，同步环境使用 `uv sync`。
+- 同步依赖时直接在 `client/` 下执行 `uv sync`，不需要先执行 `uv venv`。
+- 不得使用 `pip install` 直接安装或变更 Python 客户端依赖。
+- `uv.lock` 作为客户端依赖锁文件需要随依赖变更提交。
+- `.venv/`、构建缓存和下载缓存不得提交。
+
 ## 进度记录
 
 本项目的开发排期和进度必须记录在 `docs/roadmap_progress.md`。
@@ -192,3 +202,13 @@ chcp 65001
 解决方案：Go 服务新增 `--env-file /path/to/.env` 和 `CLOUD_API_ENV_FILE` 显式环境文件加载能力，未显式指定时自动尝试工作目录、二进制目录下的 `cloud-api.env`/`.env`，Linux 下额外尝试 `/etc/auto-backup-bdnetdesk/cloud-api.env`；`.env` 只填充缺失变量，不覆盖已注入的非空进程环境变量。启动和 PostgreSQL 连接失败日志新增脱敏配置摘要。
 
 后续约束：宝塔部署优先在启动命令中显式添加 `--env-file /实际路径/.env`，不要只依赖面板环境变量注入；排查数据库连接问题时优先查看 `env_files_loaded`、`postgres_config_source`、`postgres_user`、`postgres_database` 和 `postgres_defaulted_fields`，不得在日志中输出完整 DSN、数据库密码、百度 App Secret 或 token。
+
+### 2026-06-05：uv 在当前工作区硬链接依赖失败后回退复制
+
+问题：在 `client/` 下执行 `uv add` 安装 Python 客户端依赖时，uv 提示 hardlink 失败并回退到 full copy。
+
+原因：uv 缓存目录和当前工作区可能位于不同文件系统或当前环境不支持硬链接，导致依赖文件无法硬链接到 `.venv`。
+
+解决方案：后续执行 uv 命令时设置 `UV_LINK_MODE=copy`，显式使用复制模式，避免重复出现 hardlink fallback 警告。
+
+后续约束：Python 客户端依赖仍必须使用 uv 管理；在 `client/` 下执行 `uv add`、`uv remove`、`uv sync` 或 `uv run` 时优先设置 `UV_LINK_MODE=copy`，不得改用 `pip install` 绕过 uv。

@@ -4,35 +4,35 @@
 
 ## 当前阶段
 
-Go 云端服务宝塔部署配置读取修复已完成，后续继续 Python 客户端百度授权与上传流程开发。
+Python 客户端百度授权核心库已完成，后续进入 PySide6 百度授权 UI 与真实服务器联调。
 
 ## 当前工作项
 
-- 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
-- 在客户端实现 refresh token 刷新流程：获取云端刷新租约、本地解密 refresh token、调用百度 token 接口并回写新密文。
-- 使用真实百度开放平台 App Key 在服务器上手动验证设备码端点、授权码回调、用户信息端点和 scope 配置。
+- 基于 `client/src/auto_backup_client/baidu` 核心库实现 PySide6 百度设置页。
+- 提供账号列表、选择已有账号、新建设备码授权、二维码展示、轮询状态和授权完成反馈。
+- 使用真实服务器验证设备码授权链路；如果需要修改并重新部署 Go 服务，到对应步骤暂停等待人工部署完成。
 
 ## 本次验收标准
 
-- Python 客户端提供百度账号选择、新增授权、设备码二维码展示、授权轮询和授权完成状态展示。
-- 客户端能按服务端 `encryption_method` 在本地解密密文 token，不把明文 token 写入 `.env` 或持久化明文文件。
-- refresh token 更新流程使用云端刷新租约和 `expected_token_version`，避免并发覆盖。
-- 使用真实百度开放平台配置完成一次端到端授权验证。
-- 新增客户端侧授权流程测试或可重复执行的手动验收说明。
+- Python 客户端百度设置页所有源码、测试和客户端专用说明集中位于 `client/` 目录。
+- UI 能展示云端返回的百度账号列表和当前设备选择状态。
+- UI 能创建设备码授权 session，展示百度官方授权地址、用户码和二维码，并轮询授权状态。
+- 授权完成后 UI 能调用客户端核心库完成本地 wrapping key 加密提交，并展示账号已选中状态。
+- 真实服务器联调不提交 Device Token、百度 App Secret、access token、refresh token、用户密码或本地数据库。
 
 ## 开发排期
 
 | 阶段 | 工作内容 | 状态 |
 | --- | --- | --- |
 | 0 | 仓库初始化、项目记忆、产品文档、进度文件 | 已完成 |
-| 1 | Python 项目骨架、配置加载、日志脱敏、基础目录结构 | 未开始 |
+| 1 | Python 项目骨架、配置加载、日志脱敏、基础目录结构 | 已完成 |
 | 2 | SQLite schema、版本字段、客户端 `sync_outbox`、迁移机制 | 未开始 |
 | 3 | Go Cloud Sync API、PostgreSQL schema、revision 幂等写入、设备认证 | 已完成 |
 | 4 | PySide6 基础 UI、任务页、设置页 | 未开始 |
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
 | 6 | 去重索引、本地/云端内容对象、来源引用 | 未开始 |
 | 7 | 7-Zip 加密压缩、manifest、标准/严格验证 | 未开始 |
-| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：云端授权管理已完成 |
+| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：云端授权管理与客户端授权核心库已完成 |
 | 9 | 断点续传、上传恢复、失败重试 | 未开始 |
 | 10 | 缓存额度、动态清理等级、缓存 artifact 管理 | 未开始 |
 | 11 | 来源与远端映射、数据库/百度校对 UI | 未开始 |
@@ -194,3 +194,28 @@ Go 云端服务宝塔部署配置读取修复已完成，后续继续 Python 客
 - 宝塔部署时优先使用 `cloud-api --env-file /实际路径/.env`，并将 `APP_ENV` 设置为 `production`、`CLOUD_API_ADDR` 设置为 `127.0.0.1:9321` 或实际反代端口。
 - 使用服务器真实 PostgreSQL 配置重新启动服务，并通过日志确认 `env_files_loaded` 非空、`postgres_config_source` 和 `postgres_user/postgres_database` 与预期一致。
 - 继续 Python 客户端百度授权 UI、密文 token 本地解密和百度上传流程开发。
+
+### Python 客户端百度授权核心库
+
+- 按用户约束将 Python 客户端源码、测试、依赖声明、锁文件和客户端专用说明集中放入 `client/` 目录，未在仓库根目录散布客户端代码。
+- 新增 `client/pyproject.toml` 和 `client/uv.lock`，使用 uv 管理客户端依赖；新增 `.venv/`、`.pytest_cache/` 和 `*.egg-info/` 忽略规则。
+- 在 `AGENTS.MD` 中新增 Python 客户端 uv 依赖管理约束：新增依赖用 `uv add`，移除依赖用 `uv remove`，同步使用 `uv sync`，不得用 `pip install` 变更依赖。
+- 将当前环境 uv hardlink 失败回退复制的问题沉淀到 `AGENTS.MD`，后续 uv 命令优先设置 `UV_LINK_MODE=copy`。
+- 新增客户端配置读取与敏感字段脱敏工具，覆盖 Device Token、access token、refresh token、App Secret、wrapping key、密文 token envelope 等字段。
+- 新增 Go 云端百度授权 API 客户端，封装账号列表、账号选择、授权 session 创建/轮询/完成、密文 token 读取/回写和刷新租约接口。
+- 新增百度密文 token 本地处理能力，支持 password 模式 Argon2id 派生 wrapping key、AES-256-GCM envelope 解密和刷新后重新加密；RSA envelope 解密入口已预留。
+- 新增 refresh token 核心流程：先获取云端刷新租约，再本地解密 refresh token，调用百度 token 端点，最后携带 `expected_token_version` 回写新密文 token。
+- 新增客户端手动验收文档 `client/docs/baidu_auth_manual_validation.md`，明确真实 Device Token、百度 App Secret、access token、refresh token 和用户密码只允许运行时输入或放入 Windows DPAPI/凭据管理器，不得写入仓库文件。
+- 新增 8 个客户端单元测试，覆盖 API 契约、结构化错误、password token envelope 往返、Argon2id 派生、envelope 方法校验、refresh 租约与版本回写、配置读取和敏感字段脱敏。
+- 已验证在 `client/` 下执行 `UV_LINK_MODE=copy uv sync` 成功。
+- 已验证在 `client/` 下执行 `UV_LINK_MODE=copy uv run pytest` 通过。
+- 已验证 `git diff --check` 通过。
+
+提交摘要：Python 客户端已具备百度授权核心库、uv 依赖管理、密文 token 本地解密/重加密和 refresh token 租约回写流程，后续 PySide6 UI 可直接复用该核心库完成账号选择、新增授权、二维码展示和授权状态轮询。
+
+后续待办：
+
+- 基于客户端核心库实现 PySide6 百度设置页，集中放在 `client/` 目录。
+- 使用真实服务器验证设备码授权、授权完成和账号选择链路；如需修改 Go 服务，暂停等待人工重新部署后再继续。
+- 评估 refresh token 刷新是否应迁移到 Go 服务端受控执行；若需要服务端改造，单独提交并等待人工部署。
+- 后续继续实现百度预上传、分片上传和创建文件流程。
