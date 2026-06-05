@@ -1,0 +1,125 @@
+# 项目记忆与协作规则
+
+本文件是本项目的 AI 通用记忆文件。任何 AI 助手、自动化代理或开发者在修改本项目之前，都必须先阅读本文件。
+
+## 开发前必读
+
+每次开始开发前必须阅读：
+
+- `AGENTS.MD`
+- `docs/roadmap_progress.md`
+- 当前相关产品文档或技术文档
+
+阅读后再开始修改代码、文档或配置。
+
+## 沙箱问题沉淀
+
+本项目在沙箱或本地工具运行过程中，如果遇到编码、路径、权限、命令行为、依赖、测试、构建、打包等问题，必须在解决后把问题和约束方案补充到本文件。
+
+记录格式：
+
+```text
+日期：
+问题：
+原因：
+解决方案：
+后续约束：
+```
+
+这样做的目的是避免后续重复踩同一个问题。
+
+## PowerShell UTF-8 约束
+
+本项目在 PowerShell 中执行命令时必须使用 UTF-8，避免中文读取、写入或命令输出出现乱码。
+
+每次 PowerShell 会话开始时执行：
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
+chcp 65001
+```
+
+项目文本文件统一使用 UTF-8 编码。
+
+## 提交规则
+
+- 每完成一个小功能必须进行一次 Git commit。
+- commit message 必须使用中文。
+- commit message 必须详述本次开发的技术细节和项目变化。
+- 不允许把多个无关功能合并到一个模糊提交中。
+- 每次开发开始时和 commit 后都必须更新 `docs/roadmap_progress.md`。
+
+## 进度记录
+
+本项目的开发排期和进度必须记录在 `docs/roadmap_progress.md`。
+
+每次开发开始时必须更新：
+
+- 当前工作项
+- 计划修改范围
+- 验收标准
+
+每次 commit 后必须更新：
+
+- 完成记录
+- 提交摘要
+- 后续待办
+
+## 敏感信息规则
+
+不得提交以下内容：
+
+- `.env`
+- 真实数据库连接串
+- 百度 access token
+- 百度 refresh token
+- 用户备份密码
+- 本地 SQLite 数据库
+- 明文 manifest
+- 本地缓存文件
+- 日志中的敏感信息
+- 密钥文件
+
+`.env.example` 只能包含占位示例，不得包含真实密钥。
+
+百度 access token、refresh token、用户备份密码不应明文保存到 `.env`。客户端运行时应使用 Windows DPAPI 或 Windows 凭据管理器保存敏感凭据。
+
+## 架构约束
+
+- 本地 SQLite 是任务执行主库。
+- 只要本地数据库落盘成功，任务即可继续执行。
+- 云端 PostgreSQL 通过 outbox 异步同步，保证最终一致。
+- 客户端不得直连云端数据库，必须通过云端 API 访问。
+- 本地数据库与云端数据库需要双写并带版本控制。
+- 本地/云端版本冲突不得自动覆盖，必须进入校对流程。
+
+## 百度网盘远端目录约束
+
+百度远端目录必须按日期、设备、任务组织：
+
+```text
+/apps/{appname}/backups/{yyyy}/{MM}/{dd}/{device_id}/{job_id}/
+```
+
+不得使用 `archive_sha256` 前缀作为远端目录分桶。
+
+压缩包文件名可以包含 `archive_sha256`，用于唯一性和校验：
+
+```text
+{archive_seq}-{archive_sha256}.7z
+{archive_seq}-{archive_sha256}.meta.json
+```
+
+## 产品安全约束
+
+- 内容指纹不得混入文件名、路径、时间、设备等附属信息。
+- 最终去重只能使用完整 SHA256 和文件大小。
+- 明文 manifest 只允许短暂存在于缓存临时目录，压缩包验证通过后必须删除。
+- 原始数据清理只能由用户手动触发，默认移入 Windows 回收站。
+- 恢复覆盖默认关闭，默认保留两者。
+
+## 已沉淀问题
+
+暂无。
