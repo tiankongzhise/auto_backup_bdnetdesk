@@ -37,7 +37,7 @@ func main() {
 	store := cloudapi.NewPostgresStore(pool)
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           cloudapi.NewServer(store, logger),
+		Handler:           cloudapi.NewServer(store, logger, cloudapi.WithBaiduOAuthConfig(cfg.BaiduOAuth)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

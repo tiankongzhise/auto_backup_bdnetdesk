@@ -310,6 +310,564 @@ func (s *PostgresStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
+func (s *PostgresStore) CreateBaiduAuthSession(ctx context.Context, session BaiduAuthSession) error {
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO baidu_auth_sessions (
+    session_id,
+    flow,
+    status,
+    requested_by_device_id,
+    state,
+    scope,
+    encryption_method,
+    rsa_public_key_pem,
+    private_key_hint,
+    device_code,
+    user_code,
+    verification_url,
+    qrcode_url,
+    auth_url,
+    expires_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+)
+`, session.SessionID,
+		session.Flow,
+		session.Status,
+		session.RequestedByDeviceID,
+		session.State,
+		session.Scope,
+		session.EncryptionMethod,
+		session.RSAPublicKeyPEM,
+		session.PrivateKeyHint,
+		session.DeviceCode,
+		session.UserCode,
+		session.VerificationURL,
+		session.QRCodeURL,
+		session.AuthURL,
+		session.ExpiresAt,
+	)
+	return err
+}
+
+func (s *PostgresStore) GetBaiduAuthSession(ctx context.Context, sessionID string) (BaiduAuthSession, bool, error) {
+	session, ok, err := queryBaiduAuthSession(ctx, s.pool, `WHERE session_id = $1`, sessionID)
+	return session, ok, err
+}
+
+func (s *PostgresStore) GetBaiduAuthSessionByState(ctx context.Context, state string) (BaiduAuthSession, bool, error) {
+	session, ok, err := queryBaiduAuthSession(ctx, s.pool, `WHERE state = $1`, state)
+	return session, ok, err
+}
+
+func (s *PostgresStore) MarkBaiduAuthSessionCallback(ctx context.Context, state string, code string, errorCode string, errorDescription string) (BaiduAuthSession, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+UPDATE baidu_auth_sessions
+SET
+    authorization_code = $2,
+    error_code = $3,
+    error_description = $4,
+    status = CASE
+        WHEN $3 <> '' THEN 'failed'
+        WHEN $2 <> '' THEN 'authorized'
+        ELSE status
+    END,
+    updated_at = now()
+WHERE state = $1
+RETURNING
+    session_id,
+    flow,
+    status,
+    requested_by_device_id,
+    state,
+    scope,
+    encryption_method,
+    rsa_public_key_pem,
+    private_key_hint,
+    device_code,
+    user_code,
+    verification_url,
+    qrcode_url,
+    auth_url,
+    authorization_code,
+    error_code,
+    error_description,
+    expires_at,
+    completed_at,
+    account_id
+`, state, code, errorCode, errorDescription)
+	return scanBaiduAuthSession(row)
+}
+
+func (s *PostgresStore) CompleteBaiduAuthSession(ctx context.Context, session BaiduAuthSession, account BaiduAccount, deviceID string) (BaiduAuthSession, BaiduAccount, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return BaiduAuthSession{}, BaiduAccount{}, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, account.BaiduUID); err != nil {
+		return BaiduAuthSession{}, BaiduAccount{}, err
+	}
+
+	var existingID string
+	var existingVersion int64
+	err = tx.QueryRow(ctx, `
+SELECT account_id, token_version
+FROM baidu_accounts
+WHERE baidu_uid = $1
+FOR UPDATE
+`, account.BaiduUID).Scan(&existingID, &existingVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_, err = tx.Exec(ctx, `
+INSERT INTO baidu_accounts (
+    account_id,
+    baidu_uid,
+    baidu_uk,
+    display_name,
+    scope,
+    token_expires_at,
+    encryption_method,
+    encrypted_token_json,
+    private_key_hint,
+    token_version,
+    last_verified_at,
+    last_verify_status
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12
+)
+`, account.AccountID,
+			account.BaiduUID,
+			account.BaiduUK,
+			account.DisplayName,
+			account.Scope,
+			account.TokenExpiresAt,
+			account.EncryptionMethod,
+			string(account.EncryptedToken),
+			account.PrivateKeyHint,
+			account.TokenVersion,
+			account.LastVerifiedAt,
+			account.LastVerifyStatus,
+		)
+		if err != nil {
+			return BaiduAuthSession{}, BaiduAccount{}, err
+		}
+	} else if err != nil {
+		return BaiduAuthSession{}, BaiduAccount{}, err
+	} else {
+		account.AccountID = existingID
+		account.TokenVersion = existingVersion + 1
+		_, err = tx.Exec(ctx, `
+UPDATE baidu_accounts
+SET
+    baidu_uk = $2,
+    display_name = $3,
+    scope = $4,
+    token_expires_at = $5,
+    encryption_method = $6,
+    encrypted_token_json = $7::jsonb,
+    private_key_hint = $8,
+    token_version = token_version + 1,
+    last_verified_at = $9,
+    last_verify_status = $10,
+    updated_at = now()
+WHERE account_id = $1
+`, account.AccountID,
+			account.BaiduUK,
+			account.DisplayName,
+			account.Scope,
+			account.TokenExpiresAt,
+			account.EncryptionMethod,
+			string(account.EncryptedToken),
+			account.PrivateKeyHint,
+			account.LastVerifiedAt,
+			account.LastVerifyStatus,
+		)
+		if err != nil {
+			return BaiduAuthSession{}, BaiduAccount{}, err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+INSERT INTO baidu_account_device_bindings (account_id, device_id, selected_at)
+VALUES ($1, $2, now())
+ON CONFLICT (account_id, device_id) DO UPDATE SET selected_at = now()
+`, account.AccountID, deviceID); err != nil {
+		return BaiduAuthSession{}, BaiduAccount{}, err
+	}
+
+	var completedAt time.Time
+	err = tx.QueryRow(ctx, `
+UPDATE baidu_auth_sessions
+SET
+    status = 'completed',
+    completed_at = now(),
+    account_id = $2,
+    device_code = '',
+    authorization_code = '',
+    updated_at = now()
+WHERE session_id = $1
+RETURNING completed_at
+`, session.SessionID, account.AccountID).Scan(&completedAt)
+	if err != nil {
+		return BaiduAuthSession{}, BaiduAccount{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return BaiduAuthSession{}, BaiduAccount{}, err
+	}
+
+	session.Status = BaiduAuthStatusCompleted
+	session.CompletedAt = &completedAt
+	session.AccountID = account.AccountID
+	account.Selected = true
+	return session, account, nil
+}
+
+func (s *PostgresStore) ListBaiduAccounts(ctx context.Context, deviceID string) ([]BaiduAccount, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+    account_id,
+    baidu_uid,
+    baidu_uk,
+    display_name,
+    scope,
+    token_expires_at,
+    encryption_method,
+    encrypted_token_json,
+    private_key_hint,
+    token_version,
+    last_verified_at,
+    last_verify_status,
+    EXISTS (
+        SELECT 1
+        FROM baidu_account_device_bindings b
+        WHERE b.account_id = baidu_accounts.account_id
+          AND b.device_id = $1
+    ) AS selected
+FROM baidu_accounts
+ORDER BY selected DESC, updated_at DESC
+`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	accounts := []BaiduAccount{}
+	for rows.Next() {
+		account, err := scanBaiduAccountFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, rows.Err()
+}
+
+func (s *PostgresStore) SelectBaiduAccount(ctx context.Context, accountID string, deviceID string) (BaiduAccount, bool, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return BaiduAccount{}, false, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	account, ok, err := queryBaiduAccountTx(ctx, tx, accountID, deviceID)
+	if err != nil || !ok {
+		return BaiduAccount{}, ok, err
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO baidu_account_device_bindings (account_id, device_id, selected_at)
+VALUES ($1, $2, now())
+ON CONFLICT (account_id, device_id) DO UPDATE SET selected_at = now()
+`, accountID, deviceID); err != nil {
+		return BaiduAccount{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return BaiduAccount{}, false, err
+	}
+	account.Selected = true
+	return account, true, nil
+}
+
+func (s *PostgresStore) GetBaiduAccount(ctx context.Context, accountID string, deviceID string) (BaiduAccount, bool, error) {
+	account, ok, err := queryBaiduAccount(ctx, s.pool, accountID, deviceID)
+	return account, ok, err
+}
+
+func (s *PostgresStore) UpdateBaiduAccountToken(ctx context.Context, accountID string, deviceID string, expectedVersion int64, update BaiduAccount) (BaiduAccount, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+UPDATE baidu_accounts
+SET
+    token_expires_at = $3,
+    encryption_method = $4,
+    encrypted_token_json = $5::jsonb,
+    private_key_hint = $6,
+    token_version = token_version + 1,
+    last_verified_at = $7,
+    last_verify_status = $8,
+    updated_at = now()
+WHERE account_id = $1
+  AND token_version = $2
+RETURNING
+    account_id,
+    baidu_uid,
+    baidu_uk,
+    display_name,
+    scope,
+    token_expires_at,
+    encryption_method,
+    encrypted_token_json,
+    private_key_hint,
+    token_version,
+    last_verified_at,
+    last_verify_status,
+    EXISTS (
+        SELECT 1
+        FROM baidu_account_device_bindings b
+        WHERE b.account_id = baidu_accounts.account_id
+          AND b.device_id = $9
+    ) AS selected
+`, accountID,
+		expectedVersion,
+		update.TokenExpiresAt,
+		update.EncryptionMethod,
+		string(update.EncryptedToken),
+		update.PrivateKeyHint,
+		update.LastVerifiedAt,
+		update.LastVerifyStatus,
+		deviceID,
+	)
+	account, ok, err := scanBaiduAccount(row)
+	if err != nil || ok {
+		return account, ok, err
+	}
+	current, currentOK, currentErr := queryBaiduAccount(ctx, s.pool, accountID, deviceID)
+	if currentErr != nil || !currentOK {
+		return BaiduAccount{}, false, currentErr
+	}
+	return current, false, nil
+}
+
+func (s *PostgresStore) AcquireBaiduRefreshLease(ctx context.Context, accountID string, deviceID string, leaseID string, durationSeconds int64) (BaiduRefreshLease, bool, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return BaiduRefreshLease{}, false, err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "baidu_lease:"+accountID); err != nil {
+		return BaiduRefreshLease{}, false, err
+	}
+	if _, ok, err := queryBaiduAccountTx(ctx, tx, accountID, deviceID); err != nil || !ok {
+		return BaiduRefreshLease{}, false, err
+	}
+
+	var existing BaiduRefreshLease
+	err = tx.QueryRow(ctx, `
+SELECT account_id, lease_id, holder_device_id, expires_at
+FROM baidu_token_refresh_leases
+WHERE account_id = $1
+FOR UPDATE
+`, accountID).Scan(&existing.AccountID, &existing.LeaseID, &existing.HolderDeviceID, &existing.ExpiresAt)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return BaiduRefreshLease{}, false, err
+	}
+	now := time.Now().UTC()
+	if err == nil && now.Before(existing.ExpiresAt) && existing.HolderDeviceID != deviceID {
+		if err := tx.Commit(ctx); err != nil {
+			return BaiduRefreshLease{}, false, err
+		}
+		return existing, false, nil
+	}
+
+	var lease BaiduRefreshLease
+	err = tx.QueryRow(ctx, `
+INSERT INTO baidu_token_refresh_leases (
+    account_id,
+    lease_id,
+    holder_device_id,
+    expires_at
+) VALUES (
+    $1, $2, $3, now() + make_interval(secs => $4)
+)
+ON CONFLICT (account_id) DO UPDATE SET
+    lease_id = EXCLUDED.lease_id,
+    holder_device_id = EXCLUDED.holder_device_id,
+    expires_at = EXCLUDED.expires_at,
+    updated_at = now()
+RETURNING account_id, lease_id, holder_device_id, expires_at
+`, accountID, leaseID, deviceID, durationSeconds).Scan(&lease.AccountID, &lease.LeaseID, &lease.HolderDeviceID, &lease.ExpiresAt)
+	if err != nil {
+		return BaiduRefreshLease{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return BaiduRefreshLease{}, false, err
+	}
+	return lease, true, nil
+}
+
+type queryRower interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func queryBaiduAuthSession(ctx context.Context, queryer queryRower, whereClause string, args ...any) (BaiduAuthSession, bool, error) {
+	row := queryer.QueryRow(ctx, `
+SELECT
+    session_id,
+    flow,
+    status,
+    requested_by_device_id,
+    state,
+    scope,
+    encryption_method,
+    rsa_public_key_pem,
+    private_key_hint,
+    device_code,
+    user_code,
+    verification_url,
+    qrcode_url,
+    auth_url,
+    authorization_code,
+    error_code,
+    error_description,
+    expires_at,
+    completed_at,
+    account_id
+FROM baidu_auth_sessions
+`+whereClause, args...)
+	return scanBaiduAuthSession(row)
+}
+
+func scanBaiduAuthSession(row scanner) (BaiduAuthSession, bool, error) {
+	var session BaiduAuthSession
+	var completedAt pgtype.Timestamptz
+	var accountID pgtype.Text
+	err := row.Scan(
+		&session.SessionID,
+		&session.Flow,
+		&session.Status,
+		&session.RequestedByDeviceID,
+		&session.State,
+		&session.Scope,
+		&session.EncryptionMethod,
+		&session.RSAPublicKeyPEM,
+		&session.PrivateKeyHint,
+		&session.DeviceCode,
+		&session.UserCode,
+		&session.VerificationURL,
+		&session.QRCodeURL,
+		&session.AuthURL,
+		&session.AuthorizationCode,
+		&session.ErrorCode,
+		&session.ErrorDescription,
+		&session.ExpiresAt,
+		&completedAt,
+		&accountID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BaiduAuthSession{}, false, nil
+	}
+	if err != nil {
+		return BaiduAuthSession{}, false, err
+	}
+	if completedAt.Valid {
+		value := completedAt.Time
+		session.CompletedAt = &value
+	}
+	if accountID.Valid {
+		session.AccountID = accountID.String
+	}
+	return session, true, nil
+}
+
+func queryBaiduAccount(ctx context.Context, queryer queryRower, accountID string, deviceID string) (BaiduAccount, bool, error) {
+	row := queryer.QueryRow(ctx, `
+SELECT
+    account_id,
+    baidu_uid,
+    baidu_uk,
+    display_name,
+    scope,
+    token_expires_at,
+    encryption_method,
+    encrypted_token_json,
+    private_key_hint,
+    token_version,
+    last_verified_at,
+    last_verify_status,
+    EXISTS (
+        SELECT 1
+        FROM baidu_account_device_bindings b
+        WHERE b.account_id = baidu_accounts.account_id
+          AND b.device_id = $2
+    ) AS selected
+FROM baidu_accounts
+WHERE account_id = $1
+`, accountID, deviceID)
+	return scanBaiduAccount(row)
+}
+
+func queryBaiduAccountTx(ctx context.Context, tx pgx.Tx, accountID string, deviceID string) (BaiduAccount, bool, error) {
+	return queryBaiduAccount(ctx, tx, accountID, deviceID)
+}
+
+func scanBaiduAccount(row scanner) (BaiduAccount, bool, error) {
+	account, err := scanBaiduAccountValue(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return BaiduAccount{}, false, nil
+	}
+	if err != nil {
+		return BaiduAccount{}, false, err
+	}
+	return account, true, nil
+}
+
+func scanBaiduAccountFromRows(row scanner) (BaiduAccount, error) {
+	return scanBaiduAccountValue(row)
+}
+
+func scanBaiduAccountValue(row scanner) (BaiduAccount, error) {
+	var account BaiduAccount
+	var encryptedToken []byte
+	var lastVerifiedAt pgtype.Timestamptz
+	err := row.Scan(
+		&account.AccountID,
+		&account.BaiduUID,
+		&account.BaiduUK,
+		&account.DisplayName,
+		&account.Scope,
+		&account.TokenExpiresAt,
+		&account.EncryptionMethod,
+		&encryptedToken,
+		&account.PrivateKeyHint,
+		&account.TokenVersion,
+		&lastVerifiedAt,
+		&account.LastVerifyStatus,
+		&account.Selected,
+	)
+	if err != nil {
+		return BaiduAccount{}, err
+	}
+	if len(encryptedToken) > 0 {
+		account.EncryptedToken = append(account.EncryptedToken[:0], encryptedToken...)
+	}
+	if lastVerifiedAt.Valid {
+		value := lastVerifiedAt.Time
+		account.LastVerifiedAt = &value
+	}
+	return account, nil
+}
+
 type existingRevision struct {
 	EntityID   string
 	RevisionID string

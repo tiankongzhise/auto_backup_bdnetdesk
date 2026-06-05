@@ -166,12 +166,27 @@ Base64 显示
 
 用户可设置：
 
-- 百度 OAuth 授权。
+- 选择已有百度网盘账号授权。
+- 新增百度网盘账号授权，支持设备码模式和授权码回调模式。
+- 设备码模式必须展示百度官方授权地址、用户码和二维码。
+- 授权码模式回调地址固定为 `https://backup.baichengedu.com/v1/baidu/oauth/callback`。
+- token 解密方式，默认 `password_argon2id_aes256gcm_v1`，可选 `rsa_oaep_sha256_aes256gcm_v1`。
 - 备份根目录，必须在 `/apps/{appname}` 下。
 - 分片大小。
 - 最大压缩包大小。
 - 同时上传 archive 数。
 - 单个 archive 内分片上传并发数。
+
+授权安全规则：
+
+- 客户端不再要求用户填写百度 access token 或 refresh token。
+- 百度账号密码只允许在百度官方 `openapi.baidu.com` 授权页输入，本项目 UI 不收集、不转发百度账号密码。
+- 云端完成授权换取 token 后立即加密，只保存 `encrypted_token_json`、`encryption_method`、`token_version` 和过期时间。
+- 服务端不提供解密 token 接口；客户端取回密文后在本地解密并直接调用百度网盘 API。
+- password 模式由客户端本地用密码派生 32 字节 wrapping key，服务端只在完成授权请求中短暂接收该 key 并立即加密 token，不保存 key。
+- RSA 模式由服务端使用客户端提供的 RSA 公钥加密内容密钥，响应和数据库保存 `private_key_hint`，客户端据此读取 RSA 私钥解密。
+- 服务器生成 RSA 密钥对只作为部署备选，输出到 Git 忽略路径；不得把私钥提交到仓库。
+- 多台电脑可以选择同一个百度账号。access token 按 OAuth Bearer Token 语义可被不同设备使用，但 refresh token 更新必须通过云端刷新租约和 `token_version` 乐观锁避免并发覆盖。
 
 默认参数：
 
@@ -443,6 +458,15 @@ POST /v1/sync/revisions
 GET /v1/contents/{content_id}
 GET /v1/archives/{archive_sha256}
 GET /v1/reconcile/entities/{entity_id}
+POST /v1/baidu/auth/sessions
+GET /v1/baidu/auth/sessions/{session_id}
+POST /v1/baidu/auth/sessions/{session_id}/complete
+GET /v1/baidu/oauth/callback
+GET /v1/baidu/accounts
+POST /v1/baidu/accounts/{account_id}/select
+GET /v1/baidu/accounts/{account_id}/token
+PUT /v1/baidu/accounts/{account_id}/token
+POST /v1/baidu/accounts/{account_id}/refresh-lease
 GET /v1/healthz
 GET /v1/readyz
 ```
@@ -453,6 +477,19 @@ GET /v1/readyz
 - 后续请求使用 `Authorization: Bearer <device_token>`。
 - 云端只保存 token 哈希，支持按设备吊销。
 - 客户端不得保存 PostgreSQL 连接串，不得直连云端数据库。
+- 除 `GET /v1/baidu/oauth/callback` 外，百度账号授权管理接口都必须要求 Device Token 认证。
+
+百度授权接口语义：
+
+- `POST /v1/baidu/auth/sessions`：创建设备码或授权码会话；设备码响应只返回用户码、二维码和授权地址，不返回 `device_code`。
+- `GET /v1/baidu/auth/sessions/{session_id}`：轮询授权会话状态。
+- `GET /v1/baidu/oauth/callback`：只记录百度回调的 `code/state/error`，不在公开回调中换取或返回 token。
+- `POST /v1/baidu/auth/sessions/{session_id}/complete`：由已认证客户端完成 OAuth token 交换、token 加密入库和账号绑定。
+- `GET /v1/baidu/accounts`：列出所有可选百度账号，并标明当前设备是否已选择。
+- `POST /v1/baidu/accounts/{account_id}/select`：当前设备选择已有百度账号。
+- `GET /v1/baidu/accounts/{account_id}/token`：返回密文 token envelope，必须包含 `encryption_method` 和 `token_version`。
+- `PUT /v1/baidu/accounts/{account_id}/token`：客户端刷新并重新加密 token 后回写，必须携带 `expected_token_version`。
+- `POST /v1/baidu/accounts/{account_id}/refresh-lease`：获取短租约，避免多设备同时刷新同一个百度账号 token。
 
 术语边界：
 
@@ -511,7 +548,9 @@ Go 云端服务运行约束：
 - 服务端代码必须集中在 `cloud-api/` 目录，不得散放到仓库根目录。
 - 服务入口固定为 `cloud-api/cmd/cloud-api`。
 - 默认监听 `CLOUD_API_ADDR=:8080`。
+- 对外服务域名固定为 `backup.baichengedu.com`，生产 `PUBLIC_BASE_URL=https://backup.baichengedu.com`。
 - PostgreSQL 连接优先使用 `POSTGRES_DSN`；未设置时使用 `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_SSLMODE` 组合。
+- 百度开放平台配置由服务端环境变量提供：`BAIDU_APP_KEY`、`BAIDU_APP_SECRET`、`BAIDU_SCOPE`、`BAIDU_REDIRECT_URI`、`BAIDU_AUTHORIZE_URL`、`BAIDU_DEVICE_CODE_URL`、`BAIDU_TOKEN_URL`、`BAIDU_USERINFO_URL`。
 - 二进制部署到服务器后，通过 systemd `EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env` 或同等环境注入方式决定连接哪台 PostgreSQL。
 - 环境文件内容参考 `cloud-api/.env.example`，真实 PostgreSQL DSN 和密码不得提交到仓库。
 - 云端 PostgreSQL 迁移位于 `cloud-api/migrations/postgres`。
@@ -526,6 +565,16 @@ systemd 示例：
 [Service]
 EnvironmentFile=/etc/auto-backup-bdnetdesk/cloud-api.env
 ExecStart=/opt/auto-backup-bdnetdesk/cloud-api
+```
+
+nginx 对外反代：
+
+```text
+server_name backup.baichengedu.com
+proxy_pass http://127.0.0.1:8080
+proxy_set_header Host $host
+proxy_set_header X-Forwarded-Proto $scheme
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for
 ```
 
 设备注册接口：
@@ -1043,13 +1092,13 @@ restore_failed
 1. 用户选择源文件/文件夹。
 2. 用户设置缓存目录和缓存额度。
 3. 用户设置密码或随机生成密码。
-4. 用户设置百度参数。
+4. 用户选择已有百度账号授权，或通过设备码/授权码新增云端密文授权。
 5. 用户设置去重策略。
 6. 本地 SQLite 创建 job，写入 sync_outbox。
 7. 本地落盘成功后任务开始。
 8. 后台异步同步云端。
 9. 检查缓存有效预算至少 40GiB。
-10. 检查百度授权和容量。
+10. 检查百度云端密文授权、客户端本地解密能力和容量。
 11. 扫描源路径，只读元数据。
 12. 计算快速指纹。
 13. 查询本地/云端候选重复。

@@ -31,6 +31,14 @@ func newDeviceToken() (string, error) {
 	return "bdn_" + base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
+func newOpaqueID(prefix string) (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return prefix + "_" + base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])

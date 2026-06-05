@@ -4,22 +4,24 @@
 
 ## 当前阶段
 
-Go 云端服务构建脚本适配已完成。
+Go 云端服务百度网盘账号授权管理已完成。
 
 ## 当前工作项
 
-- 完成根目录通用 `go_build.ps1` 对本项目 `cloud-api/` Go module 的适配。
-- 完成默认生成服务端部署用 `linux/amd64` Go 二进制文件。
-- 完成构建产物输出到项目级部署产物目录，避免在源码目录或仓库根目录散落二进制。
-- 完成构建脚本文档、忽略规则和本次工具问题沉淀。
+- 将本地 Git 主分支从 `master` 重命名为 `main`，与后续 GitHub 默认分支对齐。
+- 在 `cloud-api/` 新增百度网盘设备码授权与授权码回调接口。
+- 新增 PostgreSQL 授权账号、授权会话、设备绑定和 token 刷新租约迁移。
+- 将百度 access token 与 refresh token 只以密文保存到 PostgreSQL，客户端取回后本地解密使用。
+- 更新 `.env.example`、`cloud-api/.env.example`、README 和产品规格中的百度授权、回调域名、nginx 反代说明。
 
 ## 本次验收标准
 
-- 在仓库根目录执行 `.\go_build.ps1` 可成功构建 `cloud-api/cmd/cloud-api`。
-- 默认输出路径为 `dist/cloud-api/linux-amd64/cloud-api`，二进制名称与 systemd 示例保持一致。
-- 脚本支持显式指定 `-ModuleDir`、`-ServiceName`、`-OutputDir`、`-GoOS`、`-GoArch` 和 `-OutputName`。
-- Go 缓存和构建产物不纳入 Git 提交，不污染 `cloud-api/` 源码目录。
-- 在 `cloud-api/` 下执行 `go test ./...` 通过。
+- 当前本地分支名称为 `main`。
+- 服务端提供百度授权 session 创建、轮询、完成、回调、账号列表、账号选择、密文 token 读取/更新和刷新租约接口。
+- 密文 token 响应必须包含 `encryption_method`，客户端可以判断使用密码派生密钥还是 RSA 私钥解密。
+- 服务端测试覆盖设备码 session、授权码 callback、password/RSA 加密元数据、多设备选择同一账号、刷新租约互斥和敏感信息不回显。
+- `.env.example` 不再要求客户端填写百度 token 或百度 App Secret；服务端 env 示例包含 `backup.baichengedu.com` 回调配置。
+- 在 `cloud-api/` 下执行 `go test ./...` 通过，根目录 `.\go_build.ps1` 构建通过。
 
 ## 开发排期
 
@@ -33,7 +35,7 @@ Go 云端服务构建脚本适配已完成。
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
 | 6 | 去重索引、本地/云端内容对象、来源引用 | 未开始 |
 | 7 | 7-Zip 加密压缩、manifest、标准/严格验证 | 未开始 |
-| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 未开始 |
+| 8 | 百度 OAuth、预上传、分片上传、创建文件 | 部分完成：云端授权管理已完成 |
 | 9 | 断点续传、上传恢复、失败重试 | 未开始 |
 | 10 | 缓存额度、动态清理等级、缓存 artifact 管理 | 未开始 |
 | 11 | 来源与远端映射、数据库/百度校对 UI | 未开始 |
@@ -119,3 +121,30 @@ Go 云端服务构建脚本适配已完成。
 
 - 后续发布阶段可增加二进制 SHA256 校验文件、版本号注入和部署包打包流程。
 - 继续搭建 Python 客户端项目骨架、配置加载和日志脱敏。
+
+### Go 云端百度网盘授权管理
+
+- 已将本地 Git 主分支从 `master` 重命名为 `main`，当前仓库没有远端，后续添加 GitHub remote 后再推送 `main` 并在 GitHub 切换默认分支。
+- 新增 PostgreSQL 迁移 `cloud-api/migrations/postgres/002_baidu_auth.sql`，包含 `baidu_accounts`、`baidu_auth_sessions`、`baidu_account_device_bindings` 和 `baidu_token_refresh_leases`。
+- 新增百度网盘设备码授权和授权码回调 API，支持授权 session 创建、轮询、完成、回调记录、账号列表、账号选择、密文 token 读取/更新和刷新租约。
+- 服务端完成百度 OAuth token 交换后立即用 password wrapping key 或 RSA 公钥加密 token，仅保存密文 envelope、`encryption_method`、`token_version` 和过期时间。
+- 百度授权 callback 只记录 `code/state/error`，最终由已认证客户端调用 complete 接口完成 token 交换和加密入库。
+- 密文 token 响应固定包含 `encryption_method`，客户端可据此选择用户密码派生密钥或 RSA 私钥解密；服务端不提供解密 token 接口。
+- 多设备可选择同一个百度账号，并通过刷新租约和 `expected_token_version` 避免 refresh token 并发覆盖。
+- 新增 fake Baidu OAuth 单元测试，覆盖设备码 session、授权码 callback、password/RSA 加密元数据、多设备选择、刷新租约互斥、token version 冲突和敏感信息不回显。
+- 更新 `.env.example`，移除客户端百度 App Secret 和 token 填写项；更新 `cloud-api/.env.example`，新增 `backup.baichengedu.com`、百度开放平台和 OAuth 端点配置。
+- 更新 README 和产品规格，明确客户端不收集百度账号密码，账号密码只允许在百度官方 `openapi.baidu.com` 页面输入。
+- 新增 `docs/deployment_nginx_backup_baichengedu.md`，记录 `backup.baichengedu.com`、nginx 反代、百度回调和服务端环境配置。
+- 新增 `scripts/generate_baidu_rsa_keypair.ps1`，作为 RSA 备选模式的部署密钥生成脚本，输出目录 `deploy-only/` 已被 Git 忽略。
+- 已验证在 `cloud-api/` 下执行 `go test ./...` 通过。
+- 已验证在仓库根目录执行 `.\go_build.ps1` 成功生成 `dist/cloud-api/linux-amd64/cloud-api`。
+- 已验证 `git diff --check` 通过。
+
+提交摘要：Go 云端服务已具备百度网盘云端授权管理能力，百度 token 不再需要客户端手工填写，服务端只保存密文 token，多设备共享账号通过选择绑定、刷新租约和 token 版本锁保证一致性。
+
+后续待办：
+
+- 在 Python 客户端实现百度账号选择、新增授权 UI、设备码二维码展示、授权轮询和密文 token 本地解密。
+- 在客户端实现 refresh token 刷新流程：先获取云端刷新租约，本地解密 refresh token，调用百度 token 接口后用 `PUT /v1/baidu/accounts/{account_id}/token` 回写新密文。
+- 使用真实百度开放平台 App Key 在服务器上手动验证设备码端点、授权码回调、用户信息端点和 scope 配置。
+- 后续上传阶段继续实现百度预上传、分片上传和创建文件流程。

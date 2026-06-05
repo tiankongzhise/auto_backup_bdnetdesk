@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Addr        string
 	PostgresDSN string
+	BaiduOAuth  BaiduOAuthConfig
 }
 
 func LoadConfig() Config {
@@ -32,9 +33,36 @@ func LoadConfig() Config {
 		)
 	}
 
+	baidu := DefaultBaiduOAuthConfig()
+	baidu.PublicBaseURL = getenv("PUBLIC_BASE_URL", baidu.PublicBaseURL)
+	baidu.AppKey = os.Getenv("BAIDU_APP_KEY")
+	baidu.AppSecret = os.Getenv("BAIDU_APP_SECRET")
+	baidu.Scope = getenv("BAIDU_SCOPE", baidu.Scope)
+	baidu.RedirectURI = getenv("BAIDU_REDIRECT_URI", baidu.RedirectURI)
+	baidu.AuthorizeURL = getenv("BAIDU_AUTHORIZE_URL", baidu.AuthorizeURL)
+	baidu.DeviceCodeURL = getenv("BAIDU_DEVICE_CODE_URL", baidu.DeviceCodeURL)
+	baidu.TokenURL = getenv("BAIDU_TOKEN_URL", baidu.TokenURL)
+	baidu.UserInfoURL = getenv("BAIDU_USERINFO_URL", baidu.UserInfoURL)
+	baidu.DeviceVerificationURL = getenv("BAIDU_DEVICE_VERIFICATION_URL", baidu.DeviceVerificationURL)
+
 	return Config{
 		Addr:        addr,
 		PostgresDSN: dsn,
+		BaiduOAuth:  baidu,
+	}
+}
+
+func DefaultBaiduOAuthConfig() BaiduOAuthConfig {
+	publicBaseURL := "http://127.0.0.1:8080"
+	return BaiduOAuthConfig{
+		PublicBaseURL:         publicBaseURL,
+		Scope:                 "basic,netdisk",
+		RedirectURI:           publicBaseURL + "/v1/baidu/oauth/callback",
+		AuthorizeURL:          "https://openapi.baidu.com/oauth/2.0/authorize",
+		DeviceCodeURL:         "https://openapi.baidu.com/oauth/2.0/device/code",
+		TokenURL:              "https://openapi.baidu.com/oauth/2.0/token",
+		UserInfoURL:           "https://pan.baidu.com/rest/2.0/xpan/nas?method=uinfo",
+		DeviceVerificationURL: "https://openapi.baidu.com/device",
 	}
 }
 
