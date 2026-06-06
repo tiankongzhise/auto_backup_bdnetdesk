@@ -91,6 +91,18 @@ class BaiduResumableUploader:
             remote_archive_path = str(stored["remote_archive_path"])
             remote_meta_path = str(stored["remote_meta_path"])
             remote_job_index_path = str(stored["remote_job_index_path"])
+            completed = self._completed_from_store(
+                stored=stored,
+                remote_archive_path=remote_archive_path,
+                remote_meta_path=remote_meta_path,
+                remote_job_index_path=remote_job_index_path,
+                archive_sha256=archive_sha256,
+                job_created_at=job_created_at,
+                value=value,
+                plan=plan,
+            )
+            if completed is not None:
+                return completed
         else:
             remote_archive_path = build_archive_remote_path(
                 root_dir=value.root_dir,
@@ -288,6 +300,96 @@ class BaiduResumableUploader:
             created=created,
             meta_created=meta_created,
             job_index_created=job_index_created,
+            archive_meta=archive_meta,
+            job_index=job_index,
+        )
+
+    def _completed_from_store(
+        self,
+        *,
+        stored: dict[str, Any],
+        remote_archive_path: str,
+        remote_meta_path: str,
+        remote_job_index_path: str,
+        archive_sha256: str,
+        job_created_at: datetime,
+        value: ResumableArchiveInput,
+        plan: FileBlockPlan,
+    ) -> ResumableUploadResult | None:
+        if (
+            stored.get("upload_status") != "remote_created"
+            or stored.get("meta_status") != "uploaded"
+            or stored.get("job_index_status") != "uploaded"
+        ):
+            return None
+        archive_object = self._store.get_remote_object_by_path(remote_archive_path)
+        meta_object = self._store.get_remote_object_by_path(remote_meta_path)
+        job_index_object = self._store.get_remote_object_by_path(remote_job_index_path)
+        if archive_object is None or meta_object is None or job_index_object is None:
+            return None
+
+        archive_id = str(stored["archive_id"])
+        archive_meta = build_archive_meta_document(
+            ArchiveMetaInput(
+                archive_id=archive_id,
+                archive_seq=value.archive_seq,
+                archive_sha256=archive_sha256,
+                archive_md5=plan.content_md5,
+                archive_size=plan.size,
+                archive_type=value.archive_type,
+                job_id=value.job_id,
+                device_id=value.device_id,
+                manifest_id=value.manifest_id or f"manifest_{value.job_id}",
+                created_at=job_created_at,
+            )
+        )
+        job_index = build_job_index_document(
+            job_id=value.job_id,
+            device_id=value.device_id,
+            job_created_at=job_created_at,
+            root_dir=value.root_dir,
+            archives=(
+                JobIndexArchive(
+                    archive_id=archive_id,
+                    archive_seq=value.archive_seq,
+                    archive_sha256=archive_sha256,
+                    archive_size=plan.size,
+                    archive_type=value.archive_type,
+                    remote_archive_path=remote_archive_path,
+                    remote_meta_path=remote_meta_path,
+                    fs_id=int(archive_object["fs_id"] or 0),
+                    meta_sha256=str(meta_object["sha256"] or archive_meta.sha256),
+                ),
+            ),
+        )
+        return ResumableUploadResult(
+            upload_session_id=str(stored["upload_session_id"]),
+            archive_id=archive_id,
+            archive_sha256=archive_sha256,
+            remote_archive_path=remote_archive_path,
+            remote_meta_path=remote_meta_path,
+            remote_job_index_path=remote_job_index_path,
+            uploadid=str(stored.get("uploadid", "")),
+            reused_uploadid=False,
+            uploaded_partseqs=tuple(),
+            created=CreateFileResult(
+                fs_id=int(archive_object["fs_id"] or 0),
+                path=remote_archive_path,
+                md5=str(archive_object["md5"] or stored.get("remote_md5", "")),
+                server_filename=remote_archive_path.rsplit("/", 1)[-1],
+            ),
+            meta_created=CreateFileResult(
+                fs_id=int(meta_object["fs_id"] or 0),
+                path=remote_meta_path,
+                md5=str(meta_object["md5"] or ""),
+                server_filename=remote_meta_path.rsplit("/", 1)[-1],
+            ),
+            job_index_created=CreateFileResult(
+                fs_id=int(job_index_object["fs_id"] or 0),
+                path=remote_job_index_path,
+                md5=str(job_index_object["md5"] or ""),
+                server_filename=remote_job_index_path.rsplit("/", 1)[-1],
+            ),
             archive_meta=archive_meta,
             job_index=job_index,
         )

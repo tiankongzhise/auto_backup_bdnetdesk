@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 
-from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields, canonical_record_sha256
+from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields, canonical_record_sha256, new_revision_id
 
 
 def test_sqlite_migrations_are_idempotent_and_enable_upload_tables(tmp_path) -> None:
@@ -162,3 +163,18 @@ def test_canonical_record_hash_ignores_revision_and_local_only_fields() -> None:
 
     assert canonical_record_sha256(base) == canonical_record_sha256(changed_control_fields)
     assert canonical_record_sha256(base) != canonical_record_sha256(changed_business_field)
+
+
+def test_default_revision_id_is_uuid7() -> None:
+    payload = build_version_fields(
+        entity_payload={
+            "entity_id": "entity-1",
+            "job_id": "job-1",
+        },
+        updated_by_device_id="device-1",
+    )
+    parsed = uuid.UUID(str(payload["revision_id"]))
+
+    assert parsed.version == 7
+    assert parsed.variant == uuid.RFC_4122
+    assert uuid.UUID(new_revision_id()).version == 7

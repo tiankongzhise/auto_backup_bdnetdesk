@@ -79,6 +79,23 @@ class FailAfterPrecreateBaiduClient(FakeBaiduClient):
         raise BaiduNetdiskError("network interrupted", error_code="http_request_failed")
 
 
+class MustNotCallBaiduClient(FakeBaiduClient):
+    def precreate(self, **_kwargs):
+        raise AssertionError("completed upload must not call precreate again")
+
+    def locate_upload_server(self, **_kwargs):
+        raise AssertionError("completed upload must not call locateupload again")
+
+    def upload_part(self, **_kwargs):
+        raise AssertionError("completed upload must not upload parts again")
+
+    def create_file(self, **_kwargs):
+        raise AssertionError("completed upload must not create file again")
+
+    def upload_file_complete(self, **_kwargs):
+        raise AssertionError("completed upload must not upload metadata again")
+
+
 def test_metadata_documents_are_stable_and_exclude_sensitive_fields() -> None:
     created_at = datetime(2026, 6, 6, tzinfo=timezone.utc)
     archive_meta = build_archive_meta_document(
@@ -246,3 +263,34 @@ def test_resumable_upload_empty_block_list_uploads_no_parts(tmp_path) -> None:
 
     assert part["status"] == "confirmed"
     assert part["attempt_count"] == 0
+
+
+def test_resumable_upload_completed_session_returns_local_state_without_reupload(tmp_path) -> None:
+    archive = tmp_path / "archive.7z"
+    archive.write_bytes((b"a" * DEFAULT_PART_SIZE) + b"tail")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    first = BaiduResumableUploader(store=store, baidu=FakeBaiduClient(), updated_by_device_id="device-1").upload(
+        ResumableArchiveInput(
+            local_path=archive,
+            job_id="job-1",
+            device_id="device-1",
+            account_id="account-1",
+            job_created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        )
+    )
+
+    second = BaiduResumableUploader(store=store, baidu=MustNotCallBaiduClient(), updated_by_device_id="device-1").upload(
+        ResumableArchiveInput(
+            local_path=archive,
+            job_id="job-1",
+            device_id="device-1",
+            account_id="account-1",
+            job_created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        )
+    )
+
+    assert second.upload_session_id == first.upload_session_id
+    assert second.remote_archive_path == first.remote_archive_path
+    assert second.uploaded_partseqs == tuple()
+    assert second.created.fs_id == first.created.fs_id

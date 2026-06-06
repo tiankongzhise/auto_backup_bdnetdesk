@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -218,6 +219,14 @@ class SQLiteClientStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def get_remote_object_by_path(self, remote_path: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM remote_objects WHERE remote_path = ?",
+                (remote_path,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
 
 def revision_from_payload(
     *,
@@ -260,7 +269,7 @@ def build_version_fields(
     last_synced_revision_id: str | None = None,
 ) -> dict[str, Any]:
     actual_now = now or utc_now_iso()
-    actual_revision_id = revision_id or new_id("rev")
+    actual_revision_id = revision_id or new_revision_id()
     base = {
         **dict(entity_payload),
         "schema_version": schema_version,
@@ -295,6 +304,21 @@ def sync_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def new_revision_id() -> str:
+    timestamp_ms = int(time.time() * 1000)
+    if timestamp_ms < 0 or timestamp_ms >= 1 << 48:
+        raise RuntimeError("current time is outside UUIDv7 timestamp range")
+    random_value = int.from_bytes(uuid.uuid4().bytes, "big") & ((1 << 74) - 1)
+    uuid_int = (
+        (timestamp_ms << 80)
+        | (0x7 << 76)
+        | (((random_value >> 62) & 0xFFF) << 64)
+        | (0b10 << 62)
+        | (random_value & ((1 << 62) - 1))
+    )
+    return str(uuid.UUID(int=uuid_int))
 
 
 def utc_now_iso() -> str:

@@ -58,11 +58,11 @@ def test_compute_file_block_plan_uses_ordered_part_md5s(tmp_path) -> None:
     assert plan.slice_md5 == hashlib.md5(b"a" * (256 * 1024)).hexdigest()
 
 
-def test_empty_precreate_block_list_means_upload_first_part() -> None:
+def test_empty_precreate_block_list_means_no_missing_parts() -> None:
     result = PrecreateResult(path="/apps/app/file.7z", uploadid="upload-1", return_type=1, block_list=tuple())
 
-    assert result.partseqs_to_upload(total_parts=1) == (0,)
-    assert result.partseqs_to_upload(total_parts=3) == (0,)
+    assert result.partseqs_to_upload(total_parts=1) == tuple()
+    assert result.partseqs_to_upload(total_parts=3) == tuple()
 
 
 def test_precreate_block_list_is_sorted_for_resume() -> None:

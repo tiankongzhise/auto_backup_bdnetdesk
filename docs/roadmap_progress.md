@@ -42,6 +42,25 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 
 ## 完成记录
 
+### 上传账本产品契约审查修复
+
+- 按产品规格复查上一轮 SQLite 上传账本、断点续传和元数据实现，发现并修复 3 个契约偏差：默认 `revision_id` 不是 UUIDv7、百度 `precreate.block_list` 空列表被误解释为需要上传第 0 片、已完成 upload session 重跑会重新进入 precreate/create 链路。
+- `client/src/auto_backup_client/sqlite_store.py` 新增不依赖第三方包的 UUIDv7 生成器，默认 `build_version_fields(...)` 生成标准 UUIDv7 revision，继续允许测试或迁移场景显式传入既有 revision。
+- `client/src/auto_backup_client/baidu/upload.py` 调整 `PrecreateResult.partseqs_to_upload(...)`：严格以百度返回的 `block_list` 作为缺失分片列表；空列表表示没有缺失分片，不再重复上传第 0 片。
+- `client/src/auto_backup_client/baidu/resumable_upload.py` 新增完成态本地短路：当 `upload_sessions` 已是 `remote_created`，`.meta.json` 和 `job.index.json` 均已上传，且 `remote_objects` 中已有 archive、meta、job_index 三类对象时，重跑同一 archive 会直接返回本地完成状态，不再调用百度 `precreate`、分片上传、`create` 或元数据上传。
+- 新增测试覆盖默认 revision 为 UUIDv7、空 `block_list` 表示无缺失分片、完成态重跑不再触发百度 API 调用。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m pytest` 通过，39 个测试通过。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`，`go list runtime` 通过，`go test ./...` 通过。
+
+提交摘要：本次提交修复 review 发现的产品契约偏差，使客户端 revision 默认符合 UUIDv7 要求，断点续传严格按百度缺失分片列表执行，并避免已完成上传重跑时重复触发百度远端创建或冲突。
+
+后续待办：
+
+- 继续下一阶段 `sync_outbox` 后台同步 worker 开发。
+- 使用真实云端账号执行 `upload-resumable` 端到端联调，并清理本批远端临时测试文件。
+
 ### SQLite 上传账本、断点续传与元数据生成
 
 - 新增 `client/src/auto_backup_client/sqlite_store.py`，提供客户端 SQLite 迁移执行、WAL、foreign keys、显式事务、版本字段构造、规范化记录 SHA256 和业务表与 `sync_outbox` 同事务写入入口。

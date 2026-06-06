@@ -120,11 +120,8 @@ class PrecreateResult:
         )
 
     def partseqs_to_upload(self, total_parts: int) -> tuple[int, ...]:
-        if self.block_list:
-            return tuple(sorted(self.block_list))
-        if total_parts >= 1:
-            return (0,)
-        return tuple()
+        del total_parts
+        return tuple(sorted(self.block_list))
 
 
 @dataclass(frozen=True)
