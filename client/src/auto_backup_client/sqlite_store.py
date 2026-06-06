@@ -7,7 +7,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -15,6 +15,12 @@ from typing import Any, Iterator, Mapping, Sequence
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
 CLIENT_SCHEMA_VERSION = 1
 LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "uploadid", "error_message"})
+SYNC_ENTITY_TABLES = {
+    "upload_sessions": "upload_sessions",
+    "upload_parts": "upload_parts",
+    "remote_objects": "remote_objects",
+}
+RETRY_BACKOFF_SECONDS = (2, 5, 15, 60, 180)
 CANONICAL_CONTROL_FIELDS = frozenset(
     {
         "canonical_record_sha256",
@@ -42,6 +48,36 @@ class RevisionRecord:
     payload: dict[str, Any]
     updated_at: str
     deleted_at: str | None = None
+
+
+@dataclass(frozen=True)
+class OutboxEvent:
+    event_id: str
+    entity_type: str
+    entity_id: str
+    revision_id: str
+    operation: str
+    payload: dict[str, Any]
+    retry_count: int
+    created_at: str
+    updated_at: str
+
+    @property
+    def schema_version(self) -> int:
+        return int(self.payload["schema_version"])
+
+    @property
+    def data_version(self) -> int:
+        return int(self.payload["data_version"])
+
+    @property
+    def canonical_record_sha256(self) -> str:
+        return str(self.payload["canonical_record_sha256"])
+
+    @property
+    def deleted_at(self) -> str | None:
+        value = self.payload.get("deleted_at")
+        return str(value) if value else None
 
 
 class SQLiteClientStore:
@@ -134,6 +170,120 @@ class SQLiteClientStore:
                 record.updated_at,
             ),
         )
+
+    def list_outbox_events_for_sync(self, *, limit: int = 100, now: str | None = None) -> list[OutboxEvent]:
+        if limit < 1 or limit > 100:
+            raise ValueError("outbox sync limit must be between 1 and 100")
+        actual_now = now or utc_now_iso()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM sync_outbox
+                WHERE status = 'pending'
+                   OR (status = 'retryable' AND (next_retry_at IS NULL OR next_retry_at <= ?))
+                ORDER BY created_at, event_id
+                LIMIT ?
+                """,
+                (actual_now, limit),
+            ).fetchall()
+            return [_outbox_event_from_row(row) for row in rows]
+
+    def mark_outbox_syncing(self, event_ids: Sequence[str], *, now: str | None = None) -> None:
+        if not event_ids:
+            return
+        actual_now = now or utc_now_iso()
+        with self.transaction() as conn:
+            for event_id in event_ids:
+                conn.execute(
+                    """
+                    UPDATE sync_outbox
+                    SET status = 'syncing', updated_at = ?
+                    WHERE event_id = ? AND status IN ('pending', 'retryable')
+                    """,
+                    (actual_now, event_id),
+                )
+
+    def mark_outbox_success(self, event_id: str, *, entity_type: str, entity_id: str, revision_id: str, now: str | None = None) -> None:
+        actual_now = now or utc_now_iso()
+        with self.transaction() as conn:
+            _update_business_sync_status(conn, entity_type=entity_type, entity_id=entity_id, revision_id=revision_id, status="synced")
+            conn.execute(
+                """
+                UPDATE sync_outbox
+                SET status = 'synced',
+                    next_retry_at = NULL,
+                    last_error = NULL,
+                    updated_at = ?
+                WHERE event_id = ?
+                """,
+                (actual_now, event_id),
+            )
+
+    def mark_outbox_conflict(self, event_id: str, *, entity_type: str, entity_id: str, revision_id: str, reason: str, now: str | None = None) -> None:
+        actual_now = now or utc_now_iso()
+        with self.transaction() as conn:
+            _update_business_sync_status(conn, entity_type=entity_type, entity_id=entity_id, revision_id=revision_id, status="sync_conflict")
+            conn.execute(
+                """
+                UPDATE sync_outbox
+                SET status = 'sync_conflict',
+                    next_retry_at = NULL,
+                    last_error = ?,
+                    updated_at = ?
+                WHERE event_id = ?
+                """,
+                (reason, actual_now, event_id),
+            )
+
+    def mark_outbox_failed_terminal(self, event_id: str, *, reason: str, now: str | None = None) -> None:
+        actual_now = now or utc_now_iso()
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE sync_outbox
+                SET status = 'failed_terminal',
+                    next_retry_at = NULL,
+                    last_error = ?,
+                    updated_at = ?
+                WHERE event_id = ?
+                """,
+                (reason, actual_now, event_id),
+            )
+
+    def mark_outbox_retryable(self, event_ids: Sequence[str], *, reason: str, now: str | None = None) -> None:
+        if not event_ids:
+            return
+        actual_now = now or utc_now_iso()
+        with self.transaction() as conn:
+            for event_id in event_ids:
+                row = conn.execute(
+                    "SELECT entity_type, entity_id, revision_id, retry_count FROM sync_outbox WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if row is None:
+                    continue
+                retry_count = int(row["retry_count"]) + 1
+                next_retry_at = add_seconds_iso(actual_now, _backoff_seconds(retry_count))
+                _update_business_sync_status(
+                    conn,
+                    entity_type=str(row["entity_type"]),
+                    entity_id=str(row["entity_id"]),
+                    revision_id=str(row["revision_id"]),
+                    status="sync_failed_retryable",
+                )
+                conn.execute(
+                    """
+                    UPDATE sync_outbox
+                    SET status = 'retryable',
+                        retry_count = ?,
+                        next_retry_at = ?,
+                        last_error = ?,
+                        updated_at = ?
+                    WHERE event_id = ?
+                    """,
+                    (retry_count, next_retry_at, reason, actual_now, event_id),
+                )
 
     def next_data_version(self, conn: sqlite3.Connection, table: str, key_field: str, key_value: str) -> int:
         row = conn.execute(
@@ -325,6 +475,16 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def add_seconds_iso(iso_value: str, seconds: int) -> str:
+    normalized = iso_value.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    base = datetime.fromisoformat(normalized)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    return (base.astimezone(timezone.utc) + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+
+
 def _put_row(conn: sqlite3.Connection, table: str, row: Mapping[str, Any], *, key_field: str) -> None:
     columns = tuple(row.keys())
     placeholders = ", ".join("?" for _ in columns)
@@ -334,3 +494,47 @@ def _put_row(conn: sqlite3.Connection, table: str, row: Mapping[str, Any], *, ke
         f"ON CONFLICT({key_field}) DO UPDATE SET {assignments}"
     )
     conn.execute(sql, tuple(row[column] for column in columns))
+
+
+def _outbox_event_from_row(row: sqlite3.Row) -> OutboxEvent:
+    payload = json.loads(str(row["payload_json"]))
+    if not isinstance(payload, dict):
+        raise ValueError("outbox payload_json must be a JSON object")
+    return OutboxEvent(
+        event_id=str(row["event_id"]),
+        entity_type=str(row["entity_type"]),
+        entity_id=str(row["entity_id"]),
+        revision_id=str(row["revision_id"]),
+        operation=str(row["operation"]),
+        payload=dict(payload),
+        retry_count=int(row["retry_count"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def _update_business_sync_status(
+    conn: sqlite3.Connection,
+    *,
+    entity_type: str,
+    entity_id: str,
+    revision_id: str,
+    status: str,
+) -> None:
+    table = SYNC_ENTITY_TABLES.get(entity_type)
+    if table is None:
+        return
+    conn.execute(
+        f"""
+        UPDATE {table}
+        SET sync_status = ?,
+            last_synced_revision_id = CASE WHEN ? = 'synced' THEN ? ELSE last_synced_revision_id END
+        WHERE entity_id = ? AND revision_id = ?
+        """,
+        (status, status, revision_id, entity_id, revision_id),
+    )
+
+
+def _backoff_seconds(retry_count: int) -> int:
+    index = max(0, min(retry_count - 1, len(RETRY_BACKOFF_SECONDS) - 1))
+    return RETRY_BACKOFF_SECONDS[index]

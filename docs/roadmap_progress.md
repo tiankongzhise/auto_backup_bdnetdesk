@@ -4,19 +4,19 @@
 
 ## 当前阶段
 
-PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成和可恢复上传编排均已完成本地验证；下一步进入上传账本同步 worker、真实 `upload-resumable` 联调和百度远端 `list/listall` 校对设计。
+PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、可恢复上传编排和 `sync_outbox` 后台同步 worker 均已完成本地验证；下一步进入真实同步联调、真实 `upload-resumable` 联调和百度远端 `list/listall` 校对设计。
 
 ## 当前工作项
 
-- 下一轮实现 `sync_outbox` 后台同步 worker，将本地 `upload_sessions`、`upload_parts` 和 `remote_objects` revision 通过 Go 云端 Cloud Sync API 异步推送到 PostgreSQL。
+- 使用真实云端 API 对 `sync_outbox` worker 做一次受控联调，确认本地 pending/retryable 事件能通过 `POST /v1/sync/revisions` 入云端 revision 投影，输出只保留脱敏状态。
 - 使用真实云端账号和真实百度 API 对 `upload-resumable` 做一次临时 archive、`.meta.json`、`job.index.json` 端到端联调，验证后必须调用百度删除接口清理远端测试文件。
-- 设计百度远端 `list/listall` 校对和自动修复边界，明确只校对 `/apps/{appname}/backups/{yyyy}/{MM}/{dd}/{device_id}/{job_id}/` 下对象。
+- 获取百度官方 `list/listall` 文档，设计百度远端对象校对、缺失/不一致标记和人工修复入口。
 - 后续继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库、上传临时缓存或敏感日志。
 
 ## 本次验收标准
 
-- `sync_outbox` worker 需要支持 pending/retryable 批量发送、云端幂等成功回写、冲突标记和失败重试时间。
-- 真实 `upload-resumable` 联调输出不得包含 access token、refresh token、wrapping key、Device Token、本地敏感路径或本地 SQLite 路径。
+- 真实同步联调输出不得包含 Device Token、本地路径、payload 明文、百度 token、用户密码或 wrapping key；若需要修改 Go 服务端或部署新二进制，必须暂停等待服务器更新完成。
+- 真实 `upload-resumable` 联调输出不得包含 access token、refresh token、wrapping key、Device Token、本地敏感路径或本地 SQLite 路径，远端临时文件必须清理。
 - 远端校对实现前必须重新获取百度官方 `list/listall` 文档或记录无法获取官方文档的实现依据。
 - `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run python -m pytest` 和 `uv run python -m compileall src tests` 需要继续通过。
 - `cloud-api/` 下先执行 `go version`、`go list runtime` 自检，再执行 `go test ./...`。
@@ -27,7 +27,7 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 | --- | --- | --- |
 | 0 | 仓库初始化、项目记忆、产品文档、进度文件 | 已完成 |
 | 1 | Python 项目骨架、配置加载、日志脱敏、基础目录结构 | 已完成 |
-| 2 | SQLite schema、版本字段、客户端 `sync_outbox`、迁移机制 | 部分完成：已补齐上传账本和 outbox 同事务写入；后台同步 worker 待开发 |
+| 2 | SQLite schema、版本字段、客户端 `sync_outbox`、迁移机制 | 部分完成：上传账本、outbox 同事务写入和后台同步 worker 已完成；真实同步联调待执行 |
 | 3 | Go Cloud Sync API、PostgreSQL schema、revision 幂等写入、设备认证 | 已完成 |
 | 4 | PySide6 基础 UI、任务页、设置页 | 部分完成：百度设置页已完成 |
 | 5 | 扫描、快速指纹、完整 MD5/SHA256、文件夹哈希 | 未开始 |
@@ -41,6 +41,28 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### sync_outbox 后台同步 worker
+
+- 新增 `client/src/auto_backup_client/baidu/models.py` 中的 `SyncRevisionEvent` 和 `SyncRevisionResult`，并在 `BaiduCloudClient.sync_revisions(...)` 封装 `POST /v1/sync/revisions`，限制单批最多 100 条，解析 `synced`、`duplicate`、`conflict`、`rejected` 等逐条结果。
+- 扩展 `client/src/auto_backup_client/sqlite_store.py`，支持读取 `pending` 和到期 `retryable` outbox，标记 `syncing`，成功时业务表与 outbox 同步进入 `synced`，冲突时进入 `sync_conflict`，终止失败进入 `failed_terminal`，可重试错误写入 `retryable`、`retry_count` 和 `next_retry_at`，并将业务表标记为 `sync_failed_retryable`。
+- 新增 `client/src/auto_backup_client/sync_worker.py`，按批次读取 outbox 并发送到云端 Cloud Sync API；`synced/duplicate` 视为成功，`conflict` 进入校对状态，`rejected` 不再重试，503 或网络异常按 2s/5s/15s/60s/180s 退避重试。
+- worker 不输出 Device Token、本地路径、payload 明文、百度 token、用户密码或 wrapping key；本轮只做本地自动化测试和真实云端 API 客户端契约准备，未执行真实同步联调。
+- 新增测试覆盖 Cloud Sync API 请求体与结果解析、503 `retryable_error`、`duplicate` 成功语义、pending/retryable 过滤、worker 单批 100 条上限、成功/冲突/可重试错误对业务表和 outbox 的状态回写。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m pytest` 通过，48 个测试通过。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`，`go list runtime` 通过，`go test ./...` 通过。
+- 本轮未修改 Go 服务端契约，不需要服务器重新部署；后续真实同步联调若发现必须修改 Go 服务端，需要暂停等待部署更新完成。
+
+提交摘要：本次提交补齐客户端 `sync_outbox` 后台同步 worker 和 Cloud Sync API 客户端封装，让本地上传账本 revision 可以批量推送到云端，并根据 `synced/duplicate/conflict/rejected` 或可重试错误回写本地 outbox 与业务表同步状态。
+
+后续待办：
+
+- 使用真实云端 API 执行一次受控 `sync_outbox` 同步联调，确认真实 PostgreSQL revision 投影与本地状态回写一致，输出必须脱敏。
+- 使用真实云端账号执行 `upload-resumable` 端到端联调，并清理本批远端临时测试文件。
+- 获取百度官方 `list/listall` 文档，设计远端对象校对、缺失/不一致标记和人工修复入口。
 
 ### 上传账本产品契约审查修复
 

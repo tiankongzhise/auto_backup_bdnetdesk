@@ -3,6 +3,7 @@ from __future__ import annotations
 import httpx
 
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError
+from auto_backup_client.baidu.models import SyncRevisionEvent
 
 
 def test_cloud_client_sends_device_bearer_token_and_parses_accounts() -> None:
@@ -87,3 +88,88 @@ def test_refresh_lease_conflict_is_parsed_as_business_result() -> None:
     assert lease.acquired is False
     assert lease.lease_id == "lease-first"
     assert lease.holder_device_id == "dev_first"
+
+
+def test_sync_revisions_posts_events_and_parses_results() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer fake-device-token"
+        assert request.method == "POST"
+        assert request.url.path == "/v1/sync/revisions"
+        payload = request.read()
+        assert b'"event_id":"evt-1"' in payload
+        assert b'"payload":{"remote_path":"/apps/app/file.7z"}' in payload
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "event_id": "evt-1",
+                        "entity_id": "entity-1",
+                        "revision_id": "01971234-5678-7abc-8def-0123456789ab",
+                        "status": "synced",
+                        "cloud_data_version": 1,
+                    }
+                ]
+            },
+        )
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    results = cloud.sync_revisions(
+        [
+            SyncRevisionEvent(
+                event_id="evt-1",
+                entity_type="remote_objects",
+                entity_id="entity-1",
+                revision_id="01971234-5678-7abc-8def-0123456789ab",
+                schema_version=1,
+                data_version=1,
+                operation="upsert",
+                canonical_record_sha256="a" * 64,
+                payload={"remote_path": "/apps/app/file.7z"},
+                updated_at="2026-06-06T00:00:00Z",
+            )
+        ]
+    )
+
+    assert results[0].status == "synced"
+    assert results[0].cloud_data_version == 1
+
+
+def test_sync_revisions_raises_retryable_cloud_error() -> None:
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(503, json={"error": "retryable_error", "message": "cloud sync store is unavailable"})
+            )
+        ),
+    )
+
+    try:
+        cloud.sync_revisions(
+            [
+                SyncRevisionEvent(
+                    event_id="evt-1",
+                    entity_type="remote_objects",
+                    entity_id="entity-1",
+                    revision_id="01971234-5678-7abc-8def-0123456789ab",
+                    schema_version=1,
+                    data_version=1,
+                    operation="upsert",
+                    canonical_record_sha256="a" * 64,
+                    payload={"remote_path": "/apps/app/file.7z"},
+                    updated_at="2026-06-06T00:00:00Z",
+                )
+            ]
+        )
+    except CloudAPIError as exc:
+        assert exc.status_code == 503
+        assert exc.error_code == "retryable_error"
+    else:
+        raise AssertionError("expected CloudAPIError")

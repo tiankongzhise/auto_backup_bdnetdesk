@@ -146,6 +146,61 @@ class BaiduRefreshLease:
         )
 
 
+@dataclass(frozen=True)
+class SyncRevisionEvent:
+    event_id: str
+    entity_type: str
+    entity_id: str
+    revision_id: str
+    schema_version: int
+    data_version: int
+    operation: str
+    canonical_record_sha256: str
+    payload: JSONDict
+    updated_at: str
+    deleted_at: str | None = None
+
+    def to_json(self) -> JSONDict:
+        data: JSONDict = {
+            "event_id": self.event_id,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "revision_id": self.revision_id,
+            "schema_version": self.schema_version,
+            "data_version": self.data_version,
+            "operation": self.operation,
+            "canonical_record_sha256": self.canonical_record_sha256,
+            "payload": dict(self.payload),
+            "updated_at": self.updated_at,
+        }
+        if self.deleted_at:
+            data["deleted_at"] = self.deleted_at
+        return data
+
+
+@dataclass(frozen=True)
+class SyncRevisionResult:
+    event_id: str
+    entity_id: str
+    revision_id: str
+    status: str
+    reason: str = ""
+    cloud_data_version: int = 0
+    cloud_revision_id: str = ""
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "SyncRevisionResult":
+        return cls(
+            event_id=str(data.get("event_id", "")),
+            entity_id=str(data.get("entity_id", "")),
+            revision_id=str(data.get("revision_id", "")),
+            status=str(data.get("status", "")),
+            reason=str(data.get("reason", "")),
+            cloud_data_version=int(data.get("cloud_data_version", 0) or 0),
+            cloud_revision_id=str(data.get("cloud_revision_id", "")),
+        )
+
+
 def parse_datetime(value: str) -> datetime:
     normalized = value.strip()
     if normalized.endswith("Z"):

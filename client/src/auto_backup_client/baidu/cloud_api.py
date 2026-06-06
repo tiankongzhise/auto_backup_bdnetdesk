@@ -13,6 +13,8 @@ from auto_backup_client.baidu.models import (
     BaiduRefreshLease,
     CompleteAuthResult,
     DeviceRegistration,
+    SyncRevisionEvent,
+    SyncRevisionResult,
     format_datetime,
 )
 
@@ -142,6 +144,21 @@ class BaiduCloudClient:
             json=payload,
         )
         return BaiduRefreshLease.from_json(data)
+
+    def sync_revisions(self, events: list[SyncRevisionEvent] | tuple[SyncRevisionEvent, ...]) -> list[SyncRevisionResult]:
+        if not events:
+            raise ValueError("events must not be empty")
+        if len(events) > 100:
+            raise ValueError("at most 100 sync revision events are accepted per request")
+        data = self._request(
+            "POST",
+            "/v1/sync/revisions",
+            json={"events": [event.to_json() for event in events]},
+        )
+        raw_results = data.get("results", [])
+        if not isinstance(raw_results, list):
+            raise CloudAPIError(200, "invalid_response", "results must be a list")
+        return [SyncRevisionResult.from_json(item) for item in raw_results]
 
     def _request(
         self,
