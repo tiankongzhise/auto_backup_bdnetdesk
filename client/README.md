@@ -71,6 +71,26 @@ uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_P
 
 `upload-resumable` 会按 `LOCAL_SQLITE_PATH` 初始化本地 SQLite，写入 `upload_sessions`、`upload_parts`、`remote_objects` 和 `sync_outbox`，并真实上传 archive、`.meta.json`、`job.index.json`。输出只包含账号 ID、token 版本、对象哈希、计数和 fs_id，不输出 access token、refresh token、wrapping key、Device Token 或本地敏感路径。
 
+## upload-resumable 一键联调 CLI
+
+阶段验收优先使用 `integration_cli run-resumable`，它会生成临时 archive，并在同一入口完成真实百度上传、本地 SQLite outbox 写入、真实 Cloud Sync 推送、云端 revision 摘要校验和百度 `filemanager/delete` 清理。默认会检查百度容量、校验云端 summary 并删除本批远端临时对象；排障时可用 `--keep-remote` 保留远端对象，再用 `cleanup-resumable` 按 `job_id` 或 `upload_session_id` 清理。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:TMP='..\.cache\tmp'
+$env:TEMP='..\.cache\tmp'
+$env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
+
+uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_AUTH_PASSWORD run-resumable
+uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_AUTH_PASSWORD cleanup-resumable --job-id <job_id>
+uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_AUTH_PASSWORD cleanup-resumable --upload-session-id <upload_session_id>
+```
+
+`integration_cli` 输出只包含 Device Token 来源、账号 ID、token version、`job_id`、`upload_session_id`、对象 hash、fs_id 和上传/同步/清理计数；不会输出 Device Token、本地路径、SQLite 路径、远端真实路径、payload、百度 token、用户密码、wrapping key 或密文 envelope。
+
 ## Cloud Sync outbox 联调 CLI
 
 `sync-outbox` 会读取 `LOCAL_SQLITE_PATH` 或 `--sqlite-path`，执行 SQLite 迁移，复用运行时 `CLOUD_API_DEVICE_TOKEN` 或本机 DPAPI Device Token 凭据，然后调用真实云端 `POST /v1/sync/revisions`。输出只包含 `selected`、`sent`、`synced`、`conflicts`、`rejected`、`retryable` 和可选云端摘要校验计数，不输出 Device Token、payload、本地路径、SQLite 路径、百度 token、用户密码或 wrapping key。
@@ -85,9 +105,9 @@ uv run python -m auto_backup_client.sync_cli sync-outbox --verify-cloud-summary
 
 固定真实联调顺序：
 
-1. 运行 `upload-resumable --check-quota`，真实上传临时 archive、`.meta.json`、`job.index.json` 并写入本地 outbox。
-2. 运行 `sync-outbox --verify-cloud-summary`，以 `GET /v1/reconcile/entities/{entity_id}` 校验 Cloud Sync revision 投影。
-3. 使用百度 `filemanager/delete` 清理本批远端测试文件；清理失败只记录脱敏状态和人工清理待办。
+1. 优先运行 `integration_cli run-resumable`，真实上传临时 archive、`.meta.json`、`job.index.json`，写入本地 outbox，推送 Cloud Sync revision，校验云端 summary 并清理本批远端对象。
+2. 若需要分步排障，先运行 `upload-resumable --check-quota`，再运行 `sync-outbox --verify-cloud-summary`，最后使用 `integration_cli cleanup-resumable` 或百度 `filemanager/delete` 清理本批远端测试文件。
+3. 清理失败只记录脱敏状态和人工清理待办。
 
 现阶段只验收云端 revision 投影，不要求当前客户端的 `remote_objects` 自动进入 Go 服务 `archive_objects` 索引；若后续要联动 `GET /v1/archives/{archive_sha256}`，需要先修改并重新部署 Go 服务。
 

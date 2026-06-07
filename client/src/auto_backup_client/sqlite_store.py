@@ -361,6 +361,44 @@ class SQLiteClientStore:
             ).fetchone()
             return dict(row) if row is not None else None
 
+    def list_remote_objects_for_cleanup(
+        self,
+        *,
+        job_id: str = "",
+        upload_session_id: str = "",
+    ) -> list[dict[str, Any]]:
+        cleaned_job_id = job_id.strip()
+        cleaned_session_id = upload_session_id.strip()
+        if bool(cleaned_job_id) == bool(cleaned_session_id):
+            raise ValueError("exactly one of job_id or upload_session_id is required")
+        with self.connect() as conn:
+            if cleaned_session_id:
+                session = conn.execute(
+                    "SELECT job_id FROM upload_sessions WHERE upload_session_id = ?",
+                    (cleaned_session_id,),
+                ).fetchone()
+                if session is None:
+                    return []
+                cleaned_job_id = str(session["job_id"])
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM remote_objects
+                WHERE job_id = ?
+                  AND object_type IN ('archive', 'archive_meta', 'job_index')
+                ORDER BY
+                    CASE object_type
+                        WHEN 'archive' THEN 1
+                        WHEN 'archive_meta' THEN 2
+                        WHEN 'job_index' THEN 3
+                        ELSE 9
+                    END,
+                    remote_object_id
+                """,
+                (cleaned_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def list_upload_parts(self, upload_session_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
