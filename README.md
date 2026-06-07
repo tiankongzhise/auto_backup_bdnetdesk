@@ -6,7 +6,9 @@ Windows 桌面端百度网盘加密备份工具。
 
 ## 当前状态
 
-项目已完成产品规格、初始化文档、Go 云端同步服务基础接口、部署构建脚本和百度网盘云端授权管理接口。仓库以公开项目形式发布，采用 GNU Lesser General Public License v2.1 授权。
+项目已完成产品规格、初始化文档、Go 云端同步服务、部署构建脚本、百度网盘云端授权管理、PySide6 百度设置页、本机 Device Token/KDF 凭据、真实百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`sync_outbox` 同步 worker、脱敏联调 CLI 和真实 `upload-resumable -> sync-outbox -> 百度删除清理` 验证。仓库以公开项目形式发布，采用 GNU Lesser General Public License v2.1 授权。
+
+当前仍未达到完整 v1.3 桌面端发布状态；备份任务主 UI、扫描与内容指纹、去重索引、7-Zip AES-256 加密归档、加密 manifest、缓存额度管理、数据库与百度校对 UI、原始数据清理、恢复流程、打包和最终验收仍在后续排期中。最新差异审计和开发排期以 `docs/roadmap_progress.md` 为准。
 
 ## 文档入口
 
