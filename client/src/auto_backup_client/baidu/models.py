@@ -201,6 +201,55 @@ class SyncRevisionResult:
         )
 
 
+@dataclass(frozen=True)
+class RevisionSummary:
+    event_id: str
+    revision_id: str
+    data_version: int
+    apply_status: str
+    canonical_record_sha256: str
+    created_at: datetime
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "RevisionSummary":
+        return cls(
+            event_id=str(data.get("event_id", "")),
+            revision_id=str(data.get("revision_id", "")),
+            data_version=int(data.get("data_version", 0) or 0),
+            apply_status=str(data.get("apply_status", "")),
+            canonical_record_sha256=str(data.get("canonical_record_sha256", "")),
+            created_at=parse_datetime(str(data["created_at"])),
+        )
+
+
+@dataclass(frozen=True)
+class EntitySummary:
+    entity_id: str
+    entity_type: str
+    data_version: int
+    revision_id: str
+    canonical_record_sha256: str
+    updated_by_device_id: str
+    deleted_at: datetime | None
+    recent_revisions: tuple[RevisionSummary, ...]
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "EntitySummary":
+        raw_revisions = data.get("recent_revisions", [])
+        revisions = tuple(RevisionSummary.from_json(item) for item in raw_revisions) if isinstance(raw_revisions, list) else tuple()
+        deleted_at = data.get("deleted_at")
+        return cls(
+            entity_id=str(data.get("entity_id", "")),
+            entity_type=str(data.get("entity_type", "")),
+            data_version=int(data.get("data_version", 0) or 0),
+            revision_id=str(data.get("revision_id", "")),
+            canonical_record_sha256=str(data.get("canonical_record_sha256", "")),
+            updated_by_device_id=str(data.get("updated_by_device_id", "")),
+            deleted_at=parse_datetime(str(deleted_at)) if deleted_at else None,
+            recent_revisions=revisions,
+        )
+
+
 def parse_datetime(value: str) -> datetime:
     normalized = value.strip()
     if normalized.endswith("Z"):

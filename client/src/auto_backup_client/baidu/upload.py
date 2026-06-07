@@ -184,6 +184,60 @@ class FileManagerResult:
         )
 
 
+@dataclass(frozen=True)
+class BaiduFileItem:
+    fs_id: int
+    path: str
+    server_filename: str
+    isdir: bool
+    size: int
+    md5: str = ""
+    category: int = 0
+    server_ctime: int = 0
+    server_mtime: int = 0
+    local_ctime: int = 0
+    local_mtime: int = 0
+    dir_empty: int | None = None
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "BaiduFileItem":
+        return cls(
+            fs_id=int(data.get("fs_id", 0) or 0),
+            path=str(data.get("path", "")),
+            server_filename=str(data.get("server_filename", "")),
+            isdir=int(data.get("isdir", 0) or 0) == 1,
+            size=int(data.get("size", 0) or 0),
+            md5=str(data.get("md5", "")),
+            category=int(data.get("category", 0) or 0),
+            server_ctime=int(data.get("server_ctime", 0) or 0),
+            server_mtime=int(data.get("server_mtime", 0) or 0),
+            local_ctime=int(data.get("local_ctime", 0) or 0),
+            local_mtime=int(data.get("local_mtime", 0) or 0),
+            dir_empty=int(data["dir_empty"]) if data.get("dir_empty") is not None else None,
+        )
+
+
+@dataclass(frozen=True)
+class BaiduFileListResult:
+    errno: int
+    items: tuple[BaiduFileItem, ...]
+    request_id: str = ""
+    has_more: bool = False
+    cursor: int = 0
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "BaiduFileListResult":
+        raw_items = data.get("list", [])
+        items = tuple(BaiduFileItem.from_json(item) for item in raw_items) if isinstance(raw_items, list) else tuple()
+        return cls(
+            errno=int(data.get("errno", 0) or 0),
+            items=items,
+            request_id=str(data.get("request_id", "")),
+            has_more=bool(int(data.get("has_more", 0) or 0)),
+            cursor=int(data.get("cursor", 0) or 0),
+        )
+
+
 class BaiduNetdiskClient:
     def __init__(
         self,
@@ -396,6 +450,71 @@ class BaiduNetdiskClient:
         )
         _ensure_baidu_success(data, error_field="errno")
         return FileManagerResult.from_json(data)
+
+    def list_dir(
+        self,
+        *,
+        remote_dir: str,
+        start: int = 0,
+        limit: int = 1000,
+        order: str = "name",
+        desc: bool = False,
+        web: bool = False,
+        folder: bool | None = None,
+        showempty: bool | None = None,
+    ) -> BaiduFileListResult:
+        params: dict[str, Any] = {
+            "method": "list",
+            "access_token": self._access_token,
+            "dir": normalize_baidu_path(remote_dir, require_backup_root=False),
+            "start": str(_validate_non_negative_int(start, "start")),
+            "limit": str(_validate_positive_int(limit, "limit")),
+            "order": _validate_list_order(order),
+            "desc": int(desc),
+            "web": int(web),
+        }
+        if folder is not None:
+            params["folder"] = int(folder)
+        if showempty is not None:
+            params["showempty"] = int(showempty)
+        data = self._request_json("GET", f"{self._pan_api_base_url}/rest/2.0/xpan/file", params=params)
+        _ensure_baidu_success(data, error_field="errno")
+        return BaiduFileListResult.from_json(data)
+
+    def list_all(
+        self,
+        *,
+        remote_path: str,
+        start: int = 0,
+        limit: int = 1000,
+        recursion: bool = True,
+        web: bool = False,
+    ) -> BaiduFileListResult:
+        params: dict[str, Any] = {
+            "method": "listall",
+            "access_token": self._access_token,
+            "path": normalize_baidu_path(remote_path, require_backup_root=False),
+            "start": str(_validate_non_negative_int(start, "start")),
+            "limit": str(_validate_positive_int(limit, "limit")),
+            "recursion": int(recursion),
+            "web": int(web),
+        }
+        data = self._request_json("GET", f"{self._pan_api_base_url}/rest/2.0/xpan/multimedia", params=params)
+        _ensure_baidu_success(data, error_field="errno")
+        return BaiduFileListResult.from_json(data)
+
+    def iter_list_all(self, *, remote_path: str, page_limit: int = 1000, recursion: bool = True) -> tuple[BaiduFileItem, ...]:
+        items: list[BaiduFileItem] = []
+        start = 0
+        while True:
+            page = self.list_all(remote_path=remote_path, start=start, limit=page_limit, recursion=recursion)
+            items.extend(page.items)
+            if not page.has_more:
+                break
+            start = page.cursor or (start + len(page.items))
+            if not page.items:
+                break
+        return tuple(items)
 
     def upload_file_complete(
         self,
@@ -641,6 +760,20 @@ def _validate_non_negative_int(value: int, field: str) -> int:
     if actual < 0:
         raise ValueError(f"{field} must be >= 0")
     return actual
+
+
+def _validate_positive_int(value: int, field: str) -> int:
+    actual = int(value)
+    if actual < 1:
+        raise ValueError(f"{field} must be >= 1")
+    return actual
+
+
+def _validate_list_order(value: str) -> str:
+    cleaned = str(value).strip().lower()
+    if cleaned not in {"name", "time", "size"}:
+        raise ValueError("baidu list order must be name, time, or size")
+    return cleaned
 
 
 def _validate_part_size(part_size: int) -> None:

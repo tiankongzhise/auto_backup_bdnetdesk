@@ -26,6 +26,7 @@ class SyncWorkerResult:
     conflicts: int
     rejected: int
     retryable: int
+    revision_results: tuple[SyncRevisionResult, ...] = tuple()
 
 
 class SyncOutboxWorker:
@@ -110,6 +111,7 @@ class SyncOutboxWorker:
             conflicts=conflicts,
             rejected=rejected,
             retryable=retryable,
+            revision_results=tuple(results),
         )
 
 

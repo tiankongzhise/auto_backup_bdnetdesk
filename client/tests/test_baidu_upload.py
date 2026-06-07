@@ -4,9 +4,12 @@ import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import httpx
+
 from auto_backup_client.baidu import upload_cli
 from auto_backup_client.baidu.upload import (
     DEFAULT_PART_SIZE,
+    BaiduNetdiskClient,
     BaiduNetdiskError,
     BaiduQuota,
     PrecreateResult,
@@ -15,6 +18,10 @@ from auto_backup_client.baidu.upload import (
     normalize_backup_root_dir,
 )
 from auto_backup_client.baidu.metadata import StableJsonDocument
+
+
+def _json_response(payload: dict[str, object]) -> httpx.Response:
+    return httpx.Response(200, json=payload)
 
 
 def test_build_archive_remote_path_uses_required_date_device_job_layout() -> None:
@@ -69,6 +76,153 @@ def test_precreate_block_list_is_sorted_for_resume() -> None:
     result = PrecreateResult(path="/apps/app/file.7z", uploadid="upload-1", return_type=1, block_list=(2, 0))
 
     assert result.partseqs_to_upload(total_parts=3) == (0, 2)
+
+
+def test_list_dir_builds_official_params_and_parses_items() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/2.0/xpan/file"
+        nonlocal seen
+        seen = dict(request.url.params)
+        return _json_response(
+            {
+                "errno": 0,
+                "request_id": "req-1",
+                "list": [
+                    {
+                        "fs_id": 101,
+                        "path": "/apps/app/backups/job/archive.7z",
+                        "server_filename": "archive.7z",
+                        "isdir": 0,
+                        "size": 42,
+                        "md5": "a" * 32,
+                        "category": 6,
+                        "server_ctime": 1710000000,
+                        "server_mtime": 1710000001,
+                        "local_ctime": 1710000002,
+                        "local_mtime": 1710000003,
+                    }
+                ],
+            }
+        )
+
+    client = BaiduNetdiskClient(
+        "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.list_dir(remote_dir="/apps/app/backups/job", start=2, limit=50, order="time", desc=True, folder=True, showempty=True)
+
+    assert seen == {
+        "method": "list",
+        "access_token": "access-token",
+        "dir": "/apps/app/backups/job",
+        "start": "2",
+        "limit": "50",
+        "order": "time",
+        "desc": "1",
+        "web": "0",
+        "folder": "1",
+        "showempty": "1",
+    }
+    assert result.errno == 0
+    assert result.request_id == "req-1"
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.fs_id == 101
+    assert item.path == "/apps/app/backups/job/archive.7z"
+    assert item.server_filename == "archive.7z"
+    assert item.isdir is False
+    assert item.size == 42
+    assert item.md5 == "a" * 32
+
+
+def test_list_all_builds_params_and_parses_empty_directory() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/2.0/xpan/multimedia"
+        nonlocal seen
+        seen = dict(request.url.params)
+        return _json_response({"errno": 0, "request_id": "req-empty", "list": [], "has_more": 0})
+
+    client = BaiduNetdiskClient(
+        "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.list_all(remote_path="/apps/app/backups", start=0, limit=100, recursion=False, web=True)
+
+    assert seen == {
+        "method": "listall",
+        "access_token": "access-token",
+        "path": "/apps/app/backups",
+        "start": "0",
+        "limit": "100",
+        "recursion": "0",
+        "web": "1",
+    }
+    assert result.request_id == "req-empty"
+    assert result.items == tuple()
+    assert result.has_more is False
+
+
+def test_iter_list_all_uses_has_more_for_pagination() -> None:
+    starts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/2.0/xpan/multimedia"
+        starts.append(str(request.url.params.get("start", "")))
+        if request.url.params.get("start") == "0":
+            return _json_response(
+                {
+                    "errno": 0,
+                    "has_more": 1,
+                    "cursor": 20,
+                    "list": [
+                        {"fs_id": 1, "path": "/apps/app/backups/a.7z", "server_filename": "a.7z", "isdir": 0, "size": 1},
+                        {"fs_id": 2, "path": "/apps/app/backups/b.7z", "server_filename": "b.7z", "isdir": 0, "size": 2},
+                    ],
+                }
+            )
+        return _json_response(
+            {
+                "errno": 0,
+                "has_more": 0,
+                "list": [
+                    {"fs_id": 3, "path": "/apps/app/backups/c.7z", "server_filename": "c.7z", "isdir": 0, "size": 3}
+                ],
+            }
+        )
+
+    client = BaiduNetdiskClient(
+        "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    items = client.iter_list_all(remote_path="/apps/app/backups", page_limit=2)
+
+    assert starts == ["0", "20"]
+    assert [item.fs_id for item in items] == [1, 2, 3]
+
+
+def test_list_all_raises_for_unreadable_remote_path() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _json_response({"errno": -9, "errmsg": "file does not exist"})
+
+    client = BaiduNetdiskClient(
+        "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    try:
+        client.list_all(remote_path="/apps/app/backups/missing")
+    except BaiduNetdiskError as exc:
+        assert exc.error_code == "-9"
+        assert "file does not exist" in str(exc)
+    else:
+        raise AssertionError("expected BaiduNetdiskError")
 
 
 def test_real_batch_does_not_require_user_info_probe(monkeypatch, tmp_path, capsys) -> None:

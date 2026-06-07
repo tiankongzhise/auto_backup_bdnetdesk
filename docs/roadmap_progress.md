@@ -4,22 +4,22 @@
 
 ## 当前阶段
 
-PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、可恢复上传编排和 `sync_outbox` 后台同步 worker 均已完成本地验证；下一步进入真实同步联调、真实 `upload-resumable` 联调和百度远端 `list/listall` 校对设计。
+PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF 参数持久化、真实云端账号选择、密文 token 解密、刷新租约互斥、真实百度容量读取、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、可恢复上传编排、`sync_outbox` worker、脱敏 `sync-outbox` CLI 和百度远端 `list/listall` 客户端列表能力均已完成本地验证；下一步执行真实 `upload-resumable -> sync-outbox -> 百度删除清理` 联调。
 
 ## 当前工作项
 
-- 使用真实云端 API 对 `sync_outbox` worker 做一次受控联调，确认本地 pending/retryable 事件能通过 `POST /v1/sync/revisions` 入云端 revision 投影，输出只保留脱敏状态。
-- 使用真实云端账号和真实百度 API 对 `upload-resumable` 做一次临时 archive、`.meta.json`、`job.index.json` 端到端联调，验证后必须调用百度删除接口清理远端测试文件。
-- 获取百度官方 `list/listall` 文档，设计百度远端对象校对、缺失/不一致标记和人工修复入口。
-- 后续继续禁止提交 Device Token、百度 token、用户密码、wrapping key、本地数据库、上传临时缓存或敏感日志。
+- 使用真实云端账号执行 `upload-resumable --check-quota`，上传临时 archive、`.meta.json`、`job.index.json` 并确认本地 SQLite 写入 `upload_sessions`、`upload_parts`、`remote_objects` 和 `sync_outbox`。
+- 运行 `python -m auto_backup_client.sync_cli sync-outbox --verify-cloud-summary`，确认真实云端 `cloud_entities/entity_revisions` revision 投影与本地 outbox 状态回写一致。
+- 使用百度 `filemanager/delete` 清理本批远端临时测试文件；清理失败只记录脱敏状态和人工清理待办。
+- 继续保持本阶段 Go 边界：只验收 Cloud Sync revision 投影，不要求 `remote_objects` 自动进入 Go `archive_objects` 索引；若真实联调证明必须修改 Go 服务，暂停等待重新编译部署。
 
 ## 本次验收标准
 
-- 真实同步联调输出不得包含 Device Token、本地路径、payload 明文、百度 token、用户密码或 wrapping key；若需要修改 Go 服务端或部署新二进制，必须暂停等待服务器更新完成。
-- 真实 `upload-resumable` 联调输出不得包含 access token、refresh token、wrapping key、Device Token、本地敏感路径或本地 SQLite 路径，远端临时文件必须清理。
-- 远端校对实现前必须重新获取百度官方 `list/listall` 文档或记录无法获取官方文档的实现依据。
-- `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 的 `uv sync`、`uv run python -m pytest` 和 `uv run python -m compileall src tests` 需要继续通过。
-- `cloud-api/` 下先执行 `go version`、`go list runtime` 自检，再执行 `go test ./...`。
+- 真实联调输出不得包含 Device Token、本地路径、SQLite 路径、payload 明文、百度 token、用户密码或 wrapping key。
+- `upload-resumable` 后本地 SQLite 必须出现对应业务表和 `sync_outbox` 记录；`sync-outbox --verify-cloud-summary` 后本地 outbox 和业务表应进入 `synced`，或进入合理的 `sync_conflict/retryable`。
+- 云端 `GET /v1/reconcile/entities/{entity_id}` 能查到本轮已同步实体的 revision 摘要；本阶段不以 `GET /v1/archives/{archive_sha256}` 为验收条件。
+- 百度远端临时测试文件必须通过 `filemanager/delete` 清理；若清理失败，记录脱敏失败状态和人工清理清单。
+- 若发现必须修改 Go 服务契约、迁移或部署二进制，必须暂停并明确提示需要重新编译部署 Go 服务。
 
 ## 开发排期
 
@@ -41,6 +41,32 @@ PySide6 扫码授权、本机 Device Token DPAPI 凭据、password 模式 KDF �
 | 13 | 打包、验收测试、使用文档 | 未开始 |
 
 ## 完成记录
+
+### 脱敏 sync-outbox CLI 与百度 list/listall 校对准备
+
+- 新增 `client/src/auto_backup_client/sync_cli.py`，提供 `python -m auto_backup_client.sync_cli sync-outbox`，读取 `LOCAL_SQLITE_PATH` 或 `--sqlite-path`，执行 SQLite 迁移，复用运行时 `CLOUD_API_DEVICE_TOKEN` 或本机 DPAPI Device Token 凭据，并调用现有 `SyncOutboxWorker` 推送 `POST /v1/sync/revisions`。
+- `sync-outbox` 输出仅包含 `Device Token 来源`、`selected`、`sent`、`synced`、`conflicts`、`rejected`、`retryable` 和可选 `cloud_summary_verified` 计数；失败输出收敛为脱敏错误类型，不打印本地路径、SQLite 路径、payload、Device Token、百度 token、用户密码或 wrapping key。
+- 扩展 `BaiduCloudClient.get_entity_summary(...)` 和 `EntitySummary/RevisionSummary` 模型，封装现有 Go `GET /v1/reconcile/entities/{entity_id}`；`--verify-cloud-summary` 只校验 `revision_id`、`data_version` 和 `canonical_record_sha256`，且同时兼容当前投影与最近 revision 摘要。
+- 扩展 `SyncWorkerResult`，在同步成功路径保留本轮 `revision_results`，供 CLI 做云端摘要校验，不改变 worker 原有同步状态回写语义。
+- 按官方文档新增百度远端列表能力：`BaiduNetdiskClient.list_dir(...)` 调用 `GET /rest/2.0/xpan/file?method=list`，`BaiduNetdiskClient.list_all(...)` 调用 `GET /rest/2.0/xpan/multimedia?method=listall`，`iter_list_all(...)` 在 `has_more=1` 时使用官方返回的 `cursor` 继续分页。
+- 更新 `docs/baidu_netdisk_openapi_reference.md`，记录 2026-06-07 官方 `list/listall` 页面获取方式、官方更新时间、接口路径、关键参数、响应字段、`cursor` 分页和 listall 每分钟 8-10 次官方频控；本项目后续校对 worker 仍按产品规格每分钟不超过 8 次执行。
+- 更新 `client/README.md`，固化真实联调顺序：`upload-resumable --check-quota -> sync-outbox --verify-cloud-summary -> 百度 filemanager/delete 清理`，并明确本阶段只验收 Cloud Sync revision 投影，不把 `remote_objects -> archive_objects` 索引联动作为验收条件。
+- 新增测试覆盖 `sync-outbox` CLI 成功计数、云端 summary 校验、503 retryable 回写、失败输出不泄露 SQLite 路径、`get_entity_summary` 解析、百度 `list/listall` 参数构造、空目录、`cursor` 分页和不可读错误。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR` 执行 `uv sync` 成功。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR`、仓库内临时目录执行 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-sync` 通过，56 个测试通过；此前默认用户 Temp 和 `C:\tmp` 均因当前权限限制导致 pytest 临时目录创建失败，改用仓库内临时目录后通过。
+- 已将 pytest 默认临时目录和 `C:\tmp` 权限限制的处理方式补充到 `AGENTS.MD`，后续客户端测试优先使用仓库内 `.cache` 临时目录。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已验证 `cloud-api/` 下 `go version` 返回 `go1.25.10 windows/amd64`；沙箱内 `go list runtime` 和 `go test ./...` 分别受标准库路径与 Go 构建缓存权限影响失败，提升权限后 `go list runtime` 返回 `runtime`，`go test ./...` 通过。
+- 本轮未修改 Go 服务端代码、迁移或路由，不需要重新编译部署 Go 服务；后续真实联调若证明必须修改 Go 服务，必须暂停等待部署更新完成。
+
+提交摘要：本次提交补齐客户端脱敏 `sync-outbox` CLI、云端 revision 摘要校验入口和百度 `list/listall` 远端列表能力，并把官方文档依据、真实联调顺序和现阶段 Go 服务边界写入文档，为下一步真实 `upload-resumable -> sync-outbox -> 百度删除清理` 联调做准备。
+
+后续待办：
+
+- 使用真实云端账号执行 `upload-resumable --check-quota`，上传临时 archive、`.meta.json`、`job.index.json` 并验证本地 SQLite outbox 写入。
+- 运行 `sync-outbox --verify-cloud-summary`，确认真实 PostgreSQL revision 投影和本地 outbox/业务表状态一致。
+- 用百度 `filemanager/delete` 清理本批远端临时测试文件，并记录脱敏结果。
 
 ### sync_outbox 后台同步 worker
 

@@ -10,6 +10,14 @@
 - 原始 HTML：仅用于本轮核对，不纳入仓库。原因是官方页面体积较大，并包含示例 access token 形态文本；仓库只保存脱敏摘要和实现所需字段。
 - 实现依据：本文件摘要、`docs/product_spec_v1.3.md`、近期 Git 提交历史中已验证的真实云端授权/token 解密能力。
 
+## 追加获取记录
+
+- 获取日期：2026-06-07
+- 获取目标：官方“获取文件列表”和“递归获取文件列表”页面。
+- 获取顺序：浏览工具未能直接打开官方页面；沙箱内 `curl.exe` 连接失败；按权限流程提升后使用 `curl.exe -L --max-time 20 --silent --show-error --fail -H "User-Agent: Mozilla/5.0"` 成功获取官方 HTML。
+- 临时文件：`C:\tmp\baidu-list.html` 和 `C:\tmp\baidu-listall.html`，仅用于本轮字段核对，不纳入仓库。
+- 实现依据：官方 HTML 中的接口路径、参数表、响应字段、分页说明和频控说明；仓库只记录脱敏摘要。
+
 ## 文档来源
 
 | 接口 | 官方 URL | 官方更新时间 | 本次获取结果 |
@@ -21,6 +29,8 @@
 | 分片上传 | `https://pan.baidu.com/union/doc/nksg0s9vi` | 2022-03-09 | 成功，HTML 约 126 KB |
 | 创建文件 | `https://pan.baidu.com/union/doc/rksg0sa17` | 2022-04-18 | 成功，HTML 约 126 KB |
 | 管理文件 | `https://pan.baidu.com/union/doc/mksg0s9l4` | 2022-05-23 | 成功，HTML 约 151 KB |
+| 获取文件列表 | `https://pan.baidu.com/union/doc/nksg0sat9` | 2022-05-29 | 成功，HTML 约 148 KB |
+| 递归获取文件列表 | `https://pan.baidu.com/union/doc/Zksg0sb73` | 2022-04-20 | 成功，HTML 约 154 KB |
 
 ## 通用约束
 
@@ -66,6 +76,61 @@
   - `used`：已使用容量，单位 B。
   - `free`：免费容量，单位 B。
   - `expire`：7 天内是否有容量到期。
+
+## 获取文件列表 list
+
+用途：对单个任务目录或 archive 目录做非递归校对，确认 archive、`.meta.json` 和 `job.index.json` 是否存在。
+
+- 方法：`GET`
+- 路径：`https://pan.baidu.com/rest/2.0/xpan/file`
+- URL 参数：
+  - `method=list`
+  - `access_token`
+  - `dir`：待列出的目录，绝对路径；中文路径需要 URL encode。
+  - `order`：排序字段，官方示例包含 `name`、`time`、`size`。
+  - `desc`：是否倒序，`0` 或 `1`。
+  - `start`：查询起点，默认 `0`。
+  - `limit`：查询数量，官方示例使用 `10`；客户端默认按校对页需要使用分页。
+  - `web`：`1` 时返回 `dir_empty` 和缩略图数据；本项目默认 `0`。
+  - `folder`：`1` 只返回目录，`0` 返回全部；本项目按需要传入。
+  - `showempty`：是否返回 `dir_empty`，`0` 或 `1`。
+- 响应要点：
+  - `errno=0` 表示成功。
+  - `list`：文件或目录数组。
+  - `request_id`：请求 ID。
+  - 单项常用字段包括 `fs_id`、`path`、`server_filename`、`isdir`、`size`、`md5`、`category`、`server_ctime`、`server_mtime`、`local_ctime`、`local_mtime`、`dir_empty`。
+- 本项目封装：
+  - `BaiduNetdiskClient.list_dir(...)` 构造 `method=list` 请求并解析为 `BaiduFileListResult`。
+  - 非递归 list 优先用于任务目录、archive 目录或小范围手工校对。
+
+## 递归获取文件列表 listall
+
+用途：对备份根目录或日期目录做递归校对，发现百度侧存在但数据库缺失的对象，或定位数据库记录对应远端对象是否仍可读。
+
+- 方法：`GET`
+- 路径：`https://pan.baidu.com/rest/2.0/xpan/multimedia`
+- URL 参数：
+  - `method=listall`
+  - `access_token`
+  - `path`：待递归列出的目录，绝对路径。
+  - `recursion`：是否递归，`1` 递归，`0` 非递归。
+  - `start`：查询起点，默认 `0`；当响应 `has_more=1` 时，下一次请求必须使用响应中的 `cursor`。
+  - `limit`：查询数量，官方建议设置 `start` 和 `limit` 时最大为 `1000`。
+  - `web`：是否返回 web 相关附加字段；本项目默认 `0`。
+- 响应要点：
+  - `errno=0` 表示成功。
+  - `has_more=1` 表示还有下一页。
+  - `cursor`：下一页查询起点。
+  - `list`：递归结果数组。
+  - `request_id`：请求 ID。
+  - 单项常用字段包括 `category`、`fs_id`、`isdir`、`local_ctime`、`local_mtime`、`server_ctime`、`server_mtime`、`md5`、`size`、`path`、`server_filename`。
+- 频控：
+  - 官方页面说明 listall 命中频控时，请求频率建议不超过每分钟 8-10 次。
+  - `docs/product_spec_v1.3.md` 对本项目递归列表接口约束为每分钟不超过 8 次，客户端后续校对 worker 必须按 8 次/分钟执行。
+- 本项目封装：
+  - `BaiduNetdiskClient.list_all(...)` 构造 `method=listall` 请求并解析分页字段。
+  - `BaiduNetdiskClient.iter_list_all(...)` 在 `has_more=1` 时使用 `cursor` 继续分页。
+  - 本轮只准备列表能力，不实现自动修复。
 
 ## 预上传 precreate
 
@@ -191,5 +256,6 @@
 
 - 已先落地小文件真实验证入口和核心库：`precreate -> locateupload -> superfile2 -> create`。
 - 后续已补齐本地 SQLite 上传账本、`uploadid` 恢复、百度返回缺失分片 `block_list` 续传、`.meta.json` 和 `job.index.json` 生成入口。
-- 当前仍不实现百度 `list/listall` 远端校对和自动修复；后续校对必须继续以真实百度网盘 API 行为为准。
+- 当前已补齐百度 `list/listall` 客户端列表能力和官方文档摘要，但仍不实现远端校对 UI 或自动修复；后续校对必须继续以真实百度网盘 API 行为为准。
+- 远端校对差异类型先按产品规格最小集表达：`db_exists_remote_missing`、`remote_meta_missing`、`remote_meta_mismatch`、`remote_size_mismatch`、`fs_id_changed`、`baidu_only`、`remote_unreadable`。
 - 自动化测试覆盖纯本地路径规则、分片 MD5、SQLite 账本事务、续传分片选择和输出脱敏；百度接口契约、真实上传、冲突和删除清理必须通过真实百度网盘 API 联调验证。

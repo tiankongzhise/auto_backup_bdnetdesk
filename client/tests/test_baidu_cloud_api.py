@@ -173,3 +173,43 @@ def test_sync_revisions_raises_retryable_cloud_error() -> None:
         assert exc.error_code == "retryable_error"
     else:
         raise AssertionError("expected CloudAPIError")
+
+
+def test_get_entity_summary_parses_revision_projection() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer fake-device-token"
+        assert request.method == "GET"
+        assert request.url.path == "/v1/reconcile/entities/entity-1"
+        return httpx.Response(
+            200,
+            json={
+                "entity_id": "entity-1",
+                "entity_type": "remote_objects",
+                "data_version": 2,
+                "revision_id": "01971234-5678-7abc-8def-0123456789ab",
+                "canonical_record_sha256": "a" * 64,
+                "updated_by_device_id": "dev-1",
+                "recent_revisions": [
+                    {
+                        "event_id": "evt-1",
+                        "revision_id": "01971234-5678-7abc-8def-0123456789ab",
+                        "data_version": 2,
+                        "apply_status": "synced",
+                        "canonical_record_sha256": "a" * 64,
+                        "created_at": "2026-06-06T00:00:00Z",
+                    }
+                ],
+            },
+        )
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    summary = cloud.get_entity_summary("entity-1")
+
+    assert summary.entity_type == "remote_objects"
+    assert summary.data_version == 2
+    assert summary.recent_revisions[0].apply_status == "synced"

@@ -325,3 +325,13 @@ chcp 65001
 解决方案：`Worker` 改为 `setAutoDelete(False)`，页面保存 `_workers` 列表直到 `finished` 信号后再清理；真实 API 调用增加 `_api_lock` 串行化；按钮 busy 状态改为按操作局部锁定，避免账号刷新锁住设备码创建。
 
 后续约束：PySide6 后台任务必须由 UI 对象持有到完成；跨线程信号对象不得只依赖局部变量生命周期；共享 `httpx.Client` 的真实 API 调用需要串行化或改为每个 worker 独立 client。
+
+### 2026-06-07：pytest 默认临时目录和 C:\tmp 均可能受权限限制
+
+问题：在 `client/` 下执行 `uv run python -m pytest` 时，pytest 默认访问 `C:\Users\3700x\AppData\Local\Temp\pytest-of-3700x` 失败；改用 `--basetemp C:\tmp\auto-backup-pytest` 后，当前沙箱仍无法创建该目录。
+
+原因：当前运行环境对用户 Temp 目录和 `C:\tmp` 的部分目录创建/枚举存在权限限制；这发生在 pytest fixture 创建临时目录阶段，早于项目测试断言。
+
+解决方案：继续设置 `UV_LINK_MODE=copy` 和仓库内 `UV_CACHE_DIR`，并把 `TMP`、`TEMP`、pytest `--basetemp` 都指向仓库内 `.cache/` 子目录；必要时加 `-p no:cacheprovider` 避免 `.pytest_cache` 权限噪声。本轮使用 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-sync` 后 56 个测试通过。
+
+后续约束：客户端 pytest 验收优先使用仓库内临时目录，例如 `$env:TMP='<repo>\.cache\tmp'; $env:TEMP='<repo>\.cache\tmp'; uv run python -m pytest -p no:cacheprovider --basetemp <repo>\.cache\pytest-basetemp`；不得把 Temp 目录权限错误误判为项目代码失败。

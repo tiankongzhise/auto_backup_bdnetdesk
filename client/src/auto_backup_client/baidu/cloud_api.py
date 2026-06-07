@@ -13,6 +13,7 @@ from auto_backup_client.baidu.models import (
     BaiduRefreshLease,
     CompleteAuthResult,
     DeviceRegistration,
+    EntitySummary,
     SyncRevisionEvent,
     SyncRevisionResult,
     format_datetime,
@@ -159,6 +160,13 @@ class BaiduCloudClient:
         if not isinstance(raw_results, list):
             raise CloudAPIError(200, "invalid_response", "results must be a list")
         return [SyncRevisionResult.from_json(item) for item in raw_results]
+
+    def get_entity_summary(self, entity_id: str) -> EntitySummary:
+        cleaned = entity_id.strip()
+        if not cleaned:
+            raise ValueError("entity_id is required")
+        data = self._request("GET", f"/v1/reconcile/entities/{cleaned}")
+        return EntitySummary.from_json(data)
 
     def _request(
         self,

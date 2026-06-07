@@ -16,6 +16,8 @@
 - `src/auto_backup_client/sqlite_store.py`：客户端 SQLite 迁移、事务和 `sync_outbox` 同事务写入基础设施。
 - `src/auto_backup_client/baidu/metadata.py`：百度远端 `.meta.json` 和 `job.index.json` 非敏感稳定 JSON 生成工具。
 - `src/auto_backup_client/baidu/resumable_upload.py`：基于 SQLite 上传账本的 `uploadid` 断点续传编排。
+- `src/auto_backup_client/sync_cli.py`：脱敏 `sync-outbox` CLI，把本地 SQLite outbox 推送到真实云端 Cloud Sync API。
+- `src/auto_backup_client/sync_worker.py`：读取本地 `sync_outbox`、调用云端 revision API 并回写同步状态的 worker。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
 ## PySide6 百度设置页
@@ -68,6 +70,26 @@ uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_P
 `real-batch` 会生成临时小文件和跨 4 MiB 分片文件，执行容量检查、上传、同路径冲突检测，并默认使用百度文件管理删除接口清理本批远端测试文件。`uinfo` 只保留为独立排查命令；当前真实授权应用或路径调用官方 `iotqueryuinfo` 接口可能返回 HTTP 404，不作为上传批测前置条件。
 
 `upload-resumable` 会按 `LOCAL_SQLITE_PATH` 初始化本地 SQLite，写入 `upload_sessions`、`upload_parts`、`remote_objects` 和 `sync_outbox`，并真实上传 archive、`.meta.json`、`job.index.json`。输出只包含账号 ID、token 版本、对象哈希、计数和 fs_id，不输出 access token、refresh token、wrapping key、Device Token 或本地敏感路径。
+
+## Cloud Sync outbox 联调 CLI
+
+`sync-outbox` 会读取 `LOCAL_SQLITE_PATH` 或 `--sqlite-path`，执行 SQLite 迁移，复用运行时 `CLOUD_API_DEVICE_TOKEN` 或本机 DPAPI Device Token 凭据，然后调用真实云端 `POST /v1/sync/revisions`。输出只包含 `selected`、`sent`、`synced`、`conflicts`、`rejected`、`retryable` 和可选云端摘要校验计数，不输出 Device Token、payload、本地路径、SQLite 路径、百度 token、用户密码或 wrapping key。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
+uv run python -m auto_backup_client.sync_cli sync-outbox --verify-cloud-summary
+```
+
+固定真实联调顺序：
+
+1. 运行 `upload-resumable --check-quota`，真实上传临时 archive、`.meta.json`、`job.index.json` 并写入本地 outbox。
+2. 运行 `sync-outbox --verify-cloud-summary`，以 `GET /v1/reconcile/entities/{entity_id}` 校验 Cloud Sync revision 投影。
+3. 使用百度 `filemanager/delete` 清理本批远端测试文件；清理失败只记录脱敏状态和人工清理待办。
+
+现阶段只验收云端 revision 投影，不要求当前客户端的 `remote_objects` 自动进入 Go 服务 `archive_objects` 索引；若后续要联动 `GET /v1/archives/{archive_sha256}`，需要先修改并重新部署 Go 服务。
 
 ## 本地 SQLite 上传账本
 
