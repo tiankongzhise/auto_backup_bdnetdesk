@@ -213,3 +213,33 @@ def test_get_entity_summary_parses_revision_projection() -> None:
     assert summary.entity_type == "remote_objects"
     assert summary.data_version == 2
     assert summary.recent_revisions[0].apply_status == "synced"
+
+
+def test_get_content_parses_cloud_dedupe_candidate() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer fake-device-token"
+        assert request.method == "GET"
+        assert request.url.path == "/v1/contents/" + ("c" * 64)
+        return httpx.Response(
+            200,
+            json={
+                "content_id": "c" * 64,
+                "file_sha256": "a" * 64,
+                "size_bytes": 123,
+                "latest_entity_id": "content_object_entity",
+                "updated_at": "2026-06-08T03:00:00Z",
+            },
+        )
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    content = cloud.get_content("c" * 64)
+
+    assert content.content_id == "c" * 64
+    assert content.file_sha256 == "a" * 64
+    assert content.size_bytes == 123
+    assert content.latest_entity_id == "content_object_entity"

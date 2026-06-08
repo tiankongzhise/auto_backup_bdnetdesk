@@ -17,6 +17,7 @@ CLIENT_SCHEMA_VERSION = 1
 LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "local_path", "uploadid", "error_message"})
 SYNC_ENTITY_TABLES = {
     "backup_jobs": "backup_jobs",
+    "content_objects": "content_objects",
     "file_items": "file_items",
     "folder_items": "folder_items",
     "upload_sessions": "upload_sessions",
@@ -405,6 +406,79 @@ class SQLiteClientStore:
 
     def put_scan_issue(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
         _put_row(conn, "scan_issues", dict(payload), key_field="scan_issue_id")
+
+    def put_content_object(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+        row = dict(payload)
+        _put_row(conn, "content_objects", row, key_field="content_id")
+        record = revision_from_payload(
+            entity_type="content_objects",
+            entity_id=str(row["entity_id"]),
+            revision_id=str(row["revision_id"]),
+            schema_version=int(row["schema_version"]),
+            data_version=int(row["data_version"]),
+            canonical_record_sha256=str(row["canonical_record_sha256"]),
+            payload=row,
+            updated_at=str(row["updated_at"]),
+            deleted_at=row.get("deleted_at"),
+        )
+        self.enqueue_revision(conn, record)
+        return record
+
+    def put_content_reference(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
+        _put_row(conn, "content_references", dict(payload), key_field="content_reference_id")
+
+    def replace_content_references_for_job(self, conn: sqlite3.Connection, *, backup_job_id: str) -> set[str]:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT content_id
+            FROM content_references
+            WHERE backup_job_id = ?
+            """,
+            (backup_job_id,),
+        ).fetchall()
+        conn.execute(
+            """
+            DELETE FROM content_references
+            WHERE backup_job_id = ?
+            """,
+            (backup_job_id,),
+        )
+        return {str(row["content_id"]) for row in rows}
+
+    def get_content_object_for_update(self, conn: sqlite3.Connection, content_id: str) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM content_objects WHERE content_id = ?",
+            (content_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_content_objects(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5000:
+            raise ValueError("content object list limit must be between 1 and 5000")
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM content_objects
+                ORDER BY last_seen_at DESC, content_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_content_references(self, backup_job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM content_references
+                WHERE backup_job_id = ?
+                ORDER BY source_seq, relative_path, content_reference_id
+                """,
+                (backup_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def get_backup_job(self, backup_job_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:

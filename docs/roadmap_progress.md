@@ -10,18 +10,18 @@
 
 ## 当前工作项
 
-- P1 阶段 6 扫描与内容指纹开发完成；下一个开发阶段为 P1 阶段 7 去重索引与来源引用。
-- 本轮已完成客户端扫描与内容指纹最小闭环：新增 `file_items`、`folder_items` 和 `scan_issues` SQLite 表，扫描服务可接入 `backup_jobs`/`backup_sources`，支持文件和目录来源、递归扫描、链接/快捷方式默认跳过、不可读问题记录、快速指纹、完整 MD5/SHA256、`content_id`、文件夹 `folder_content_hash` 和 `folder_manifest_hash`。
-- 本轮实现边界：只做扫描和指纹结果的本地持久化与同步入队，不做去重索引、来源引用、7-Zip 归档、manifest 文件生成、百度上传、缓存清理、恢复或长耗时 UI 执行器；后续 P1 阶段 7-9 再接入实际备份流水线。
-- 下一阶段开始前必须把“本次开发阶段：P1 阶段 7 去重索引与来源引用”写入当前工作项，并同步计划修改范围和验收标准。
+- P1 阶段 7 去重索引与来源引用开发完成；下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest。
+- 本轮已完成客户端内容级去重索引最小闭环：新增 `content_objects` 和 `content_references` SQLite 表，去重索引服务可读取 `file_items`，按完整 SHA256+size 生成本地内容对象、来源引用和本地重复状态。
+- 本轮实现边界：只做内容级去重索引、来源引用和云端候选查询客户端封装，不生成 7-Zip archive、明文 manifest、archive_objects 归档记录、百度上传、缓存清理、原始数据清理或恢复流程；归档对象落地和引用 archive 的能力回到 P1 阶段 8-9。
+- 下一阶段开始前必须把“本次开发阶段：P1 阶段 8 7-Zip 加密归档与 manifest”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- P1 阶段 6 已验收：相同字节内容在不同路径下生成相同 quick fingerprint、完整 MD5/SHA256 和 `content_id`；路径、文件名和时间不进入内容指纹。
-- P1 阶段 6 已验收：文件夹 `folder_content_hash` 对路径无关，`folder_manifest_hash` 会随相对路径/名称变化；symlink/junction/快捷方式默认跳过并记录扫描问题；不可读文件记录问题且不阻断同一任务继续扫描其他文件。
-- P1 阶段 6 已验收：扫描结果写入 `file_items`、`folder_items` 和 `sync_outbox`；本地绝对路径只保存在业务表，不进入 outbox payload；同一 job 重新扫描时按来源覆盖当前扫描结果并递增稳定 item 的 data_version。
-- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-scan-fingerprint` 通过，90 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过。
-- 本轮不要求真实云端 API、真实百度 API 或 7-Zip 联调；如果意外触发真实 API，必须记录原因并确认没有敏感输出。
+- P1 阶段 7 已验收：相同完整 SHA256 和 size 的文件只创建一条 `content_objects`，但每个来源文件都保留 `content_references`；首个本地来源标记为 `payload_source`，后续来源标记为 `local_duplicate`。
+- P1 阶段 7 已验收：最终去重判断会校验 `content_id == sha256("v1:file:" + size + ":" + file_sha256)`，并拒绝同一 `content_id` 下出现不同完整 SHA256 或 size；路径、文件名、时间、设备和任务信息不参与最终去重。
+- P1 阶段 7 已验收：`content_objects` 写入与 `sync_outbox` 同事务完成，payload 包含云端索引必需的 `content_id`、`file_sha256`、`size_bytes`，且不包含本地绝对路径；`content_references.local_path` 只保存在本地 SQLite。
+- P1 阶段 7 已验收：云端候选查询只在返回对象的完整 SHA256 和 size 与本地内容对象一致时标记 `cloud_duplicate_candidate`；404/missing 或字段不一致不会被当成可跳过 payload 的重复内容。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-dedupe-all` 通过，97 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过。
 
 ## 开发排期
 
@@ -35,7 +35,7 @@
 | P0 | 4 远端对象校对与人工修复 | 百度 `list/listall`、本地 `remote_objects` 对账、差异状态、只读报告、人工修复入口 | 已完成；P0 阶段 4 远端对象校对与人工修复开发完成 | 下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型 |
 | P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 已完成；P1 阶段 5 备份任务主 UI 与任务模型开发完成 | 下一个开发阶段为 P1 阶段 6 扫描与内容指纹 |
 | P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 已完成；P1 阶段 6 扫描与内容指纹开发完成 | 下一个开发阶段为 P1 阶段 7 去重索引与来源引用 |
-| P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 下一阶段待开始 | 最终去重只按完整 SHA256+size；路径/时间/设备不进入内容指纹 |
+| P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 已完成；P1 阶段 7 去重索引与来源引用开发完成 | 下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest |
 | P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 未开始 | 真实 7-Zip test、manifest hash 校验、明文 manifest 生命周期测试通过 |
 | P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 底层上传链路已验证；主编排未开始 | 小文件、跨分片、重复内容、冲突、断点恢复均用真实链路验收 |
 | P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 未开始 | 缓存不足时阻止新任务或暂停低优先级阶段，不删除源文件 |
@@ -75,6 +75,31 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P1 阶段 7 去重索引与来源引用
+
+- P1 阶段 7 去重索引与来源引用开发完成；下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest。
+- 新增 SQLite 迁移 `client/migrations/sqlite/005_dedupe_content_index.sql`，包含版本化同步实体 `content_objects` 和本地来源引用表 `content_references`。
+- 扩展 `SQLiteClientStore`，新增 `put_content_object`、`put_content_reference`、`replace_content_references_for_job`、`get_content_object_for_update`、`list_content_objects` 和 `list_content_references`；`content_objects` 会同事务写入 `sync_outbox`，`content_references.local_path` 只保存在本地 SQLite。
+- 新增 `client/src/auto_backup_client/dedupe_index.py`，实现内容级去重索引服务：读取 `file_items`，只处理 `full_hashed` 稳定扫描结果，校验 `content_id` 必须由完整 SHA256+size 推导，拒绝内容 ID 与 SHA256/size 不一致的数据。
+- 本地重复引用策略已落地：同一内容的首个本地来源标记为 `payload_source/needs_payload`，后续来源标记为 `local_duplicate`；跨 job 已有 payload 来源时，新 job 的相同内容引用直接标记为本地重复。
+- 重扫和级联删除计数校准已覆盖：当文件内容变化或旧 `file_items` 被替换时，旧 `content_objects.reference_count`、`payload_reference_count` 和 `duplicate_reference_count` 会按当前引用重新校准。
+- 扩展 `BaiduCloudClient.get_content(...)` 和 `ContentObject` 模型，封装云端 `GET /v1/contents/{content_id}` 候选查询；只有云端返回的 `file_sha256` 与 `size_bytes` 同本地一致时，才把引用标记为 `cloud_duplicate_candidate`。
+- 更新 `client/README.md`，记录内容级去重表、最终去重口径、云端候选判断边界和本阶段不生成 7-Zip/manifest/archive 的范围。
+- 新增 `client/tests/test_dedupe_index.py`，覆盖同内容多来源只创建一条内容对象、跨 job 本地重复、云端候选 sha256+size 校验、hash mismatch 不跳过 payload、重扫引用计数回落和异常 `content_id` 拒绝。
+- 扩展 `client/tests/test_baidu_cloud_api.py` 和 `client/tests/test_sqlite_store.py`，覆盖云端内容候选解析和新增 SQLite 表迁移。
+- 已验证客户端定向测试 `tests/test_dedupe_index.py tests/test_sqlite_store.py tests/test_baidu_cloud_api.py` 通过，19 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-dedupe-all` 通过，97 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交完成 P1 阶段 7 去重索引与来源引用，新增本地内容对象和来源引用模型，把扫描结果接入最终去重口径；`content_objects` 可同步到云端索引，`content_references` 保留本地来源路径但不进入同步 payload。本阶段不生成 archive、manifest 或执行百度上传。
+
+后续待办：
+
+- 下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest；下一轮开始前必须在当前工作项写明“本次开发阶段：P1 阶段 8 7-Zip 加密归档与 manifest”。
+- P1 阶段 8 需要把 `content_references` 中 `needs_payload` 的来源打包进 7-Zip AES-256 archive，并生成加密 manifest；明文 manifest 只允许短暂存在于缓存临时目录，验证通过后必须删除。
+- P1 阶段 8/9 接入 archive 后，需要回填 `content_references.archive_id`、`archive_sha256` 和 `archive_member_path`，并新增/复用 `archive_objects` 归档索引，继续保持最终去重只使用完整 SHA256+size。
 
 ### P1 阶段 6 扫描与内容指纹
 

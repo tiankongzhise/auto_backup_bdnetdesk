@@ -147,6 +147,25 @@ class BaiduRefreshLease:
 
 
 @dataclass(frozen=True)
+class ContentObject:
+    content_id: str
+    file_sha256: str
+    size_bytes: int
+    latest_entity_id: str
+    updated_at: datetime
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "ContentObject":
+        return cls(
+            content_id=str(data.get("content_id", "")),
+            file_sha256=str(data.get("file_sha256", "")),
+            size_bytes=int(data.get("size_bytes", 0) or 0),
+            latest_entity_id=str(data.get("latest_entity_id", "")),
+            updated_at=parse_datetime(str(data["updated_at"])),
+        )
+
+
+@dataclass(frozen=True)
 class SyncRevisionEvent:
     event_id: str
     entity_type: str

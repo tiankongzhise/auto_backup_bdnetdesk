@@ -12,6 +12,7 @@ from auto_backup_client.baidu.models import (
     BaiduEncryptedToken,
     BaiduRefreshLease,
     CompleteAuthResult,
+    ContentObject,
     DeviceRegistration,
     EntitySummary,
     SyncRevisionEvent,
@@ -167,6 +168,13 @@ class BaiduCloudClient:
             raise ValueError("entity_id is required")
         data = self._request("GET", f"/v1/reconcile/entities/{cleaned}")
         return EntitySummary.from_json(data)
+
+    def get_content(self, content_id: str) -> ContentObject:
+        cleaned = content_id.strip()
+        if not cleaned:
+            raise ValueError("content_id is required")
+        data = self._request("GET", f"/v1/contents/{cleaned}")
+        return ContentObject.from_json(data)
 
     def _request(
         self,

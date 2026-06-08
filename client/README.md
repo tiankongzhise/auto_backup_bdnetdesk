@@ -20,6 +20,7 @@
 - `src/auto_backup_client/sync_worker.py`：读取本地 `sync_outbox`、调用云端 revision API 并回写同步状态的 worker。
 - `src/auto_backup_client/backup_jobs.py`：备份任务模型服务层，负责创建任务、持久化来源和任务状态机版本化更新。
 - `src/auto_backup_client/scan_fingerprints.py`：扫描与内容指纹服务，负责递归扫描、默认跳过链接/快捷方式、记录不可读问题、计算 quick fingerprint、完整 MD5/SHA256、`content_id` 和文件夹 hash。
+- `src/auto_backup_client/dedupe_index.py`：内容级去重索引服务，负责把 `file_items` 汇总成 `content_objects` 和 `content_references`，并可查询云端内容候选。
 - `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
@@ -44,7 +45,11 @@ uv run python -m auto_backup_client.ui.main_window
 
 内容指纹只描述文件字节内容，不包含路径、文件名、时间、设备或任务信息。完整文件身份为 `md5(full_bytes)`、`sha256(full_bytes)` 和 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`；快速指纹只用于后续候选筛选，不作为最终去重依据。`file_items.local_path`、`folder_items.local_path` 和 `scan_issues.local_path` 只保存在本地 SQLite，`sync_outbox.payload_json` 会过滤本地路径。
 
-本阶段不执行去重索引、7-Zip 归档、manifest 文件生成、百度上传、缓存清理或恢复；后续 P1-7 到 P1-9 会把扫描结果继续接入去重、归档和端到端编排。
+阶段 P1-7 已新增内容级去重索引。`content_objects` 是版本化同步实体，会同事务写入 `sync_outbox`，payload 包含 `content_id`、`file_sha256` 和 `size_bytes`，用于云端跨设备去重索引；`content_references` 记录每个来源文件的引用、清理状态和恢复状态，本地绝对路径只保存在 SQLite，不进入同步 payload。
+
+最终重复判断只使用完整 `sha256 + size_bytes`，并校验 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`。同一内容的首个本地引用标记为 `needs_payload`，后续本地引用标记为 `local_duplicate`；如果云端 `GET /v1/contents/{content_id}` 返回的 `file_sha256` 和 `size_bytes` 与本地一致，引用才可标记为 `cloud_duplicate_candidate`。404、临时错误或 sha256/size 不一致都不能作为跳过 payload 的依据。
+
+本阶段不执行 7-Zip 归档、manifest 文件生成、archive_objects 归档索引、百度上传、缓存清理或恢复；后续 P1-8 到 P1-9 会把 `content_references` 接入 manifest/archive 和端到端编排。
 
 ## PySide6 百度设置页
 

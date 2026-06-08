@@ -20,7 +20,15 @@ def test_sqlite_migrations_are_idempotent_and_enable_upload_tables(tmp_path) -> 
         }
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
 
-    assert {"sync_outbox", "upload_sessions", "upload_parts", "remote_objects", "schema_migrations"} <= tables
+    assert {
+        "sync_outbox",
+        "upload_sessions",
+        "upload_parts",
+        "remote_objects",
+        "content_objects",
+        "content_references",
+        "schema_migrations",
+    } <= tables
     assert foreign_keys == 1
 
 
