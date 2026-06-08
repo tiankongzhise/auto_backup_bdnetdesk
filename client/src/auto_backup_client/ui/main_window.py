@@ -53,7 +53,7 @@ from auto_backup_client.device_credentials import resolve_or_register_device_cre
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.source_mapping import SourceMappingQuery, SourceMappingReport, path_digest, short_digest
 from auto_backup_client.source_cleanup import CLEANUP_CONFIRM_TEXT, PERMANENT_DELETE_CONFIRM_TEXT, SourceCleanupService
-from auto_backup_client.restore_flow import RestoreService
+from auto_backup_client.restore_flow import BaiduArchiveDownloader, RestoreService
 from auto_backup_client.sqlite_store import SQLiteClientStore
 from auto_backup_client.ui.baidu_settings import BaiduSettingsPage, BaiduSettingsPageConfig
 
@@ -636,7 +636,8 @@ class SourceCleanupPage(QWidget):
         self.method_combo = QComboBox()
         self.method_combo.addItem("移入回收站", "recycle_bin")
         self.method_combo.addItem("移动到隔离目录", "quarantine")
-        self.method_combo.addItem("永久删除", "permanent_delete")
+        self.advanced_cleanup_checkbox = QCheckBox("高级选项")
+        self.advanced_cleanup_checkbox.toggled.connect(self._toggle_permanent_delete_option)
         self.quarantine_input = QLineEdit()
         self.quarantine_input.setPlaceholderText("仅隔离目录方式需要")
         self.choose_quarantine_button = QPushButton("选择")
@@ -650,6 +651,7 @@ class SourceCleanupPage(QWidget):
         self.permanent_confirm_input = QLineEdit()
         self.permanent_confirm_input.setPlaceholderText(PERMANENT_DELETE_CONFIRM_TEXT)
         form.addRow("方式", self.method_combo)
+        form.addRow("高级", self.advanced_cleanup_checkbox)
         form.addRow("隔离目录", quarantine_row)
         form.addRow("操作人", self.operator_input)
         form.addRow("清理确认", self.confirm_input)
@@ -718,6 +720,17 @@ class SourceCleanupPage(QWidget):
         if directory:
             self.quarantine_input.setText(directory)
 
+    @Slot(bool)
+    def _toggle_permanent_delete_option(self, enabled: bool) -> None:
+        index = self.method_combo.findData("permanent_delete")
+        if enabled and index < 0:
+            self.method_combo.addItem("永久删除", "permanent_delete")
+            return
+        if not enabled and index >= 0:
+            if self.method_combo.currentData() == "permanent_delete":
+                self.method_combo.setCurrentIndex(0)
+            self.method_combo.removeItem(index)
+
     @Slot()
     def apply_cleanup(self, *, dry_run: bool) -> None:
         selected_ids = tuple(
@@ -725,6 +738,9 @@ class SourceCleanupPage(QWidget):
             for row in sorted({index.row() for index in self.candidates_table.selectedIndexes()})
             if self.candidates_table.item(row, 0) is not None
         )
+        if not selected_ids:
+            self._warn("请先选择要清理的来源。")
+            return
         try:
             result = self._service.apply(
                 backup_job_id=self.job_id_input.text(),
@@ -753,9 +769,23 @@ class SourceCleanupPage(QWidget):
 class RestorePage(QWidget):
     status_changed = Signal(str)
 
-    def __init__(self, store: SQLiteClientStore, *, device_id: str, cache_root: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        store: SQLiteClientStore,
+        *,
+        device_id: str,
+        cache_root: str,
+        cloud_api_base_url: str = "",
+        device_token: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self._service = RestoreService(store, device_id=device_id or "current-device", cache_root=cache_root)
+        self._store = store
+        self._device_id = device_id or "current-device"
+        self._cache_root = cache_root
+        self._cloud_api_base_url = cloud_api_base_url
+        self._device_token = device_token
+        self._service = RestoreService(store, device_id=self._device_id, cache_root=cache_root)
         self._candidates = []
         self._build_ui()
         self.refresh_candidates()
@@ -806,6 +836,17 @@ class RestorePage(QWidget):
         form.addRow("冲突策略", self.conflict_combo)
         form.addRow("归档密码", self.password_input)
         layout.addWidget(target_group)
+
+        remote_group = QGroupBox("远端拉取")
+        remote_form = QFormLayout(remote_group)
+        self.account_id_input = QLineEdit()
+        self.account_id_input.setPlaceholderText("留空使用当前设备已选择账号")
+        self.authorization_password_input = QLineEdit()
+        self.authorization_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.authorization_password_input.setPlaceholderText("授权密码仅用于本机解密，不保存")
+        remote_form.addRow("账号 ID", self.account_id_input)
+        remote_form.addRow("授权密码", self.authorization_password_input)
+        layout.addWidget(remote_group)
 
         toolbar = QHBoxLayout()
         self.restore_button = QPushButton("执行恢复")
@@ -874,14 +915,26 @@ class RestorePage(QWidget):
             if self.candidates_table.item(row, 0) is not None
         )
         try:
-            result = self._service.restore(
-                backup_job_id=self.job_id_input.text(),
-                content_reference_ids=selected_ids,
-                target_mode=self.target_mode_combo.currentData(),
-                target_root=self.target_root_input.text(),
-                password=self.password_input.text(),
-                conflict_strategy=self.conflict_combo.currentData(),
-            )
+            if self._selected_candidates_need_download(selected_ids):
+                if not self._cloud_api_base_url or not self._device_token:
+                    raise ValueError("cloud api base url and device token are required for remote archive download")
+                authorization_password = self.authorization_password_input.text()
+                if not authorization_password:
+                    raise ValueError("authorization password is required for remote archive download")
+                with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0) as cloud:
+                    workflow = BaiduAuthWorkflow(cloud)
+                    account_id = self.account_id_input.text().strip() or _selected_account_id_for_ui(workflow)
+                    decrypted = workflow.decrypt_password_token(account_id, authorization_password=authorization_password)
+                with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
+                    service = RestoreService(
+                        self._store,
+                        device_id=self._device_id,
+                        cache_root=self._cache_root,
+                        downloader=BaiduArchiveDownloader(baidu),
+                    )
+                    result = self._restore_with_service(service, selected_ids)
+            else:
+                result = self._restore_with_service(self._service, selected_ids)
         except Exception as exc:
             self._warn(_safe_ui_error(exc))
             return
@@ -889,6 +942,21 @@ class RestorePage(QWidget):
             f"恢复完成：成功 {result.restored_count}，跳过 {result.skipped_count}，失败 {result.failed_count}。"
         )
         self.refresh_candidates()
+
+    def _restore_with_service(self, service: RestoreService, selected_ids: tuple[str, ...]):
+        return service.restore(
+            backup_job_id=self.job_id_input.text(),
+            content_reference_ids=selected_ids,
+            target_mode=self.target_mode_combo.currentData(),
+            target_root=self.target_root_input.text(),
+            password=self.password_input.text(),
+            conflict_strategy=self.conflict_combo.currentData(),
+        )
+
+    def _selected_candidates_need_download(self, selected_ids: tuple[str, ...]) -> bool:
+        selected = set(selected_ids)
+        candidates = self._candidates if not selected else [candidate for candidate in self._candidates if candidate.content_reference_id in selected]
+        return any(candidate.remote_download_available for candidate in candidates)
 
     def _warn(self, message: str) -> None:
         self.status_changed.emit(message)
@@ -922,6 +990,8 @@ class MainWindow(QMainWindow):
             self._store,
             device_id=config.device_id,
             cache_root=config.cache_root,
+            cloud_api_base_url=config.cloud_api_base_url,
+            device_token=config.device_token,
         )
         self._build_ui()
 

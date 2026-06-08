@@ -58,9 +58,9 @@ PyInstaller 官方文档获取记录：
 | R04 | 首次启动 | 干净 Windows | 双击 exe | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题 | 待执行 |
 | R05 | 百度授权 | 干净 Windows | 设备码/扫码授权 | 只在百度官方页面输入百度账号；本机保存 DPAPI Device Token/KDF 材料；不落仓库路径 | 待执行 |
 | R06 | 备份 | 干净 Windows | 选择小文件与跨分片文件执行真实备份 | 完成扫描、去重、7-Zip 加密、百度上传、outbox 同步、远端校对和 completed final sync | 待执行 |
-| R07 | 校对 | 干净 Windows | 来源映射和远端校对页查看同一 job | 展示来源/远端关系和 consistent 状态；不显示 Device Token、百度 token、密码或完整敏感路径 | 待执行 |
-| R08 | 清理 | 干净 Windows | 对已完成 job 执行回收站清理 | 清理前复查通过后移入回收站，写入清理记录并同步 outbox | 待执行 |
-| R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 恢复 | 7-Zip 解密、manifest 校验、SHA256 复验通过；冲突默认保留两者 | 待执行 |
+| R07 | 校对 | 干净 Windows | 来源映射和远端校对页查看同一 job | 展示来源/远端关系和 consistent 状态；不显示 Device Token、百度 token、密码或完整敏感路径 | 开发机自动化已覆盖来源映射脱敏与远端校对 UI 修复写入；干净机待执行 |
+| R08 | 清理 | 干净 Windows | 对已完成 job 执行回收站清理 | 清理前复查通过后移入回收站，写入清理记录并同步 outbox；永久删除默认隐藏在高级选项，清理前必须选中候选 | 开发机自动化已覆盖候选门槛、身份复查、同步 payload 脱敏和 UI 高级删除/选择门槛；干净机待执行 |
+| R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 恢复 | 7-Zip 解密、manifest 校验、SHA256 复验通过；远端 archive 可经百度 dlink 拉取；冲突默认保留两者 | 开发机自动化已覆盖本地恢复、UI 远端拉取恢复、SHA256 复验和路径脱敏；干净机待执行 |
 | R10 | 断网补偿 | 干净 Windows | 云端临时不可用时执行本地任务并恢复网络 | 本地 SQLite 落盘；云端恢复后 outbox 可补偿同步 | 待执行 |
 | R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动 | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等 | 待执行 |
 | R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据 | 程序目录可移除；用户数据、凭据和缓存清理边界清晰 | 待执行 |
@@ -73,6 +73,15 @@ PyInstaller 官方文档获取记录：
 - 尚未生成最终安装器；当前是 onedir 发行目录，后续可在同一矩阵基础上接入安装器。
 - 覆盖恢复仍未开放；如发布前要求覆盖恢复，必须先实现覆盖前回收站保护并新增验收项。
 - 云同步真实性审计不得只看本地 `sync_outbox` 状态；必须保留真实 Cloud Sync API 写入和云端 summary 回读匹配证据，确认不是虚假同步。
+
+## P3-14 全量审计补测记录
+
+2026-06-08 发布交付审计中补齐 UI 远端恢复拉取闭环和清理 UI 安全门槛，开发机自动化结果：
+
+- `tests/test_backup_task_page.py tests/test_restore_flow.py tests/test_source_cleanup.py` 共 17 项通过。
+- 恢复页在本地 archive 缺失但 `remote_objects` archive 为 `remote_created` 且有 `fs_id` 时，会要求授权密码，经 Cloud API 读取密文 token、本机解密后使用百度 `filemetas`/`dlink` 下载 archive，再做 archive SHA256、7-Zip、manifest 和恢复后 SHA256 校验。
+- 原始数据清理页默认只提供回收站和隔离目录；永久删除在高级选项打开前隐藏，且执行清理必须选中候选行。
+- 本轮未删除既有百度备份结果，未执行真实远端清理动作；真实远端删除仍只允许在用户显式确认的测试清理或人工操作中执行。
 
 ## R13 开发机审计记录
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -13,7 +15,7 @@ from auto_backup_client.dedupe_index import ContentDedupeIndexer
 from auto_backup_client.scan_fingerprints import BackupScanner
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields
 from auto_backup_client.ui import main_window
-from auto_backup_client.ui.main_window import BackupTaskPage, RemoteReconcilePage, RestorePage, SourceMappingPage
+from auto_backup_client.ui.main_window import BackupTaskPage, RemoteReconcilePage, RestorePage, SourceCleanupPage, SourceMappingPage
 from test_backup_pipeline import FakeBaiduForPipeline, FakeCloudForPipeline
 
 
@@ -179,6 +181,114 @@ def test_restore_page_restores_selected_candidate_without_path_leak(tmp_path, mo
     assert store.list_restore_records(created.job.backup_job_id)[0]["restore_status"] == "restored"
 
 
+def test_restore_page_downloads_remote_archive_when_local_cache_is_missing(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    source = tmp_path / "secret-folder" / "download-me.txt"
+    source.parent.mkdir()
+    source.write_text("remote payload", encoding="utf-8")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    created = BackupJobManager(store, device_id="device-1").create_job([str(source)], job_name="remote restore ui")
+    BackupPipeline(
+        store=store,
+        device_id="device-1",
+        baidu_client=FakeBaiduForPipeline(),
+        cloud_client=FakeCloudForPipeline(),
+    ).run_job(
+        created.job.backup_job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password="Test123456789",
+            account_id="account-1",
+            run_upload=True,
+            sync_outbox=True,
+            reconcile_remote=True,
+            now="2026-06-08T21:30:00Z",
+        ),
+    )
+    original_archive = Path(store.list_archives(created.job.backup_job_id)[0]["local_archive_path"])
+    remote_archive = tmp_path / "remote-copy.7z"
+    shutil.copy2(original_archive, remote_archive)
+    original_archive.unlink()
+    monkeypatch.setattr(main_window, "BaiduCloudClient", _FakeCloudClient)
+    monkeypatch.setattr(main_window, "BaiduAuthWorkflow", _FakeWorkflow)
+    monkeypatch.setattr(
+        main_window,
+        "BaiduNetdiskClient",
+        lambda *args, **kwargs: _FakeDownloadBaiduNetdiskClient(remote_archive, *args, **kwargs),
+    )
+    target_root = tmp_path / "restored"
+
+    page = RestorePage(
+        store,
+        device_id="device-1",
+        cache_root=str(tmp_path / "cache"),
+        cloud_api_base_url="https://backup.baichengedu.com",
+        device_token="secret-device-token",
+    )
+    page.job_id_input.setText(created.job.backup_job_id)
+    page.refresh_candidates()
+
+    assert page.candidates_table.item(0, 0).text() == "needs_download"
+    page.candidates_table.selectRow(0)
+    page.target_root_input.setText(str(target_root))
+    page.password_input.setText("Test123456789")
+    page.account_id_input.setText("account-1")
+    page.authorization_password_input.setText("runtime-secret")
+    page.apply_restore()
+
+    assert (target_root / "download-me.txt").read_text(encoding="utf-8") == "remote payload"
+    records = store.list_restore_records(created.job.backup_job_id)
+    assert records[0]["restore_status"] == "restored"
+    assert records[0]["archive_source"] == "downloaded"
+
+
+def test_source_cleanup_page_hides_permanent_delete_and_requires_selection(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    source = tmp_path / "secret-folder" / "cleanup-me.txt"
+    source.parent.mkdir()
+    source.write_text("payload", encoding="utf-8")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    created = BackupJobManager(store, device_id="device-1").create_job([str(source)], job_name="cleanup ui")
+    BackupPipeline(
+        store=store,
+        device_id="device-1",
+        baidu_client=FakeBaiduForPipeline(),
+        cloud_client=FakeCloudForPipeline(),
+    ).run_job(
+        created.job.backup_job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password="Test123456789",
+            account_id="account-1",
+            run_upload=True,
+            sync_outbox=True,
+            reconcile_remote=True,
+            now="2026-06-08T21:40:00Z",
+        ),
+    )
+
+    page = SourceCleanupPage(store, device_id="device-1")
+    status_messages: list[str] = []
+    page.status_changed.connect(status_messages.append)
+    page.job_id_input.setText(created.job.backup_job_id)
+    page.refresh_candidates()
+
+    assert page.candidates_table.rowCount() == 1
+    assert page.method_combo.findData("permanent_delete") == -1
+    page.advanced_cleanup_checkbox.setChecked(True)
+    assert page.method_combo.findData("permanent_delete") >= 0
+
+    page.confirm_input.setText("CLEANUP_SOURCES")
+    page.apply_cleanup(dry_run=True)
+
+    assert status_messages[-1] == "请先选择要清理的来源。"
+    assert store.list_source_cleanup_records(created.job.backup_job_id) == []
+
+
 def _table_text(table) -> str:  # type: ignore[no-untyped-def]
     values: list[str] = []
     for row in range(table.rowCount()):
@@ -244,6 +354,47 @@ class _FakeBaiduNetdiskClient:
                 ),
             ),
         )
+
+
+class _FakeDownloadBaiduNetdiskClient:
+    def __init__(self, archive_path: Path, access_token: str, *, timeout: float = 120.0) -> None:
+        del timeout
+        self.archive_path = archive_path
+        assert access_token == "secret-access-token"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
+
+    def file_metas(self, fs_ids, *, dlink: bool = False):  # type: ignore[no-untyped-def]
+        assert tuple(fs_ids)
+        assert dlink is True
+        fs_id = int(tuple(fs_ids)[0])
+        return type(
+            "Metas",
+            (),
+            {
+                "items": (
+                    type(
+                        "Meta",
+                        (),
+                        {
+                            "fs_id": fs_id,
+                            "dlink": "https://d.pcs.baidu.com/file/archive?sign=fake",
+                            "size": self.archive_path.stat().st_size,
+                        },
+                    )(),
+                )
+            },
+        )()
+
+    def download_dlink(self, dlink: str, target_path: str | Path) -> None:
+        assert dlink.startswith("https://d.pcs.baidu.com/file/archive")
+        target = Path(target_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(self.archive_path, target)
 
 
 def _insert_remote_object(store: SQLiteClientStore, *, remote_path: str) -> None:

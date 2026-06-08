@@ -11,16 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- P3 阶段 14 发布候选云服务同步真实性审计开发完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
-- 本轮新增可复跑的真实 Cloud Sync 审计探针，生成无敏感 payload 的临时 revision，真实调用 `POST /v1/sync/revisions` 并通过 `GET /v1/reconcile/entities/{entity_id}` 回读校验；同步更新发布验收矩阵、客户端文档、AGENTS.MD 和测试。
-- 本轮未修改 Go 云端 API 或 PostgreSQL schema；真实线上审计证明当前云服务同步不是虚假同步，但干净 Windows 发布候选仍需复验完整 R04-R14 矩阵。
+- 本轮插队工作：P3 阶段 14 发布交付全量审计与 UI 人工验收闭环修复，挂靠打包发布与最终验收，不改变主排期；完成后回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 本轮计划对照 `docs/product_spec_v1.3.md`、`docs/release_acceptance_matrix.md`、近期 Git 提交和当前代码，审计备份、远端校对、来源映射、恢复拉取、原始数据清理、敏感信息、缓存与同步是否达到交付标准。
+- 本轮重点验收用户新增要求：不删除既有备份结果；UI 必须能人工 review 备份结果与远端状态；UI 必须能拉取/恢复备份；源数据删除只能由用户手动触发，默认回收站，并在清理前复查源文件身份。
+- 若发现交付缺口，本轮在 P3 阶段 14 内做最小必要修复，并补充自动化测试和发布验收矩阵记录；涉及真实百度备份对象时仅做读取、校对或显式保留，不执行自动删除备份结果。
+- P3 阶段 14 发布交付全量审计与 UI 人工验收闭环修复已完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
 
 ## 本次验收标准
 
-- P3-14 本轮已验收：真实 `https://backup.baichengedu.com/v1/readyz` 可用，审计探针首次提交唯一 revision 返回 `synced`。
-- P3-14 本轮已验收：`GET /v1/reconcile/entities/{entity_id}` 回读到相同 `revision_id`、`data_version` 和 `canonical_record_sha256`，确认不是仅让本地 `sync_outbox` 标记为 `synced` 的虚假同步。
-- P3-14 本轮已验收：重复提交同一 revision 返回 `duplicate`，证明云端存在当前实体投影或不可变 revision 幂等记录。
-- P3-14 本轮已验收：CLI 输出脱敏，不打印 Device Token、payload 正文、本地 SQLite 路径、百度 token、用户密码或完整敏感路径。
+- 本轮已输出可追溯交付审计结论：源码关键路径已具备 UI 人工 review、远端恢复拉取和源数据手动清理能力；最终发布仍阻塞于干净 Windows R04-R14 矩阵。
+- 本轮已补充测试：`tests/test_backup_task_page.py tests/test_restore_flow.py tests/test_source_cleanup.py` 17 项通过，客户端全量 143 项通过，`compileall`、`git diff --check` 和提升后的 `cloud-api/ go test ./...` 通过。
+- 本轮未删除既有备份结果，未执行真实百度远端删除动作；发布矩阵已记录真实远端删除必须继续保持用户显式确认。
+- UI 验收已覆盖：来源映射/远端校对可查看备份结果，恢复页可从本地缓存或远端 archive 拉取并恢复，原始数据清理页必须选中候选且默认回收站，永久删除默认隐藏在高级选项。
 
 ## 开发排期
 
@@ -95,6 +97,30 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：发布交付全量审计与 UI 人工验收闭环修复
+
+- P3 阶段 14 发布交付全量审计与 UI 人工验收闭环修复开发完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 本轮对照 `docs/product_spec_v1.3.md`、`docs/release_acceptance_matrix.md`、近期 Git 提交和当前代码审计了备份编排、来源映射、远端校对、恢复拉取、原始数据清理、同步脱敏和发布矩阵状态。
+- 审计结论：当前源码已经具备 UI 人工 review 入口，来源映射页展示 job/source/file/content/archive/remote object 关系，远端校对页可调用真实百度 list/listall 并在确认短语后写入可审计修复；但干净 Windows R04-R14 矩阵仍未整体通过，不能标记为最终可交付。
+- 修复恢复页交付缺口：恢复页在本地 archive 缺失但远端 archive 已确认且带 fs_id 时，会要求授权密码，经 Cloud API 读取密文 token、本机解密后创建 `BaiduArchiveDownloader`，通过百度 `filemetas`/`dlink` 拉取 archive，再执行 archive SHA256、7-Zip、manifest 和恢复后 SHA256 校验。
+- 同步增强 `restore_cli`，新增显式 `--enable-remote-download`、Cloud API、Device Token、账号和授权密码参数，支持在命令行复跑“本地缓存缺失 -> 远端拉取 -> 恢复”验收，输出继续保持脱敏。
+- 修复原始数据清理 UI 安全缺口：永久删除默认隐藏在高级选项中；UI 执行清理前必须选中候选行，避免空选择时误清理全部候选。底层清理服务仍保持清理前身份复查、默认回收站和二次确认规则。
+- 更新 `docs/release_acceptance_matrix.md`，把 R07-R09 标记为开发机自动化已覆盖关键路径但干净机待执行，并记录本轮未删除既有百度备份结果。
+- 更新 `client/README.md`，补充恢复页/恢复 CLI 远端拉取能力和清理 UI 高级删除/候选选择门槛。
+- 已验证定向测试 `tests/test_backup_task_page.py tests/test_restore_flow.py tests/test_source_cleanup.py` 通过，17 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-audit-full` 通过，143 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证 `git diff --check` 通过。
+- Go 沙箱内 `go list runtime` 仍触发已知标准库读取权限问题；按权限流程提升后 `go list runtime` 返回 `runtime`，并在 `cloud-api/` 下 `go test ./...` 通过。
+
+提交摘要：本次提交完成 P3 阶段 14 发布交付全量审计的最小修复，补齐恢复 UI/CLI 从真实百度远端拉取 archive 的闭环，并把原始数据清理 UI 的永久删除收进高级选项、要求用户选中候选后才能执行；同时更新发布矩阵和客户端说明，明确开发机关键路径已覆盖但干净 Windows 最终验收仍未完成。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 干净 Windows 必须继续实测 R04-R14，尤其是首次启动、百度授权、真实备份、UI 校对 review、回收站清理、远端拉取恢复、升级/卸载和敏感信息审计。
+- 若用户要保留真实备份结果供人工 review，真实备份验收应使用 `--keep-remote` 或 UI 正常备份路径，不得自动执行远端清理；远端删除只在用户显式确认后执行。
 
 ### P3 阶段 14 打包发布与最终验收：云服务同步真实性审计
 
