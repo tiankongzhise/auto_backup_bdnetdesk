@@ -399,6 +399,131 @@ class SQLiteClientStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def list_remote_objects_for_reconcile(
+        self,
+        *,
+        job_id: str = "",
+        upload_session_id: str = "",
+        remote_dir: str = "",
+    ) -> list[dict[str, Any]]:
+        cleaned_job_id = job_id.strip()
+        cleaned_session_id = upload_session_id.strip()
+        cleaned_remote_dir = _normalize_remote_dir_prefix(remote_dir)
+        if sum(bool(value) for value in (cleaned_job_id, cleaned_session_id, cleaned_remote_dir)) != 1:
+            raise ValueError("exactly one of job_id, upload_session_id, or remote_dir is required")
+        with self.connect() as conn:
+            if cleaned_session_id:
+                session = conn.execute(
+                    """
+                    SELECT remote_archive_path, remote_meta_path, remote_job_index_path
+                    FROM upload_sessions
+                    WHERE upload_session_id = ?
+                    """,
+                    (cleaned_session_id,),
+                ).fetchone()
+                if session is None:
+                    return []
+                paths = (
+                    str(session["remote_archive_path"]),
+                    str(session["remote_meta_path"]),
+                    str(session["remote_job_index_path"]),
+                )
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM remote_objects
+                    WHERE remote_path IN (?, ?, ?)
+                    ORDER BY
+                        CASE object_type
+                            WHEN 'archive' THEN 1
+                            WHEN 'archive_meta' THEN 2
+                            WHEN 'job_index' THEN 3
+                            ELSE 9
+                        END,
+                        remote_object_id
+                    """,
+                    paths,
+                ).fetchall()
+                return [dict(row) for row in rows]
+            if cleaned_remote_dir:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM remote_objects
+                    WHERE remote_path = ? OR remote_path LIKE ?
+                    ORDER BY remote_path, remote_object_id
+                    """,
+                    (cleaned_remote_dir, f"{cleaned_remote_dir}/%"),
+                ).fetchall()
+                return [dict(row) for row in rows]
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM remote_objects
+                WHERE job_id = ?
+                ORDER BY
+                    CASE object_type
+                        WHEN 'archive' THEN 1
+                        WHEN 'archive_meta' THEN 2
+                        WHEN 'job_index' THEN 3
+                        ELSE 9
+                    END,
+                    remote_object_id
+                """,
+                (cleaned_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_upload_sessions_for_reconcile(
+        self,
+        *,
+        job_id: str = "",
+        upload_session_id: str = "",
+        remote_dir: str = "",
+    ) -> list[dict[str, Any]]:
+        cleaned_job_id = job_id.strip()
+        cleaned_session_id = upload_session_id.strip()
+        cleaned_remote_dir = _normalize_remote_dir_prefix(remote_dir)
+        if sum(bool(value) for value in (cleaned_job_id, cleaned_session_id, cleaned_remote_dir)) != 1:
+            raise ValueError("exactly one of job_id, upload_session_id, or remote_dir is required")
+        with self.connect() as conn:
+            if cleaned_session_id:
+                row = conn.execute(
+                    "SELECT * FROM upload_sessions WHERE upload_session_id = ?",
+                    (cleaned_session_id,),
+                ).fetchone()
+                return [dict(row)] if row is not None else []
+            if cleaned_remote_dir:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM upload_sessions
+                    WHERE remote_archive_path = ? OR remote_archive_path LIKE ?
+                       OR remote_meta_path = ? OR remote_meta_path LIKE ?
+                       OR remote_job_index_path = ? OR remote_job_index_path LIKE ?
+                    ORDER BY job_id, archive_seq, upload_session_id
+                    """,
+                    (
+                        cleaned_remote_dir,
+                        f"{cleaned_remote_dir}/%",
+                        cleaned_remote_dir,
+                        f"{cleaned_remote_dir}/%",
+                        cleaned_remote_dir,
+                        f"{cleaned_remote_dir}/%",
+                    ),
+                ).fetchall()
+                return [dict(row) for row in rows]
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM upload_sessions
+                WHERE job_id = ?
+                ORDER BY archive_seq, upload_session_id
+                """,
+                (cleaned_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def list_upload_parts(self, upload_session_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -576,3 +701,14 @@ def _update_business_sync_status(
 def _backoff_seconds(retry_count: int) -> int:
     index = max(0, min(retry_count - 1, len(RETRY_BACKOFF_SECONDS) - 1))
     return RETRY_BACKOFF_SECONDS[index]
+
+
+def _normalize_remote_dir_prefix(value: str) -> str:
+    cleaned = str(value).strip().replace("\\", "/")
+    while "//" in cleaned:
+        cleaned = cleaned.replace("//", "/")
+    if not cleaned:
+        return ""
+    if not cleaned.startswith("/"):
+        cleaned = "/" + cleaned
+    return cleaned.rstrip("/") if cleaned != "/" else cleaned

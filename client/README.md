@@ -91,6 +91,24 @@ uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_A
 
 `integration_cli` 输出只包含 Device Token 来源、账号 ID、token version、`job_id`、`upload_session_id`、对象 hash、fs_id 和上传/同步/清理计数；不会输出 Device Token、本地路径、SQLite 路径、远端真实路径、payload、百度 token、用户密码、wrapping key 或密文 envelope。
 
+## 远端对象校对 CLI
+
+`reconcile_cli remote-objects` 会读取本地 SQLite 的 `remote_objects`/`upload_sessions`，调用百度 `list/listall` 获取远端对象，并生成只读脱敏差异报告。本阶段不自动删除、覆盖、重传或写入校对结果；只输出差异状态、对象类型、远端路径 SHA256、size/md5/fs_id 差异和人工处理建议。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
+
+uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_AUTH_PASSWORD run-resumable --keep-remote
+uv run python -m auto_backup_client.baidu.reconcile_cli --password-env BAIDU_AUTH_PASSWORD remote-objects --job-id <job_id>
+uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_AUTH_PASSWORD cleanup-resumable --job-id <job_id>
+```
+
+也可使用 `--upload-session-id <upload_session_id>` 或 `--remote-dir /apps/{appname}/backups/...` 发起校对。递归 `listall` 默认按每分钟不超过 8 次限速；`--non-recursive` 可切换到单目录 `list`。输出不得包含 Device Token、百度 token、用户密码、本地路径、SQLite 路径、payload 明文或远端真实路径。
+
 ## Cloud Sync outbox 联调 CLI
 
 `sync-outbox` 会读取 `LOCAL_SQLITE_PATH` 或 `--sqlite-path`，执行 SQLite 迁移，复用运行时 `CLOUD_API_DEVICE_TOKEN` 或本机 DPAPI Device Token 凭据，然后调用真实云端 `POST /v1/sync/revisions`。输出只包含 `selected`、`sent`、`synced`、`conflicts`、`rejected`、`retryable` 和可选云端摘要校验计数，不输出 Device Token、payload、本地路径、SQLite 路径、百度 token、用户密码或 wrapping key。

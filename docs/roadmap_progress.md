@@ -10,17 +10,17 @@
 
 ## 当前工作项
 
-- 完成本次进度审计，把 Git 历史、实际代码能力、产品规格和进度文件差异写入 `docs/roadmap_progress.md`，并把后续开发必须遵循排期的约束写入 `AGENTS.MD`。
-- 下一阶段按排期进入 P0 远端对象校对 worker：使用已封装的百度 `list/listall` 能力读取任务目录或日期目录，并与本地 `remote_objects`/`upload_sessions` 做脱敏差异比对。
-- 最小化落地差异状态：优先覆盖 `consistent`、`db_exists_remote_missing`、`remote_meta_missing`、`remote_meta_mismatch`、`remote_size_mismatch`、`fs_id_changed`、`baidu_only` 和 `remote_unreadable`。
-- 继续保持 Go 边界：若仅做客户端本地校对和人工修复提示，不修改 Go 服务；若要把校对结果同步到云端新表或新增 API，必须先规划迁移和重新部署，并在本文件排期中新增说明。
+- 已完成 P0 远端对象校对 worker 第一阶段：客户端本地只读校对模块和脱敏 CLI 报告，读取本地 `remote_objects`/`upload_sessions` 并调用百度 `list/listall` 生成差异清单。
+- 本轮实现继续保持只读边界：不自动删除、覆盖、重传或写入校对结果；不修改 Go 服务端、不新增 PostgreSQL 迁移、不新增百度下载接口。
+- 校对状态已覆盖 `consistent`、`db_exists_remote_missing`、`remote_meta_missing`、`remote_meta_mismatch`、`remote_size_mismatch`、`fs_id_changed`、`baidu_only` 和 `remote_unreadable`。
+- 下一步回到 P0 远端对象校对与人工修复的后半段：基于只读报告设计人工确认/修复入口；真实 keep-remote 校对联调需在运行时凭据和授权密码可用时执行并清理远端对象。
 
 ## 本次验收标准
 
-- 本次审计必须明确项目进度文件与实际代码进度差异，并给出离完整 v1.3 发布仍缺哪些阶段。
-- 新排期必须能指导后续开发顺序，至少覆盖远端校对、主备份流程、缓存、清理恢复、打包验收和发布前文档。
-- `AGENTS.MD` 必须新增后续开发约束：必须遵循排期；临时 fix 或新增需求必须同时更新进度和排期，说明原因、影响阶段、验收标准和是否打乱既定顺序。
-- 本轮只改文档和约束，不引入产品代码行为变更；必须通过 Markdown 基础检查和 `git diff --check`。
+- 单元测试必须覆盖全部差异状态、分页、`listall` 限速、不可读目录、百度侧额外对象、缺失 `.meta.json`、size/md5/fs_id 不一致。
+- CLI 测试必须覆盖 scope 参数互斥、脱敏输出、安全错误摘要，并确认不泄露 Device Token、百度 token、用户密码、SQLite 路径、本地路径、payload 明文或远端真实路径。
+- 递归 `listall` 校对必须按产品规格默认每分钟不超过 8 次，并通过可注入 sleeper/rate limiter 测试。
+- 客户端测试、`compileall` 和仓库根目录 `git diff --check` 必须通过；真实验证若使用 `integration_cli run-resumable --keep-remote` 保留远端对象，校对后必须再用 `cleanup-resumable` 清理。
 
 ## 开发排期
 
@@ -31,7 +31,7 @@
 | P0 | 0-1 项目底座 | 仓库初始化、产品规格、Python 客户端骨架、配置加载、日志脱敏、uv 依赖 | 已完成 | 只做维护；入口 README 需保持与真实进度一致 |
 | P0 | 2 本地/云端同步底座 | SQLite 迁移、版本字段、`sync_outbox`、Go Cloud Sync、PostgreSQL revision 投影、设备认证 | 基本完成 | 后续业务表接入时必须同事务写 outbox，并用真实云端 summary 校验 |
 | P0 | 3 百度授权与上传底座 | OAuth/扫码授权、DPAPI Device Token、KDF store、token 解密、刷新租约、容量、预上传、分片、create、删除清理 | 基本完成 | 保持真实百度 API 验收；补上传失败重试 UI 和 token refresh 自动接入 |
-| P0 | 4 远端对象校对与人工修复 | 百度 `list/listall`、本地 `remote_objects` 对账、差异状态、只读报告、人工修复入口 | 列表客户端已完成；worker/UI 未开始 | worker 覆盖一致、远端缺失、meta 缺失/不匹配、size/fs_id 不一致、百度侧额外对象和不可读；不自动删除或覆盖 |
+| P0 | 4 远端对象校对与人工修复 | 百度 `list/listall`、本地 `remote_objects` 对账、差异状态、只读报告、人工修复入口 | 只读 worker/脱敏 CLI 已完成；人工修复 UI 未开始 | 后续基于报告设计人工确认与修复入口；任何删除、覆盖或重传必须用户确认并写版本记录 |
 | P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 未开始 | PySide6 主窗口可创建任务并持久化，状态不遮挡、不泄密 |
 | P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 未开始 | 单元测试覆盖路径无关指纹、symlink/junction 默认跳过、不可读不中断 |
 | P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 未开始 | 最终去重只按完整 SHA256+size；路径/时间/设备不进入内容指纹 |
@@ -64,6 +64,25 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### 远端对象校对 worker 与脱敏 CLI
+
+- 新增 `client/src/auto_backup_client/baidu/reconcile.py`，提供 `RemoteReconcileScope`、`RemoteReconcileFinding`、`RemoteReconcileReport`、`RequestRateLimiter` 和 `RemoteObjectReconciler`，按 `job_id`、`upload_session_id` 或 `remote_dir` 读取本地对象并调用百度 `list/listall` 校对。
+- 扩展 `SQLiteClientStore` 只读查询，支持按 `job_id`、`upload_session_id` 或远端目录读取 `remote_objects` 与 `upload_sessions`；不新增 SQLite schema，不写入 `sync_outbox`，不改变同步状态。
+- 差异状态覆盖 `consistent`、`db_exists_remote_missing`、`remote_meta_missing`、`remote_meta_mismatch`、`remote_size_mismatch`、`fs_id_changed`、`baidu_only` 和 `remote_unreadable`；只比较百度列表可证明的 path、size、md5 和 fs_id，不新增下载接口。
+- 新增 `client/src/auto_backup_client/baidu/reconcile_cli.py`，提供 `python -m auto_backup_client.baidu.reconcile_cli remote-objects`，复用真实云端账号解密和百度 token 流程，默认输出脱敏计数、路径 SHA256、size/md5/fs_id 差异和人工处理建议。
+- 更新 `client/README.md`，记录 `integration_cli run-resumable --keep-remote -> reconcile_cli remote-objects -> cleanup-resumable` 的真实联调顺序，并明确 `reconcile_cli` 只读、不自动删除、覆盖或重传。
+- 新增 `client/tests/test_baidu_reconcile.py` 和 `client/tests/test_baidu_reconcile_cli.py`，覆盖全部差异状态、分页、限速、不可读目录、百度侧额外对象、scope 互斥和脱敏输出。
+- 已验证 `client/` 下 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR`、仓库内临时目录执行新增定向 pytest 通过，8 个测试通过。
+- 已验证 `client/` 下同样环境执行全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-all` 通过，69 个测试通过。
+
+提交摘要：本次提交新增远端对象只读校对 worker 和脱敏 CLI，基于百度 `list/listall` 与本地 `remote_objects`/`upload_sessions` 生成差异报告，覆盖远端缺失、meta 缺失/不匹配、size/fs_id 不一致、百度侧额外对象和不可读目录；本阶段保持只读报告边界，不修改 Go 服务端或云端 schema，不自动删除、覆盖、重传或写入校对结果。
+
+后续待办：
+
+- 在运行时凭据和授权密码可用时，执行真实 `integration_cli run-resumable --keep-remote`，再按 `job_id` 运行 `reconcile_cli remote-objects`，确认 3 个远端对象 `consistent` 后用 `cleanup-resumable` 清理。
+- 设计人工确认/修复入口，把报告中的建议动作映射到用户可确认的修复流程；任何删除、覆盖、重传或本地/云端状态写入都必须形成版本记录。
+- 远端校对完成后继续推进 P1 备份任务主 UI 与任务模型，不再把联调 CLI 当作用户主流程。
 
 ### 进度审计、差异校正与后续排期约束
 
