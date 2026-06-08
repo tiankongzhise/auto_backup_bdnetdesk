@@ -12,6 +12,7 @@ Windows 桌面端百度网盘加密备份工具。
 
 ## 文档入口
 
+- `docs/user_guide.md`：普通 Windows 用户使用说明，覆盖启动、授权、备份、校对、清理、恢复和常见问题。
 - `AGENTS.MD`：项目记忆、协作规则、编码约束、提交规则和安全约束。
 - `docs/product_spec_v1.3.md`：完整产品与技术规格。
 - `docs/roadmap_progress.md`：开发排期和进度记录。
