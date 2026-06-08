@@ -19,6 +19,7 @@
 - `src/auto_backup_client/sync_cli.py`：脱敏 `sync-outbox` CLI，把本地 SQLite outbox 推送到真实云端 Cloud Sync API。
 - `src/auto_backup_client/sync_worker.py`：读取本地 `sync_outbox`、调用云端 revision API 并回写同步状态的 worker。
 - `src/auto_backup_client/backup_jobs.py`：备份任务模型服务层，负责创建任务、持久化来源和任务状态机版本化更新。
+- `src/auto_backup_client/scan_fingerprints.py`：扫描与内容指纹服务，负责递归扫描、默认跳过链接/快捷方式、记录不可读问题、计算 quick fingerprint、完整 MD5/SHA256、`content_id` 和文件夹 hash。
 - `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
@@ -36,6 +37,14 @@ uv run python -m auto_backup_client.ui.main_window
 ```
 
 `backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。
+
+## 扫描与内容指纹
+
+阶段 P1-6 已新增扫描服务和 SQLite `file_items`、`folder_items`、`scan_issues` 表。扫描服务会读取 `backup_sources.local_path`，默认递归普通目录，跳过 symlink、junction 和 `.lnk` 快捷方式；遇到不可读文件或目录时写入 `scan_issues`，不会中断同一任务继续扫描其他来源或文件。
+
+内容指纹只描述文件字节内容，不包含路径、文件名、时间、设备或任务信息。完整文件身份为 `md5(full_bytes)`、`sha256(full_bytes)` 和 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`；快速指纹只用于后续候选筛选，不作为最终去重依据。`file_items.local_path`、`folder_items.local_path` 和 `scan_issues.local_path` 只保存在本地 SQLite，`sync_outbox.payload_json` 会过滤本地路径。
+
+本阶段不执行去重索引、7-Zip 归档、manifest 文件生成、百度上传、缓存清理或恢复；后续 P1-7 到 P1-9 会把扫描结果继续接入去重、归档和端到端编排。
 
 ## PySide6 百度设置页
 

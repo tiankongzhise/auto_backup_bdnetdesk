@@ -14,9 +14,11 @@ from typing import Any, Iterator, Mapping, Sequence
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
 CLIENT_SCHEMA_VERSION = 1
-LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "uploadid", "error_message"})
+LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "local_path", "uploadid", "error_message"})
 SYNC_ENTITY_TABLES = {
     "backup_jobs": "backup_jobs",
+    "file_items": "file_items",
+    "folder_items": "folder_items",
     "upload_sessions": "upload_sessions",
     "upload_parts": "upload_parts",
     "remote_objects": "remote_objects",
@@ -332,6 +334,78 @@ class SQLiteClientStore:
     def put_backup_source(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
         _put_row(conn, "backup_sources", dict(payload), key_field="backup_source_id")
 
+    def replace_scan_results_for_source(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        backup_job_id: str,
+        backup_source_id: str,
+    ) -> dict[str, int]:
+        next_versions: dict[str, int] = {}
+        for table, key_field in (("file_items", "file_item_id"), ("folder_items", "folder_item_id")):
+            rows = conn.execute(
+                f"""
+                SELECT {key_field}, data_version
+                FROM {table}
+                WHERE backup_job_id = ? AND backup_source_id = ?
+                """,
+                (backup_job_id, backup_source_id),
+            ).fetchall()
+            for row in rows:
+                next_versions[str(row[key_field])] = int(row["data_version"]) + 1
+            conn.execute(
+                f"""
+                DELETE FROM {table}
+                WHERE backup_job_id = ? AND backup_source_id = ?
+                """,
+                (backup_job_id, backup_source_id),
+            )
+        conn.execute(
+            """
+            DELETE FROM scan_issues
+            WHERE backup_job_id = ? AND backup_source_id = ?
+            """,
+            (backup_job_id, backup_source_id),
+        )
+        return next_versions
+
+    def put_file_item(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+        row = dict(payload)
+        _put_row(conn, "file_items", row, key_field="file_item_id")
+        record = revision_from_payload(
+            entity_type="file_items",
+            entity_id=str(row["entity_id"]),
+            revision_id=str(row["revision_id"]),
+            schema_version=int(row["schema_version"]),
+            data_version=int(row["data_version"]),
+            canonical_record_sha256=str(row["canonical_record_sha256"]),
+            payload=row,
+            updated_at=str(row["updated_at"]),
+            deleted_at=row.get("deleted_at"),
+        )
+        self.enqueue_revision(conn, record)
+        return record
+
+    def put_folder_item(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+        row = dict(payload)
+        _put_row(conn, "folder_items", row, key_field="folder_item_id")
+        record = revision_from_payload(
+            entity_type="folder_items",
+            entity_id=str(row["entity_id"]),
+            revision_id=str(row["revision_id"]),
+            schema_version=int(row["schema_version"]),
+            data_version=int(row["data_version"]),
+            canonical_record_sha256=str(row["canonical_record_sha256"]),
+            payload=row,
+            updated_at=str(row["updated_at"]),
+            deleted_at=row.get("deleted_at"),
+        )
+        self.enqueue_revision(conn, record)
+        return record
+
+    def put_scan_issue(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
+        _put_row(conn, "scan_issues", dict(payload), key_field="scan_issue_id")
+
     def get_backup_job(self, backup_job_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(
@@ -363,6 +437,45 @@ class SQLiteClientStore:
                 FROM backup_sources
                 WHERE backup_job_id = ?
                 ORDER BY source_seq, backup_source_id
+                """,
+                (backup_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_file_items(self, backup_job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM file_items
+                WHERE backup_job_id = ?
+                ORDER BY source_seq, relative_path, file_item_id
+                """,
+                (backup_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_folder_items(self, backup_job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM folder_items
+                WHERE backup_job_id = ?
+                ORDER BY source_seq, relative_path, folder_item_id
+                """,
+                (backup_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_scan_issues(self, backup_job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM scan_issues
+                WHERE backup_job_id = ?
+                ORDER BY backup_source_id, relative_path, scan_issue_id
                 """,
                 (backup_job_id,),
             ).fetchall()
