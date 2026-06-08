@@ -10,18 +10,17 @@
 
 ## 当前工作项
 
-- P1 阶段 9 端到端备份编排真实百度全链路补测完成；下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理。
-- 本轮属于用户明确要求插入的真实联调补测，不改变主排期；已在进入 P2 阶段 10 前，把 `BackupPipeline` 主流程的真实百度上传验收补齐为可复跑入口。
-- 本轮已新增真实全链路测试 CLI，使用本机 DPAPI Device Token、KDF store 和运行时授权密码，生成临时源文件后执行扫描、内容去重、7-Zip 加密归档、真实百度可恢复上传、Cloud Sync、远端校对、同路径冲突探针和百度 `filemanager/delete` 清理；同时补齐完成状态 final sync。
-- 下一阶段开始前必须把“本次开发阶段：P2 阶段 10 缓存额度与 artifact 管理”写入当前工作项，并同步计划修改范围和验收标准。
+- 本次开发阶段：P1 阶段 9 长路径公共 API 硬化。
+- 本轮属于进入 P2 阶段 10 前的安全性/可维护性前置修复，不改变主排期；完成后立即回到 P2 阶段 10 缓存额度与 artifact 管理。
+- 计划修改范围：新增客户端公共本地文件访问工具，集中 Windows `\\?\` 长路径包装；替换 `archive_packager.py`、`baidu/upload.py`、`baidu/resumable_upload.py` 中重复 `_fs_path` 实现；补充长路径文件访问单元测试。
+- 约束：数据库、日志和 CLI 输出仍保存普通本地路径，不把 `\\?\` 前缀写入业务状态或用户可见输出。
 
 ## 本次验收标准
 
-- 真实全链路补测已验收：新增 CLI 能生成小文件和跨分片随机源文件，执行 `scan -> dedupe -> 7-Zip archive -> quota -> precreate/resume -> locateupload -> superfile2 -> create -> .meta.json -> job.index.json -> sync-outbox -> cloud-summary -> baidu listall reconcile -> completed -> final sync -> conflict probe -> filemanager/delete cleanup`。
-- 真实全链路补测已验收：跨分片 archive 实际上传 `uploaded_part_count=2`；`.meta.json` 和 `job.index.json` 真实上传并返回 fs_id；同路径 `rtype=0` 冲突探针返回百度错误 `-8`；远端校对 3 个对象全部 `consistent`；清理删除本批 3 个远端对象且 `cleanup_delete_errno=0`。
-- 真实全链路补测已验收：完成状态写入后的最终 job revision 已通过 `/v1/reconcile/entities/{entity_id}` 校验 `completed_job_cloud_summary_verified=true`；同步总计 `sync_selected=25`、`sync_synced=25`、无 conflict/rejected/retryable。
-- 真实全链路补测已验收：入口默认使用本机已有 DPAPI Device Token 和 KDF store，可从本地忽略的 `client/.env` 读取 `BAIDU_AUTH_PASSWORD`，输出未写入密钥、token、真实本地路径或真实远端路径。
-- 已验证客户端定向测试 `tests/test_backup_pipeline.py tests/test_real_backup_pipeline_test_cli.py tests/test_backup_pipeline_cli.py` 通过，9 个测试通过。
+- 长路径公共 API 已验收：统一工具能对超过 Windows 普通路径限制的文件执行 open/stat/exists/is_file/replace/rmtree/mtime 操作。
+- 长路径公共 API 已验收：归档打包、百度分片上传计划和可恢复上传 archive hash/mtime 均复用公共工具，不再保留重复 `_fs_path` 实现。
+- 长路径公共 API 已验收：测试确认业务路径字符串仍为普通路径，不含 `\\?\` 前缀。
+- 已验证客户端长路径定向测试、相关归档/上传测试和 `git diff --check` 通过。
 
 ## 开发排期
 
@@ -85,6 +84,22 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P1 阶段 9 长路径公共 API 硬化
+
+- P1 阶段 9 长路径公共 API 硬化完成；下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理。
+- 新增 `client/src/auto_backup_client/local_fs.py`，集中封装 Windows `\\?\` 长路径包装以及 open/stat/exists/is_file/mkdir/unlink/rmtree/replace 等本地文件操作。
+- `archive_packager.py`、`baidu/upload.py` 和 `baidu/resumable_upload.py` 已改为复用公共本地文件工具，移除重复 `_fs_path` 实现。
+- 归档流程的 manifest 写入、staging payload 复制、临时目录创建/删除、archive rename/stat/hash，以及百度上传分片读取和 mtime 读取均通过同一长路径安全层。
+- 新增 `client/tests/test_local_fs.py`，覆盖超过 260 字符路径下的 open/stat/exists/is_file/replace/rmtree/mtime 行为，并确认业务路径字符串不包含 `\\?\` 前缀。
+- 已验证客户端定向测试 `tests/test_local_fs.py tests/test_archive_packager.py tests/test_baidu_upload.py tests/test_baidu_resumable_upload.py` 通过，22 个测试通过。
+
+提交摘要：本次提交把 P1-9 真实全链路暴露出的 Windows 长路径访问逻辑收口为公共 `local_fs` 工具层，归档和百度上传链路不再各自维护 `_fs_path`，为 P2 阶段 10 的缓存 artifact 生命周期与清理逻辑提供统一文件访问基础。
+
+后续待办：
+
+- 下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理；下一轮开始前必须在当前工作项写明“本次开发阶段：P2 阶段 10 缓存额度与 artifact 管理”。
+- P2 阶段 10 新增的 artifact 统计、清理和 pipeline 预算检查必须复用 `local_fs`，不得重新引入模块内 `_fs_path`。
 
 ### P1 阶段 9 端到端备份编排
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from auto_backup_client import local_fs
 from auto_backup_client.sqlite_store import (
     SQLiteClientStore,
     build_version_fields,
@@ -182,19 +183,21 @@ class ArchivePackager:
         _reset_dir(manifest_plain_dir)
         _reset_dir(staging_dir)
         _reset_dir(verify_dir)
-        archives_dir.mkdir(parents=True, exist_ok=True)
+        local_fs.make_dirs(archives_dir)
 
         manifest_plain_path = manifest_plain_dir / "manifest.json"
-        manifest_plain_path.write_text(manifest_text, encoding="utf-8")
+        with local_fs.open_file(manifest_plain_path, "w", encoding="utf-8") as handle:
+            handle.write(manifest_text)
         staging_manifest = staging_dir / "manifest" / "manifest.json"
-        staging_manifest.parent.mkdir(parents=True, exist_ok=True)
-        staging_manifest.write_text(manifest_text, encoding="utf-8")
+        local_fs.make_dirs(staging_manifest.parent)
+        with local_fs.open_file(staging_manifest, "w", encoding="utf-8") as handle:
+            handle.write(manifest_text)
 
         payload_refs = _payload_references(context.file_references)
         payload_members = _stage_payload_members(payload_refs, staging_dir / "payload")
 
-        if temp_archive.exists():
-            temp_archive.unlink()
+        if local_fs.exists(temp_archive):
+            local_fs.unlink(temp_archive)
         try:
             self.runner.create_archive(archive_path=temp_archive, staging_dir=staging_dir, password=password)
             archive_sha256 = file_sha256(temp_archive)
@@ -210,8 +213,8 @@ class ArchivePackager:
             if file_sha256(extracted_manifest) != manifest_sha256:
                 raise ArchivePackagingError("archive manifest hash mismatch after extraction")
         except Exception:
-            if temp_archive.exists():
-                temp_archive.unlink()
+            if local_fs.exists(temp_archive):
+                local_fs.unlink(temp_archive)
             raise
         finally:
             _remove_dir(manifest_plain_dir)
@@ -396,7 +399,7 @@ def resolve_7zip_executable(candidate: str | Path | None = None) -> Path:
 
 def file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
-    with open(_fs_path(Path(path)), "rb") as handle:
+    with local_fs.open_file(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -404,7 +407,7 @@ def file_sha256(path: str | Path) -> str:
 
 def file_md5(path: str | Path) -> str:
     digest = hashlib.md5()
-    with open(_fs_path(Path(path)), "rb") as handle:
+    with local_fs.open_file(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -566,16 +569,16 @@ def _stage_payload_members(payload_refs: Sequence[Mapping[str, Any]], payload_di
     members: dict[str, str] = {}
     for ref in payload_refs:
         source = Path(str(ref["local_path"]))
-        if not os.path.isfile(_fs_path(source)):
+        if not local_fs.is_file(source):
             raise ArchivePackagingError("payload source file is missing")
         expected_size = int(ref["size_bytes"])
         if _file_size(source) != expected_size or file_sha256(source) != str(ref["file_sha256"]):
             raise ArchivePackagingError("payload source file changed after scan")
         content_id = str(ref["content_id"])
-        payload_dir.mkdir(parents=True, exist_ok=True)
+        local_fs.make_dirs(payload_dir)
         target = payload_dir / content_id
-        if not os.path.exists(_fs_path(target)):
-            with open(_fs_path(source), "rb") as src, open(_fs_path(target), "wb") as dst:
+        if not local_fs.exists(target):
+            with local_fs.open_file(source, "rb") as src, local_fs.open_file(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)
         members[content_id] = _payload_member_path(content_id)
     return members
@@ -659,29 +662,16 @@ def _reject_secret_keys(value: Any) -> None:
 
 def _reset_dir(path: Path) -> None:
     _remove_dir(path)
-    path.mkdir(parents=True, exist_ok=True)
+    local_fs.make_dirs(path)
 
 
 def _remove_dir(path: Path) -> None:
-    if os.path.exists(_fs_path(path)):
-        shutil.rmtree(_fs_path(path))
+    local_fs.remove_tree(path)
 
 
 def _replace_file(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(_fs_path(source), _fs_path(target))
+    local_fs.replace_file(source, target)
 
 
 def _file_size(path: Path) -> int:
-    return int(os.stat(_fs_path(path)).st_size)
-
-
-def _fs_path(path: Path) -> str:
-    if os.name != "nt":
-        return str(path)
-    resolved = str(path.resolve())
-    if resolved.startswith("\\\\?\\"):
-        return resolved
-    if resolved.startswith("\\\\"):
-        return "\\\\?\\UNC\\" + resolved[2:]
-    return "\\\\?\\" + resolved
+    return local_fs.file_size(path)
