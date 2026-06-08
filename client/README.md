@@ -26,15 +26,16 @@
 - `src/auto_backup_client/cache_artifacts.py`：缓存 artifact 登记、预算检查、缓存等级和清理服务。
 - `src/auto_backup_client/cache_artifacts_cli.py`：缓存状态和清理 CLI，输出只包含大小、状态和路径 hash。
 - `src/auto_backup_client/source_mapping.py`：来源映射只读聚合服务，面向 UI 展示 job/source/file/content/archive/remote object 关系。
+- `src/auto_backup_client/source_cleanup.py`：原始数据清理候选、清理前源文件身份复查、回收站/隔离目录/高级永久删除执行和版本化清理记录。
 - `src/auto_backup_client/backup_pipeline.py`：端到端备份编排服务，负责串联扫描、去重、归档、可选真实百度上传、可选 outbox 同步和可选远端校对。
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
-- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页和远端校对页；远端校对页复用底层校对/修复服务，写入前要求确认短语。
+- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页、远端校对页和原始数据清理页；远端校对和清理写入前都要求确认短语。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
 ## PySide6 主窗口
 
-主窗口提供备份任务、百度设置、来源映射和远端校对入口。备份任务页支持选择/拖拽来源、创建任务、开始、暂停、继续和取消；端到端执行仍由 `backup_pipeline_cli` 和后续任务编排入口承载。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。
+主窗口提供备份任务、百度设置、来源映射、远端校对和原始数据清理入口。备份任务页支持选择/拖拽来源、创建任务、开始、暂停、继续和取消；端到端执行仍由 `backup_pipeline_cli` 和后续任务编排入口承载。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；隔离目录和永久删除需要显式选择，永久删除还要求额外确认短语。
 
 ```powershell
 cd client
@@ -51,7 +52,7 @@ uv run python -m auto_backup_client.ui.main_window
 
 阶段 P1-6 已新增扫描服务和 SQLite `file_items`、`folder_items`、`scan_issues` 表。扫描服务会读取 `backup_sources.local_path`，默认递归普通目录，跳过 symlink、junction 和 `.lnk` 快捷方式；遇到不可读文件或目录时写入 `scan_issues`，不会中断同一任务继续扫描其他来源或文件。
 
-内容指纹只描述文件字节内容，不包含路径、文件名、时间、设备或任务信息。完整文件身份为 `md5(full_bytes)`、`sha256(full_bytes)` 和 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`；快速指纹只用于后续候选筛选，不作为最终去重依据。`file_items.local_path`、`folder_items.local_path` 和 `scan_issues.local_path` 只保存在本地 SQLite，`sync_outbox.payload_json` 会过滤本地路径。
+内容指纹只描述文件字节内容，不包含路径、文件名、时间、设备或任务信息。完整文件身份为 `md5(full_bytes)`、`sha256(full_bytes)` 和 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`；快速指纹只用于后续候选筛选，不作为最终去重依据。`file_items` 同时记录 Windows volume serial 和 file index，供断点复用和原始数据清理前复查。`file_items.local_path`、`folder_items.local_path` 和 `scan_issues.local_path` 只保存在本地 SQLite，`sync_outbox.payload_json` 会过滤本地路径。
 
 阶段 P1-7 已新增内容级去重索引。`content_objects` 是版本化同步实体，会同事务写入 `sync_outbox`，payload 包含 `content_id`、`file_sha256` 和 `size_bytes`，用于云端跨设备去重索引；`content_references` 记录每个来源文件的引用、清理状态和恢复状态，本地绝对路径只保存在 SQLite，不进入同步 payload。
 
@@ -108,6 +109,16 @@ uv run python -m auto_backup_client.cache_artifacts_cli --cache-root ..\var\cach
 ```
 
 缓存等级按产品规格分为 `sufficient`、`medium`、`tight` 和 `critical`。`BackupPipeline` 在新任务扫描、哈希、压缩前检查有效预算；低于 40GiB 或进入 critical 状态时会拒绝启动新任务。完成后可传 `--cleanup-cache-artifacts` 执行安全清理，或配合 `--cleanup-cache-dry-run` 只输出清理计划。CLI 只输出大小、数量、等级和路径 SHA256，不输出真实缓存路径。
+
+## 原始数据清理
+
+阶段 P2-12 新增 `source_cleanup_records` 同步实体和原始数据清理服务。清理只由用户手动触发，候选必须同时满足：job 已 `completed`、archive 标准验证通过、上传状态为 `remote_created`、`.meta.json` 与 `job.index.json` 已上传、本地 `remote_objects` 三类对象均为 `remote_created`。若 job 或清理记录仍待云端同步，UI 会显示 `sync_pending` 提示，但只要本地记录完整仍允许清理。
+
+清理执行前会复查源文件 `size`、`mtime_ns`、Windows volume serial 和 file index；任何不一致都会禁止移动/删除并写入 failed 清理记录。默认方式是 Windows 回收站，底层使用 `SHFileOperationW` 并设置 `FOF_ALLOWUNDO`；隔离目录会把文件移动到用户指定目录下的 job 子目录；永久删除是高级选项，执行时必须同时填写 `CLEANUP_SOURCES` 和 `PERMANENT_DELETE_SOURCES`。
+
+Windows API 实现依据来自 Microsoft Learn：[`SHFileOperationW`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shfileoperationw) 用于文件操作，`FOF_ALLOWUNDO` 使删除进入回收站；[`GetFileInformationByHandle`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle) / [`BY_HANDLE_FILE_INFORMATION`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/ns-fileapi-by_handle_file_information) 提供 volume serial 和 file index。
+
+每次实际执行都会写入 `source_cleanup_records`，并同事务写入 `sync_outbox`；同步 payload 不包含完整原始路径或隔离目录路径，只保留路径 SHA256、文件名、清理状态、方法、操作者、清理前大小/SHA256/mtime 和文件身份摘要。`content_references.cleanup_status` 会更新为 `cleaned` 或 `cleanup_failed`，来源映射页可继续展示清理状态。
 
 真实全链路测试入口：
 

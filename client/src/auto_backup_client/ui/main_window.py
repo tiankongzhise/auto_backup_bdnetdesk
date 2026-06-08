@@ -52,6 +52,7 @@ from auto_backup_client.backup_jobs import (
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.source_mapping import SourceMappingQuery, SourceMappingReport, path_digest, short_digest
+from auto_backup_client.source_cleanup import CLEANUP_CONFIRM_TEXT, PERMANENT_DELETE_CONFIRM_TEXT, SourceCleanupService
 from auto_backup_client.sqlite_store import SQLiteClientStore
 from auto_backup_client.ui.baidu_settings import BaiduSettingsPage, BaiduSettingsPageConfig
 
@@ -595,6 +596,158 @@ class RemoteReconcilePage(QWidget):
         QMessageBox.warning(self, "提示", message)
 
 
+class SourceCleanupPage(QWidget):
+    status_changed = Signal(str)
+
+    def __init__(self, store: SQLiteClientStore, *, device_id: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._service = SourceCleanupService(store, device_id=device_id or "current-device")
+        self._candidates = []
+        self._build_ui()
+        self.refresh_candidates()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("原始数据清理")
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("任务 ID"))
+        self.job_id_input = QLineEdit()
+        self.job_id_input.setPlaceholderText("留空显示最近候选")
+        filters.addWidget(self.job_id_input, stretch=2)
+        filters.addWidget(QLabel("关键字"))
+        self.keyword_input = QLineEdit()
+        self.keyword_input.setPlaceholderText("任务名、文件名、relative path、content hash")
+        filters.addWidget(self.keyword_input, stretch=2)
+        self.refresh_button = QPushButton("刷新")
+        self.refresh_button.clicked.connect(self.refresh_candidates)
+        filters.addWidget(self.refresh_button)
+        layout.addLayout(filters)
+
+        method_group = QGroupBox("清理方式")
+        form = QFormLayout(method_group)
+        self.method_combo = QComboBox()
+        self.method_combo.addItem("移入回收站", "recycle_bin")
+        self.method_combo.addItem("移动到隔离目录", "quarantine")
+        self.method_combo.addItem("永久删除", "permanent_delete")
+        self.quarantine_input = QLineEdit()
+        self.quarantine_input.setPlaceholderText("仅隔离目录方式需要")
+        self.choose_quarantine_button = QPushButton("选择")
+        self.choose_quarantine_button.clicked.connect(self.choose_quarantine_dir)
+        quarantine_row = QHBoxLayout()
+        quarantine_row.addWidget(self.quarantine_input, stretch=1)
+        quarantine_row.addWidget(self.choose_quarantine_button)
+        self.operator_input = QLineEdit("local-user")
+        self.confirm_input = QLineEdit()
+        self.confirm_input.setPlaceholderText(CLEANUP_CONFIRM_TEXT)
+        self.permanent_confirm_input = QLineEdit()
+        self.permanent_confirm_input.setPlaceholderText(PERMANENT_DELETE_CONFIRM_TEXT)
+        form.addRow("方式", self.method_combo)
+        form.addRow("隔离目录", quarantine_row)
+        form.addRow("操作人", self.operator_input)
+        form.addRow("清理确认", self.confirm_input)
+        form.addRow("永久删除确认", self.permanent_confirm_input)
+        layout.addWidget(method_group)
+
+        toolbar = QHBoxLayout()
+        self.dry_run_button = QPushButton("预演")
+        self.dry_run_button.clicked.connect(lambda: self.apply_cleanup(dry_run=True))
+        self.apply_button = QPushButton("执行清理")
+        self.apply_button.clicked.connect(lambda: self.apply_cleanup(dry_run=False))
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.dry_run_button)
+        toolbar.addWidget(self.apply_button)
+        layout.addLayout(toolbar)
+
+        self.summary_label = QLabel("尚未加载")
+        layout.addWidget(self.summary_label)
+
+        self.candidates_table = QTableWidget(0, 10)
+        self.candidates_table.setHorizontalHeaderLabels(["状态", "警告", "任务", "文件名", "大小", "SHA256", "路径", "上传", "远端", "原因"])
+        self.candidates_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.candidates_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.candidates_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.candidates_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.candidates_table, stretch=1)
+
+    @Slot()
+    def refresh_candidates(self) -> None:
+        try:
+            report = self._service.list_candidates(
+                backup_job_id=self.job_id_input.text(),
+                keyword=self.keyword_input.text(),
+                limit=500,
+            )
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        self._candidates = list(report.candidates)
+        self.summary_label.setText(
+            f"候选 {len(report.candidates)} / 可清理 {report.eligible_count} / 阻塞 {report.blocked_count} / 云端索引待同步提示 {report.sync_pending_count}"
+        )
+        self.candidates_table.setRowCount(len(self._candidates))
+        for row_index, candidate in enumerate(self._candidates):
+            values = [
+                "可清理" if candidate.eligible else candidate.candidate_status,
+                "sync_pending" if candidate.sync_pending_warning else "",
+                candidate.job_name,
+                candidate.display_name,
+                str(candidate.size_bytes),
+                short_digest(candidate.sha256),
+                short_digest(candidate.path_sha256),
+                f"{candidate.upload_status}/{candidate.meta_status}/{candidate.job_index_status}",
+                f"{candidate.remote_archive_status}/{candidate.remote_meta_status}/{candidate.remote_job_index_status}",
+                candidate.reason,
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, candidate.content_reference_id)
+                self.candidates_table.setItem(row_index, col, item)
+        self.status_changed.emit(f"清理候选已刷新：可清理 {report.eligible_count} 条。")
+
+    @Slot()
+    def choose_quarantine_dir(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择隔离目录")
+        if directory:
+            self.quarantine_input.setText(directory)
+
+    @Slot()
+    def apply_cleanup(self, *, dry_run: bool) -> None:
+        selected_ids = tuple(
+            str(self.candidates_table.item(row, 0).data(Qt.ItemDataRole.UserRole))
+            for row in sorted({index.row() for index in self.candidates_table.selectedIndexes()})
+            if self.candidates_table.item(row, 0) is not None
+        )
+        try:
+            result = self._service.apply(
+                backup_job_id=self.job_id_input.text(),
+                content_reference_ids=selected_ids,
+                method=self.method_combo.currentData(),
+                quarantine_dir=self.quarantine_input.text(),
+                cleanup_operator=self.operator_input.text(),
+                confirm_text=self.confirm_input.text(),
+                permanent_confirm_text=self.permanent_confirm_input.text(),
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        if dry_run:
+            self.status_changed.emit(f"清理预演完成：将处理 {result.requested_count} 条。")
+            return
+        self.status_changed.emit(f"清理完成：成功 {result.applied_count}，失败 {result.failed_count}。")
+        self.refresh_candidates()
+
+    def _warn(self, message: str) -> None:
+        self.status_changed.emit(message)
+        QMessageBox.warning(self, "提示", message)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: MainWindowConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -617,6 +770,7 @@ class MainWindow(QMainWindow):
             device_token=config.device_token,
             device_id=config.device_id,
         )
+        self._cleanup_page = SourceCleanupPage(self._store, device_id=config.device_id)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -632,6 +786,7 @@ class MainWindow(QMainWindow):
         self.nav.addItem(QListWidgetItem("百度设置"))
         self.nav.addItem(QListWidgetItem("来源映射"))
         self.nav.addItem(QListWidgetItem("远端校对"))
+        self.nav.addItem(QListWidgetItem("原始数据清理"))
         self.nav.currentRowChanged.connect(self._set_current_page)
         layout.addWidget(self.nav)
 
@@ -640,12 +795,14 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._baidu_page)
         self.stack.addWidget(self._source_mapping_page)
         self.stack.addWidget(self._reconcile_page)
+        self.stack.addWidget(self._cleanup_page)
         layout.addWidget(self.stack, stretch=1)
 
         self.status_label = QLabel("准备就绪")
         self._backup_page.status_changed.connect(self.status_label.setText)
         self._source_mapping_page.status_changed.connect(self.status_label.setText)
         self._reconcile_page.status_changed.connect(self.status_label.setText)
+        self._cleanup_page.status_changed.connect(self.status_label.setText)
         self.setCentralWidget(shell)
         self.statusBar().addPermanentWidget(self.status_label, stretch=1)
         self.nav.setCurrentRow(0)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, Sequence
 
 from auto_backup_client.backup_jobs import BackupJobError, BackupJobWithSources, path_sha256
+from auto_backup_client.file_identity import read_file_identity
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields, new_id, stable_json_dumps, utc_now_iso
 
 
@@ -525,6 +526,7 @@ def _file_payload(
     data_version: int,
 ) -> dict[str, object]:
     stat_result = file_draft.fingerprint.stat_after
+    file_identity = read_file_identity(file_draft.local_path)
     return build_version_fields(
         entity_payload={
             "file_item_id": file_draft.file_item_id,
@@ -543,6 +545,8 @@ def _file_payload(
             "mtime_ns": _mtime_ns(stat_result),
             "atime_ns": _atime_ns(stat_result),
             "file_attrs": _file_attrs(stat_result),
+            "file_volume_serial": file_identity.volume_serial,
+            "file_index": file_identity.file_index,
             "quick_fingerprint": file_draft.fingerprint.quick_fingerprint,
             "quick_sample_count": file_draft.fingerprint.quick_sample_count,
             "quick_sample_size": file_draft.fingerprint.quick_sample_size,

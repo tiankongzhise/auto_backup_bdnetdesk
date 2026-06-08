@@ -14,13 +14,23 @@ from typing import Any, Iterator, Mapping, Sequence
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
 CLIENT_SCHEMA_VERSION = 1
-LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "local_path", "uploadid", "error_message"})
+LOCAL_ONLY_SYNC_FIELDS = frozenset(
+    {
+        "error_message",
+        "local_archive_path",
+        "local_path",
+        "original_path",
+        "quarantine_path",
+        "uploadid",
+    }
+)
 SYNC_ENTITY_TABLES = {
     "archives": "archives",
     "backup_jobs": "backup_jobs",
     "content_objects": "content_objects",
     "file_items": "file_items",
     "folder_items": "folder_items",
+    "source_cleanup_records": "source_cleanup_records",
     "upload_sessions": "upload_sessions",
     "upload_parts": "upload_parts",
     "remote_objects": "remote_objects",
@@ -493,6 +503,26 @@ class SQLiteClientStore:
     def put_content_reference(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
         _put_row(conn, "content_references", dict(payload), key_field="content_reference_id")
 
+    def update_content_reference_cleanup_status(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        content_reference_id: str,
+        cleanup_status: str,
+        updated_at: str,
+        updated_by_device_id: str,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE content_references
+            SET cleanup_status = ?,
+                updated_at = ?,
+                updated_by_device_id = ?
+            WHERE content_reference_id = ?
+            """,
+            (cleanup_status, updated_at, updated_by_device_id, content_reference_id),
+        )
+
     def update_content_reference_archive(
         self,
         conn: sqlite3.Connection,
@@ -697,6 +727,51 @@ class SQLiteClientStore:
                 """,
                 (backup_job_id,),
             ).fetchall()
+            return [dict(row) for row in rows]
+
+    def put_source_cleanup_record(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+        row = dict(payload)
+        _put_row(conn, "source_cleanup_records", row, key_field="source_cleanup_record_id")
+        record = revision_from_payload(
+            entity_type="source_cleanup_records",
+            entity_id=str(row["entity_id"]),
+            revision_id=str(row["revision_id"]),
+            schema_version=int(row["schema_version"]),
+            data_version=int(row["data_version"]),
+            canonical_record_sha256=str(row["canonical_record_sha256"]),
+            payload=row,
+            updated_at=str(row["updated_at"]),
+            deleted_at=row.get("deleted_at"),
+        )
+        self.enqueue_revision(conn, record)
+        return record
+
+    def list_source_cleanup_records(self, backup_job_id: str = "", *, limit: int = 500) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5000:
+            raise ValueError("source cleanup record list limit must be between 1 and 5000")
+        cleaned_job_id = backup_job_id.strip()
+        with self.connect() as conn:
+            if cleaned_job_id:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM source_cleanup_records
+                    WHERE backup_job_id = ?
+                    ORDER BY updated_at DESC, source_cleanup_record_id DESC
+                    LIMIT ?
+                    """,
+                    (cleaned_job_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM source_cleanup_records
+                    ORDER BY updated_at DESC, source_cleanup_record_id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
             return [dict(row) for row in rows]
 
     def get_backup_job(self, backup_job_id: str) -> dict[str, Any] | None:

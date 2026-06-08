@@ -4,25 +4,25 @@
 
 ## 当前阶段
 
-2026-06-08 进度审计结论：项目已经完成云端同步服务、真实云端部署联调、百度授权与账号选择、本机 Device Token/KDF 凭据、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、`sync_outbox` worker、脱敏 `sync-outbox` CLI、百度 `list/listall` 客户端列表能力、远端对象校对与人工修复入口、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理。当前已经完成 P2 阶段 10，尚未进入完整桌面端备份产品可发布状态。
+2026-06-08 进度审计结论：项目已经完成云端同步服务、真实云端部署联调、百度授权与账号选择、本机 Device Token/KDF 凭据、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、`sync_outbox` worker、脱敏 `sync-outbox` CLI、百度 `list/listall` 客户端列表能力、远端对象校对与人工修复入口、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对 UI、原始数据清理服务与 UI。当前已经完成 P2 阶段 12，尚未进入完整桌面端备份产品可发布状态。
 
-离完整完成开发计划的主要缺口：原始数据清理、恢复流程、打包发布和端到端验收。按产品规格 v1.3 的阶段拆分估算，离可交付仍约剩 20%-25%；最大风险集中在原始数据清理前复查、恢复正确性和最终打包验收。
+离完整完成开发计划的主要缺口：恢复流程、打包发布和端到端验收。按产品规格 v1.3 的阶段拆分估算，离可交付仍约剩 15%-20%；最大风险集中在恢复正确性、恢复冲突策略和最终打包验收。
 
 ## 当前工作项
 
-- P2 阶段 11 来源映射和校对 UI 开发完成；下一个开发阶段为 P2 阶段 12 原始数据清理。
-- 本轮属于主排期 P2 阶段 11，不改变阶段顺序；已修复 README 当前状态落后于实际代码的问题，并实现来源映射页和远端校对页。
-- 本轮已新增面向 UI 的来源映射只读聚合服务；PySide6 主窗口已增加“来源映射”和“远端校对”页面；远端校对页复用现有 `RemoteObjectReconciler` 与 `RemoteObjectRepairer`，只开放可审计本地修复动作。
-- 本阶段未新增 Go API、未修改云端 schema、未实现原始数据清理、未实现恢复、未做自动重传或数据库灾备重建；这些分别留给 P2-12、P2-13 和后续排障阶段。
-- 下一阶段开始前必须把“本次开发阶段：P2 阶段 12 原始数据清理”写入当前工作项，并同步计划修改范围和验收标准。
+- P2 阶段 12 原始数据清理开发完成；下一个开发阶段为 P2 阶段 13 恢复流程。
+- 本轮属于主排期 P2 阶段 12，不改变阶段顺序；已实现手动触发的原始数据清理候选、清理前复查、回收站/隔离目录/高级永久删除入口和版本化清理记录。
+- 本轮已新增 `source_cleanup_records` 同步实体、文件身份复查、原始数据清理服务和 PySide6 原始数据清理页。
+- 本阶段未新增 Go API、未修改云端 schema、未实现恢复流程、未实现自动定时清理；云端同步仍通过现有 `sync_outbox` revision ingest 表达 `source_cleanup_records`。
+- 下一阶段开始前必须把“本次开发阶段：P2 阶段 13 恢复流程”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- P2-11 已验收：README 当前状态与实际 P2-10 进度一致，不再把已经完成的备份主 UI、扫描、去重、7-Zip/manifest 和缓存管理列为未完成。
-- P2-11 已验收：来源映射页能展示 job、source、file/content/archive/member/remote object 关联，支持按任务和关键字筛选，默认只展示路径 hash、文件名、状态和远端路径 hash。
-- P2-11 已验收：远端校对页能按 job、upload session 或 remote dir 发起校对，展示差异状态、建议和修复候选；默认 dry-run。
-- P2-11 已验收：远端校对页只有在用户填写确认短语后，才允许写入现有可审计动作：标记远端缺失、接受百度 `size/md5/fs_id` 元数据；写入时必须同事务更新 `remote_objects` 和 `sync_outbox`。
-- P2-11 已验收：客户端来源映射/校对 UI 与服务测试、全量 pytest、compileall、`git diff --check` 通过；Go 本阶段不改服务端代码，仅执行工具链自检并按已知沙箱问题记录结果。
+- P2-12 已验收：只有 `job_status=completed`、archive 标准验证通过、upload session `remote_created`、`.meta.json`/`job.index.json` 已上传且本地记录完整的文件才进入清理候选；云端同步待同步时允许清理但 UI 显示提示。
+- P2-12 已验收：清理前复查源文件 `size`、`mtime_ns`、`volume_id`/`file_index`，任何不一致都禁止清理并记录失败原因。
+- P2-12 已验收：默认清理方式为 Windows 回收站；支持用户指定隔离目录；永久删除作为高级选项，必须通过清理确认短语和永久删除确认短语。
+- P2-12 已验收：每个清理结果写入 `source_cleanup_records` 并同事务写入 `sync_outbox`，同时更新来源引用的清理状态；输出和 UI 默认只展示路径 hash、文件名、状态和错误摘要。
+- P2-12 已验收：客户端清理服务/UI 定向测试、全量 pytest、compileall、`git diff --check` 通过；Go 本阶段不改服务端代码，仅执行工具链自检并按已知沙箱问题记录结果。
 
 ## 开发排期
 
@@ -41,7 +41,7 @@
 | P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 已完成；P1 阶段 9 端到端备份编排开发完成 | 下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理 |
 | P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 已完成；P2 阶段 10 缓存额度与 artifact 管理开发完成 | 下一个开发阶段为 P2 阶段 11 来源映射和校对 UI |
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
-| P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 未开始 | 远端确认和本地记录完整前不可清理；源文件变化时按钮禁用 |
+| P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 未开始 | 原路径/手动路径恢复均可验收，覆盖缺失外部 archive 和密码错误 |
 | P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 未开始 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复和卸载/升级测试 |
 
@@ -49,10 +49,10 @@
 
 - README 入口文档曾停留在“Go 云端同步服务基础接口、部署构建脚本和百度授权管理接口”阶段，低估了实际进度；实际代码已具备真实百度授权、真实上传、断点续传、outbox 同步和清理联调能力。本轮同步更新 README 当前状态。
 - README 曾继续把备份任务主 UI、扫描与内容指纹、去重索引、7-Zip AES-256 加密归档、加密 manifest 和缓存额度管理列为未完成；按 2026-06-08 近期提交和测试记录，这些阶段已经完成，本轮先修复入口文档口径。
-- 原排期把“PySide6 基础 UI、任务页、设置页”合并为一个阶段，容易误判 UI 接近完成；实际到 P2-10 已完成百度设置页和备份任务页，仍缺来源映射/校对 UI、清理页、恢复页和最终发布体验。
+- 原排期把“PySide6 基础 UI、任务页、设置页”合并为一个阶段，容易误判 UI 接近完成；实际到 P2-12 已完成百度设置页、备份任务页、来源映射/校对 UI 和原始数据清理页，仍缺恢复页和最终发布体验。
 - 原排期把“百度 OAuth、预上传、分片上传、创建文件”标为部分完成；按近期提交和真实批测结果，该底座已基本完成，主备份编排也已接入扫描、7-Zip、manifest、真实上传、outbox 同步、远端校对和缓存 artifact 生命周期。
 - 原排期未单独列出“进度审计、排期治理、临时 fix 记录规则”；本轮新增排期变更约束，后续任何插队需求都必须有文字说明。
-- 产品规格要求的清理和恢复尚未实现；来源映射和校对 UI 是当前 P2-11 的交付重点，不能把 CLI 校对和底层修复入口等同于最终桌面端可交付体验。
+- 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
 
@@ -87,6 +87,34 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P2 阶段 12 原始数据清理
+
+- P2 阶段 12 原始数据清理开发完成；下一个开发阶段为 P2 阶段 13 恢复流程。
+- 新增 SQLite 迁移 `client/migrations/sqlite/008_source_cleanup_records.sql`，创建 `source_cleanup_records` 同步实体，并为 `file_items` 补充 `file_volume_serial` 和 `file_index`，用于清理前文件身份复查。
+- 新增 `client/src/auto_backup_client/file_identity.py`，Windows 下通过 `GetFileInformationByHandle` 读取 volume serial 和 file index；非 Windows 测试环境保留 size/mtime 复查。
+- 扫描阶段已把文件身份摘要写入 `file_items`；内容指纹仍只基于文件字节，不混入路径、时间、设备或文件身份字段。
+- 新增 `client/src/auto_backup_client/source_cleanup.py`，实现清理候选、清理前 `size/mtime_ns/volume_id/file_index` 复查、默认回收站、隔离目录、高级永久删除和版本化清理记录。
+- 清理候选门槛已落地：job 必须 completed，archive 标准验证通过，upload session 必须 `remote_created`，`.meta.json`/`job.index.json` 必须 uploaded，本地三类 `remote_objects` 必须 `remote_created`；云端同步待同步只作为 UI 警告，不阻塞本地记录完整后的清理。
+- 默认回收站清理使用 Windows `SHFileOperationW` + `FOF_ALLOWUNDO`；隔离目录使用用户指定目录；永久删除必须同时填写 `CLEANUP_SOURCES` 和 `PERMANENT_DELETE_SOURCES`。
+- 官方依据记录：已记录 Microsoft Learn 官方 URL `SHFileOperationW`、`GetFileInformationByHandle` 和 `BY_HANDLE_FILE_INFORMATION`；浏览/搜索工具未返回正文，本地 `curl.exe -L` 因沙箱网络限制无法连接 `learn.microsoft.com`。本轮实现依据来自上述官方 API 页面名与 Win32 API 语义、项目既有规格和自动化测试，后续联网环境可按 README 中 URL 复核。
+- 每个实际清理结果会写入 `source_cleanup_records` 并同事务写入 `sync_outbox`，同步 payload 过滤完整原始路径和隔离目录路径；同时更新 `content_references.cleanup_status` 为 `cleaned` 或 `cleanup_failed`。
+- PySide6 主窗口新增“原始数据清理”页面，支持按 job/关键字筛选候选、查看 sync pending 警告、预演、回收站/隔离目录/永久删除方式和确认短语执行。
+- 更新根 README 和 `client/README.md`，记录项目已完成到 P2-12、剩余主线为 P2-13/P3-14，并说明原始数据清理的安全边界与脱敏规则。
+- 已验证定向测试 `tests/test_source_cleanup.py tests/test_sqlite_store.py` 通过，11 个测试通过。
+- 已验证 UI/编排定向测试 `tests/test_source_cleanup.py tests/test_source_mapping.py tests/test_backup_task_page.py tests/test_backup_pipeline.py` 通过，18 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-p2-12` 通过，126 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已执行 `cloud-api/` 下 Go 工具链自检：`go version` 返回 `go1.25.10 windows/amd64`；沙箱内 `go list runtime` 仍返回 `package runtime is not in std (C:\Program Files\Go\src\runtime)`，按既有约束提升后 `go list runtime` 返回 `runtime`。本阶段未修改 Go 服务端代码、迁移或路由，不需要重新编译部署 Go 服务。
+
+提交摘要：本次提交完成 P2 阶段 12 原始数据清理，新增文件身份复查、版本化 `source_cleanup_records`、默认回收站/隔离目录/高级永久删除执行路径，并把原始数据清理页接入 PySide6 主窗口；清理结果进入本地 SQLite 和 `sync_outbox`，同步 payload 不携带完整原始路径或隔离目录路径。
+
+后续待办：
+
+- 下一个开发阶段为 P2 阶段 13 恢复流程；下一轮开始前必须在当前工作项写明“本次开发阶段：P2 阶段 13 恢复流程”。
+- P2 阶段 13 需要实现按来源/任务/日期/文件名选择恢复对象、下载或复用 archive、7-Zip 解密解压、按 manifest 恢复、SHA256 复验和冲突默认保留两者。
+- 恢复阶段必须复用 `source_cleanup_records`、`content_references.restore_status`、`cache_artifacts` 和 `local_fs`，不得把已清理源文件误判为不可恢复。
 
 ### P2 阶段 11 来源映射和校对 UI
 

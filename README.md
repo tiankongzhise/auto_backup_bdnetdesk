@@ -6,9 +6,9 @@ Windows 桌面端百度网盘加密备份工具。
 
 ## 当前状态
 
-项目已完成产品规格、初始化文档、Go 云端同步服务、部署构建脚本、百度网盘云端授权管理、PySide6 百度设置页、本机 Device Token/KDF 凭据、真实百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`sync_outbox` 同步 worker、脱敏联调 CLI、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理。仓库以公开项目形式发布，采用 GNU Lesser General Public License v2.1 授权。
+项目已完成产品规格、初始化文档、Go 云端同步服务、部署构建脚本、百度网盘云端授权管理、PySide6 百度设置页、本机 Device Token/KDF 凭据、真实百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`sync_outbox` 同步 worker、脱敏联调 CLI、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对 UI、原始数据清理服务与 UI。仓库以公开项目形式发布，采用 GNU Lesser General Public License v2.1 授权。
 
-当前仍未达到完整 v1.3 桌面端发布状态；剩余主线集中在 P2 阶段 12 原始数据清理、P2 阶段 13 恢复流程，以及 P3 阶段 14 打包发布与最终验收。按当前排期估算，离 v1.3 可交付仍约剩 20%-25%。最新差异审计和开发排期以 `docs/roadmap_progress.md` 为准。
+当前仍未达到完整 v1.3 桌面端发布状态；剩余主线集中在 P2 阶段 13 恢复流程，以及 P3 阶段 14 打包发布与最终验收。按当前排期估算，离 v1.3 可交付仍约剩 15%-20%。最新差异审计和开发排期以 `docs/roadmap_progress.md` 为准。
 
 ## 文档入口
 
