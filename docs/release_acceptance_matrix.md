@@ -1,0 +1,73 @@
+# P3-14 打包发布与最终验收矩阵
+
+本文件记录 P3 阶段 14 的发布构建方式、官方依据和最终验收矩阵。发布候选必须在本矩阵全部通过后，才能标记为 v1.3 桌面端可交付。
+
+## 发布构建
+
+当前客户端发布包采用 PyInstaller onedir Windows GUI 方案，入口为 `auto_backup_client.app`，底层启动 PySide6 主窗口。
+
+从仓库根目录执行 dry-run：
+
+```powershell
+.\client_build.ps1 -DryRun
+```
+
+从仓库根目录执行真实构建：
+
+```powershell
+.\client_build.ps1
+```
+
+默认输出目录：
+
+```text
+dist/client/AutoBackupBDNetdisk/
+```
+
+构建脚本固定使用仓库内缓存目录：
+
+```text
+.cache/uv
+.cache/tmp
+.cache/pyinstaller
+.cache/pyinstaller-spec
+```
+
+这些目录和 `dist/` 均不得提交。
+
+## 官方依据
+
+PyInstaller 官方文档获取记录：
+
+- 2026-06-08 已通过提升后的 `curl.exe -L https://pyinstaller.org/en/stable/usage.html` 获取官方 Usage 页面。
+- 2026-06-08 已通过提升后的 `curl.exe -L https://pyinstaller.org/en/stable/runtime-information.html` 获取官方 Run-time Information 页面。
+
+本轮实现依据：
+
+- Usage 页面说明 PyInstaller 会生成 `dist` 中的 bundled app，并提供 `--distpath`、`--workpath`、`--clean`、`--noconfirm`、`--windowed`、`--add-data` 等构建选项。
+- Run-time Information 页面说明打包应用启动时 PyInstaller bootloader 会设置 `sys._MEIPASS`，可用于定位 bundle 内数据文件。
+- 本项目因此把 SQLite 迁移目录作为 `--add-data` 加入 bundle，并在运行时优先从 `sys._MEIPASS/migrations/sqlite` 定位迁移。
+
+## 验收矩阵
+
+| 编号 | 场景 | 环境 | 操作 | 通过标准 | 当前状态 |
+| --- | --- | --- | --- | --- | --- |
+| R01 | 发布构建 dry-run | 开发机 | `.\client_build.ps1 -DryRun` | 输出 PyInstaller 命令，包含 GUI onedir、源码路径、迁移 data 和仓库内输出/缓存目录 | 本轮已验收 |
+| R02 | 发布构建 | 开发机 | `.\client_build.ps1` | 生成 `dist/client/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe`，无敏感文件进入 dist | 本轮已验收开发机构建；干净机待验收 |
+| R03 | 迁移定位 | 开发机/打包包 | 启动后初始化新 SQLite | 源码运行读取 `client/migrations/sqlite`；打包运行读取 bundle 内 `migrations/sqlite` | 本轮自动化验收源码与 `_MEIPASS` 分支；打包 exe 启动待干净机验收 |
+| R04 | 首次启动 | 干净 Windows | 双击 exe | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题 | 待执行 |
+| R05 | 百度授权 | 干净 Windows | 设备码/扫码授权 | 只在百度官方页面输入百度账号；本机保存 DPAPI Device Token/KDF 材料；不落仓库路径 | 待执行 |
+| R06 | 备份 | 干净 Windows | 选择小文件与跨分片文件执行真实备份 | 完成扫描、去重、7-Zip 加密、百度上传、outbox 同步、远端校对和 completed final sync | 待执行 |
+| R07 | 校对 | 干净 Windows | 来源映射和远端校对页查看同一 job | 展示来源/远端关系和 consistent 状态；不显示 Device Token、百度 token、密码或完整敏感路径 | 待执行 |
+| R08 | 清理 | 干净 Windows | 对已完成 job 执行回收站清理 | 清理前复查通过后移入回收站，写入清理记录并同步 outbox | 待执行 |
+| R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 恢复 | 7-Zip 解密、manifest 校验、SHA256 复验通过；冲突默认保留两者 | 待执行 |
+| R10 | 断网补偿 | 干净 Windows | 云端临时不可用时执行本地任务并恢复网络 | 本地 SQLite 落盘；云端恢复后 outbox 可补偿同步 | 待执行 |
+| R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动 | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等 | 待执行 |
+| R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据 | 程序目录可移除；用户数据、凭据和缓存清理边界清晰 | 待执行 |
+| R13 | 敏感信息审计 | 开发机/干净 Windows | 检查 dist、日志、SQLite outbox 和 UI 输出 | 无 `.env`、token、密码、wrapping key、明文 manifest 或完整敏感路径泄漏 | 待执行 |
+
+## 发布阻塞项
+
+- 尚未执行干净 Windows 真实安装/授权/备份/校对/清理/恢复/升级/卸载矩阵。
+- 尚未生成最终安装器；当前是 onedir 发行目录，后续可在同一矩阵基础上接入安装器。
+- 覆盖恢复仍未开放；如发布前要求覆盖恢复，必须先实现覆盖前回收站保护并新增验收项。

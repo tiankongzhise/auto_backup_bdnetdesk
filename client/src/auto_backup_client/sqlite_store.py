@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import sys
 import time
 import uuid
 from contextlib import contextmanager
@@ -12,7 +14,19 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
+def resolve_sqlite_migrations_dir() -> Path:
+    override = os.environ.get("AUTO_BACKUP_SQLITE_MIGRATIONS_DIR", "").strip()
+    if override:
+        return Path(override)
+    bundled_root = getattr(sys, "_MEIPASS", "")
+    if bundled_root:
+        bundled_dir = Path(bundled_root) / "migrations" / "sqlite"
+        if bundled_dir.exists():
+            return bundled_dir
+    return Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
+
+
+MIGRATIONS_DIR = resolve_sqlite_migrations_dir()
 CLIENT_SCHEMA_VERSION = 1
 LOCAL_ONLY_SYNC_FIELDS = frozenset(
     {
@@ -102,7 +116,7 @@ class OutboxEvent:
 class SQLiteClientStore:
     def __init__(self, db_path: str | Path, *, migrations_dir: str | Path | None = None) -> None:
         self.db_path = Path(db_path)
-        self.migrations_dir = Path(migrations_dir) if migrations_dir is not None else MIGRATIONS_DIR
+        self.migrations_dir = Path(migrations_dir) if migrations_dir is not None else resolve_sqlite_migrations_dir()
 
     def connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

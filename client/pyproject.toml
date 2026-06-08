@@ -27,5 +27,6 @@ index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6,<7",
     "pytest>=8,<10",
 ]

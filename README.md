@@ -15,9 +15,30 @@ Windows 桌面端百度网盘加密备份工具。
 - `AGENTS.MD`：项目记忆、协作规则、编码约束、提交规则和安全约束。
 - `docs/product_spec_v1.3.md`：完整产品与技术规格。
 - `docs/roadmap_progress.md`：开发排期和进度记录。
+- `docs/release_acceptance_matrix.md`：P3-14 打包发布与最终验收矩阵。
 - `.env.example`：本地开发环境变量示例。
 - `docs/deployment_nginx_backup_baichengedu.md`：`backup.baichengedu.com`、nginx 反代和百度回调部署示例。
 - `LICENSE`：GNU Lesser General Public License v2.1 授权文本。
+
+## 客户端发布构建
+
+P3 阶段 14 当前已进入打包发布与最终验收。客户端发布骨架采用 PyInstaller onedir Windows GUI 方案，从仓库根目录执行：
+
+```powershell
+.\client_build.ps1 -DryRun
+.\client_build.ps1
+```
+
+如果当前 PowerShell 执行策略禁止直接运行本地脚本，可使用进程级绕过：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1
+```
+
+默认输出 `dist/client/AutoBackupBDNetdisk/`。构建会把 `client/migrations/sqlite` 加入发行包，打包运行时通过 PyInstaller `_MEIPASS` 定位 SQLite 迁移目录；源码运行仍读取 `client/migrations/sqlite`。
+
+发布候选必须继续按 `docs/release_acceptance_matrix.md` 在干净 Windows 环境完成安装、授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计后，才可标记为 v1.3 可交付。
 
 ## 云端同步服务
 

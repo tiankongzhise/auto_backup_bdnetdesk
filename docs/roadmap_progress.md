@@ -4,26 +4,23 @@
 
 ## 当前阶段
 
-2026-06-08 进度审计结论：项目已经完成云端同步服务、真实云端部署联调、百度授权与账号选择、本机 Device Token/KDF 凭据、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、`sync_outbox` worker、脱敏 `sync-outbox` CLI、百度 `list/listall` 客户端列表能力、远端对象校对与人工修复入口、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对 UI、原始数据清理服务与 UI、恢复流程服务/CLI/UI。当前已经完成 P2 阶段 13，尚未进入完整桌面端备份产品可发布状态。
+2026-06-08 进度审计结论：项目已经完成云端同步服务、真实云端部署联调、百度授权与账号选择、本机 Device Token/KDF 凭据、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、`sync_outbox` worker、脱敏 `sync-outbox` CLI、百度 `list/listall` 客户端列表能力、远端对象校对与人工修复入口、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对 UI、原始数据清理服务与 UI、恢复流程服务/CLI/UI。当前进入 P3 阶段 14 打包发布与最终验收，尚未进入完整桌面端备份产品可发布状态。
 
-离完整完成开发计划的主要缺口：打包发布和端到端验收。按产品规格 v1.3 的阶段拆分估算，离可交付仍约剩 8%-12%；最大风险集中在干净 Windows 环境验收、安装/升级/卸载和最终真实链路验收矩阵。
+离完整完成开发计划的主要缺口：干净 Windows 环境端到端验收、安装/升级/卸载和最终真实链路验收矩阵。按产品规格 v1.3 的阶段拆分估算，离可交付仍约剩 5%-8%；最大风险集中在干净 Windows 环境验收、安装/升级/卸载和最终真实链路验收矩阵。
 
 ## 当前工作项
 
-- P2 阶段 13 恢复流程开发完成；下一个开发阶段为 P3 阶段 14 打包发布与最终验收。
-- 本轮属于主排期 P2 阶段 13，不改变阶段顺序；已实现恢复对象查询、本地 archive 复用、远端下载接口边界、7-Zip 解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者和版本化恢复记录。
-- 本轮已新增 `restore_records` 同步实体、恢复服务、脱敏恢复 CLI、PySide6 恢复页、百度 `filemetas(dlink=1)` 与 `dlink` 下载封装。
-- 本阶段未修改 Go 云端 API 或 PostgreSQL schema；恢复记录落本地 SQLite 并通过现有 `sync_outbox` 表达必要同步状态。
-- 下一阶段开始前必须把“本次开发阶段：P3 阶段 14 打包发布与最终验收”写入当前工作项，并同步计划修改范围和验收标准。
+- 本次开发阶段：P3 阶段 14 打包发布与最终验收。
+- P3 阶段 14 发布打包工程骨架开发完成；P3 阶段 14 仍在进行中，下一个开发小项为干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 本轮已新增 GUI 启动入口、PyInstaller onedir Windows GUI 构建脚本、打包运行时 SQLite 迁移目录定位、发布验收矩阵和自动化测试。
+- 本轮未修改 Go 云端 API 或 PostgreSQL schema；未执行干净 Windows 机器安装/升级/卸载验收，真实全链路最终验收留在 P3-14 后续发布候选验证中执行。
 
 ## 本次验收标准
 
-- P2-13 已验收：可按 job、文件名或 content hash 查询可恢复对象，恢复候选不把已清理源文件误判为不可恢复。
-- P2-13 已验收：本地存在 archive 时可复用；本地缺失 archive 时进入明确的待下载状态；百度下载封装已覆盖 `filemetas(dlink=1)`、`dlink + access_token` 和 `User-Agent: pan.baidu.com` 参数构造并记录官方依据。
-- P2-13 已验收：使用真实 7-Zip 解密解压 archive，密码错误会失败且不写目标文件；manifest 缺失、manifest SHA256 不匹配或外部 archive 缺失会写入可审计失败记录。
-- P2-13 已验收：支持恢复到原路径和用户指定路径；目标冲突默认保留两者，追加 `restored yyyyMMdd-HHmmss`，不覆盖现有文件；`skip_existing` 可跳过已有文件，覆盖恢复留待后续单独实现回收站保护。
-- P2-13 已验收：恢复完成后重新计算 SHA256 并比对 manifest/content index；恢复结果写入 SQLite，更新 `content_references.restore_status`，输出/UI 默认不暴露完整敏感路径。
-- P2-13 已验收：客户端恢复服务/UI/CLI 定向测试、全量 pytest、compileall、`git diff --check` 通过；本阶段未修改 Go 服务端，仅执行工具链自检并记录结果。
+- P3-14 本轮已验收：客户端存在可复用 GUI 启动入口，PyInstaller 构建命令固定使用 Windows GUI onedir 方案，并把 SQLite 迁移目录作为 data 加入发行包。
+- P3-14 本轮已验收：打包后的运行时可通过 PyInstaller `_MEIPASS` 定位 `migrations/sqlite`；源码运行仍沿用 `client/migrations/sqlite`，并支持测试/排障覆盖迁移目录。
+- P3-14 本轮已验收：发布验收矩阵覆盖安装/授权/备份/校对/清理/恢复/升级/卸载/敏感信息检查，并明确哪些项目必须在干净 Windows 环境执行。
+- P3-14 本轮已验收：PyInstaller 官方文档依据已记录；客户端定向测试、全量 pytest、compileall、`git diff --check`、dry-run 和真实 PyInstaller onedir 构建通过。
 
 ## 开发排期
 
@@ -44,7 +41,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 未开始 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复和卸载/升级测试 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；发布打包工程骨架已完成，P3 阶段 14 尚未整体完成 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复和卸载/升级测试 |
 
 ## 进度差异审计
 
@@ -88,6 +85,33 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：发布打包工程骨架
+
+- P3 阶段 14 打包发布与最终验收的发布打包工程骨架开发完成；P3 阶段 14 仍在进行中，下一个开发小项为干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 新增 `client/src/auto_backup_client/app.py`，作为 PyInstaller 和源码复用的 GUI 启动入口，统一调用 PySide6 主窗口。
+- 新增 `client/src/auto_backup_client/release_build.py`，集中生成 PyInstaller 命令，固定使用 Windows GUI onedir 输出、仓库内 dist/work/spec 目录、`client/src` import 路径和 SQLite 迁移 data 打包参数。
+- 新增根目录 `client_build.ps1`，从仓库根目录通过 uv 调用发布构建，固定 `UV_LINK_MODE=copy`、仓库内 `UV_CACHE_DIR`、`TMP` 和 `TEMP`。
+- 使用 `uv add --dev 'pyinstaller>=6,<7'` 新增 PyInstaller 6.x dev 依赖并更新 `client/uv.lock`；沙箱内首次联网被 `os error 10013` 拦截，按权限流程提升后同一 uv 命令成功。
+- `sqlite_store` 新增 `resolve_sqlite_migrations_dir()`，迁移目录定位顺序为 `AUTO_BACKUP_SQLITE_MIGRATIONS_DIR`、PyInstaller `_MEIPASS/migrations/sqlite`、源码树 `client/migrations/sqlite`，保证打包后新 SQLite 仍可初始化。
+- 新增 `docs/release_acceptance_matrix.md`，记录 PyInstaller 官方 Usage/Run-time Information 文档依据、发布构建方式和 R01-R13 最终验收矩阵。
+- 更新 README 和 `client/README.md`，补充 `client_build.ps1`、执行策略绕过方式、发行输出目录、迁移目录打包规则和 P3-14 仍需干净 Windows 验收的边界。
+- 将 PyInstaller 依赖联网下载、PyInstaller `-m` 参数误用风险和 PowerShell 执行策略问题沉淀到 `AGENTS.MD`。
+- 已验证定向测试 `tests/test_release_build.py tests/test_sqlite_store.py` 通过，10 个测试通过。
+- 已验证 `powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun` 通过，输出 PyInstaller 命令包含 `--onedir`、`--windowed`、`--paths client/src` 和 `--add-data client/migrations/sqlite;migrations/sqlite`。
+- 已验证真实 PyInstaller 构建 `powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1` 通过，生成 `dist/client/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe`，发行目录包含 `_internal/migrations/sqlite/001-009` SQLite 迁移文件。
+- PyInstaller warning 文件仅列出 POSIX/可选依赖、HTTP/2、trio、rich/click、PIL 可选插件等条件导入缺失，未见项目自身模块缺失。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-p3-14-full` 通过，138 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交完成 P3 阶段 14 的发布打包工程骨架，新增 PyInstaller GUI onedir 构建入口、客户端发布脚本、打包运行时 SQLite 迁移目录定位、发布验收矩阵和对应测试；真实构建已生成可分发目录，但 P3 阶段 14 尚未整体完成，仍需干净 Windows 环境完成最终验收矩阵。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项为干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 后续需要按 `docs/release_acceptance_matrix.md` 完成 R04-R13：首次启动、授权、真实备份、校对、清理、恢复、断网补偿、升级、卸载/清理和敏感信息审计。
+- 评估是否需要在 onedir 发行目录外再增加安装器；若增加安装器，必须补充安装、升级、卸载、用户数据保留/清除和签名/哈希验收。
 
 ### P2 阶段 13 恢复流程
 

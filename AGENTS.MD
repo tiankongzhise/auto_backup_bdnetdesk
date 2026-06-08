@@ -392,3 +392,23 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：`archive_packager` 的 payload staging 复制、目录清理、文件存在/size 校验改用 Windows `\\?\` 路径包装；`baidu/resumable_upload.py` 的 archive SHA256 和 mtime 读取也改为长路径安全包装。
 
 后续约束：涉及明文 manifest staging、payload staging、verify/tmp 清理、archive hash 或续传读取时，不得只修最终 `.7z` 路径；必须覆盖从源文件复查、payload 复制、临时目录删除到上传读取的整条本地文件生命周期。
+
+### 2026-06-08：P3-14 PyInstaller 依赖下载与 CLI 入口参数
+
+问题：进入 P3 阶段 14 打包发布时，在 `client/` 下执行 `uv add --dev 'pyinstaller>=6,<7'`，沙箱内访问清华 PyPI 镜像失败，报 `tcp connect error` 和 Windows `os error 10013`；提升权限后同一命令成功。随后检查 `uv run pyinstaller --help` 发现 PyInstaller 的 `-m` 是 Windows manifest 参数，不是 Python `-m module` 入口。
+
+原因：当前沙箱限制联网 socket；PyInstaller CLI 与 Python 解释器 CLI 参数语义不同，不能把 `python -m auto_backup_client.app` 的入口方式直接搬到 PyInstaller 命令。
+
+解决方案：按权限流程提升后使用 uv 正式新增 PyInstaller dev 依赖并更新 `uv.lock`；发布构建改用显式脚本入口 `client/src/auto_backup_client/app.py`，同时通过 `--paths client/src` 提供 import 路径，并用自动化测试锁定 PyInstaller 参数。
+
+后续约束：新增或同步客户端打包依赖仍必须使用 uv；若沙箱内联网出现 `os error 10013`，按权限流程提升重跑同一 uv 命令，不得改用 pip。PyInstaller 构建入口必须使用脚本路径或 spec 文件；不得把 `-m auto_backup_client...` 当作模块入口参数传给 PyInstaller。
+
+### 2026-06-08：PowerShell 执行策略阻止本地发布脚本
+
+问题：从仓库根目录直接执行 `.\client_build.ps1 -DryRun` 时，PowerShell 返回 `PSSecurityException`，提示系统禁止运行脚本。
+
+原因：当前 Windows PowerShell 会话受执行策略限制，阻止直接运行本地 `.ps1` 脚本；这发生在脚本内容执行前，不是发布脚本逻辑错误。
+
+解决方案：使用进程级执行策略绕过运行同一脚本：`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun`，dry-run 成功输出 PyInstaller 命令。
+
+后续约束：若本地 PowerShell 执行 `.ps1` 出现 `PSSecurityException`，优先用进程级 `-ExecutionPolicy Bypass -File` 复跑；不得把该错误误判为脚本语法或构建逻辑失败。

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 import uuid
 
-from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields, canonical_record_sha256, new_revision_id
+from auto_backup_client.sqlite_store import (
+    SQLiteClientStore,
+    build_version_fields,
+    canonical_record_sha256,
+    new_revision_id,
+    resolve_sqlite_migrations_dir,
+)
 
 
 def test_sqlite_migrations_are_idempotent_and_enable_upload_tables(tmp_path) -> None:
@@ -33,6 +40,22 @@ def test_sqlite_migrations_are_idempotent_and_enable_upload_tables(tmp_path) -> 
         "schema_migrations",
     } <= tables
     assert foreign_keys == 1
+
+
+def test_sqlite_migrations_dir_prefers_environment_override(tmp_path, monkeypatch) -> None:
+    override = tmp_path / "custom-migrations"
+    monkeypatch.setenv("AUTO_BACKUP_SQLITE_MIGRATIONS_DIR", str(override))
+
+    assert resolve_sqlite_migrations_dir() == override
+
+
+def test_sqlite_migrations_dir_supports_pyinstaller_meipass(tmp_path, monkeypatch) -> None:
+    bundled = tmp_path / "bundle" / "migrations" / "sqlite"
+    bundled.mkdir(parents=True)
+    monkeypatch.delenv("AUTO_BACKUP_SQLITE_MIGRATIONS_DIR", raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "bundle"), raising=False)
+
+    assert resolve_sqlite_migrations_dir() == bundled
 
 
 def _sample_upload_session_payload() -> dict[str, object]:

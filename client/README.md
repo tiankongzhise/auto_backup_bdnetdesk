@@ -50,6 +50,41 @@ uv run python -m auto_backup_client.ui.main_window
 
 `backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。来源映射和远端校对 UI 不把本地 SQLite 路径、Device Token、百度 token、用户密码或 wrapping key 输出到界面日志。
 
+## 发布构建
+
+P3-14 发布骨架使用 PyInstaller onedir Windows GUI 方案。仓库根目录提供 `client_build.ps1`，会通过 uv 调用 `auto_backup_client.release_build`，并把构建缓存固定到仓库内 `.cache/`。
+
+```powershell
+cd ..
+.\client_build.ps1 -DryRun
+.\client_build.ps1
+```
+
+如果当前 PowerShell 执行策略禁止直接运行本地脚本，可使用：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1
+```
+
+默认输出目录为 `dist/client/AutoBackupBDNetdisk/`。PyInstaller 参数由 `src/auto_backup_client/release_build.py` 生成，包含：
+
+- `--onedir`
+- `--windowed`
+- `--distpath <repo>/dist/client`
+- `--workpath <repo>/.cache/pyinstaller`
+- `--specpath <repo>/.cache/pyinstaller-spec`
+- `--paths <repo>/client/src`
+- `--add-data <repo>/client/migrations/sqlite;migrations/sqlite`
+
+SQLite 迁移目录定位顺序为：
+
+1. `AUTO_BACKUP_SQLITE_MIGRATIONS_DIR`，仅用于测试或排障。
+2. PyInstaller `_MEIPASS/migrations/sqlite`。
+3. 源码树 `client/migrations/sqlite`。
+
+PyInstaller 官方依据已记录在 `docs/release_acceptance_matrix.md`。当前发布包仍需完成干净 Windows 安装、授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计矩阵后，才能作为 v1.3 可交付发布。
+
 ## 扫描与内容指纹
 
 阶段 P1-6 已新增扫描服务和 SQLite `file_items`、`folder_items`、`scan_issues` 表。扫描服务会读取 `backup_sources.local_path`，默认递归普通目录，跳过 symlink、junction 和 `.lnk` 快捷方式；遇到不可读文件或目录时写入 `scan_issues`，不会中断同一任务继续扫描其他来源或文件。
