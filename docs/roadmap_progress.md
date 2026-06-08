@@ -10,18 +10,18 @@
 
 ## 当前工作项
 
-- P1 阶段 7 去重索引与来源引用开发完成；下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest。
-- 本轮已完成客户端内容级去重索引最小闭环：新增 `content_objects` 和 `content_references` SQLite 表，去重索引服务可读取 `file_items`，按完整 SHA256+size 生成本地内容对象、来源引用和本地重复状态。
-- 本轮实现边界：只做内容级去重索引、来源引用和云端候选查询客户端封装，不生成 7-Zip archive、明文 manifest、archive_objects 归档记录、百度上传、缓存清理、原始数据清理或恢复流程；归档对象落地和引用 archive 的能力回到 P1 阶段 8-9。
-- 下一阶段开始前必须把“本次开发阶段：P1 阶段 8 7-Zip 加密归档与 manifest”写入当前工作项，并同步计划修改范围和验收标准。
+- P1 阶段 8 7-Zip 加密归档与 manifest 开发完成；下一个开发阶段为 P1 阶段 9 端到端备份编排。
+- 本轮已完成客户端本地归档/manifest 最小闭环：新增 `archives` 和 `archive_members` SQLite 表，`ArchivePackager` 可读取 `content_references`、生成稳定 manifest、真实调用 7-Zip 26.01 创建加密 `.7z`、执行 `7z t` 标准验证、解出 manifest 复核 SHA256，并在验证通过后删除明文 manifest/staging/verify 目录。
+- 本轮实现边界：只做本地 manifest/archive 生成、标准验证、明文 manifest 生命周期和本地归档索引；不接入真实百度上传、不生成远端 `.meta.json`/`job.index.json`、不做缓存额度调度、严格解压验证、恢复流程或 UI 编排，这些回到 P1 阶段 9 和 P2 阶段。
+- 下一阶段开始前必须把“本次开发阶段：P1 阶段 9 端到端备份编排”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- P1 阶段 7 已验收：相同完整 SHA256 和 size 的文件只创建一条 `content_objects`，但每个来源文件都保留 `content_references`；首个本地来源标记为 `payload_source`，后续来源标记为 `local_duplicate`。
-- P1 阶段 7 已验收：最终去重判断会校验 `content_id == sha256("v1:file:" + size + ":" + file_sha256)`，并拒绝同一 `content_id` 下出现不同完整 SHA256 或 size；路径、文件名、时间、设备和任务信息不参与最终去重。
-- P1 阶段 7 已验收：`content_objects` 写入与 `sync_outbox` 同事务完成，payload 包含云端索引必需的 `content_id`、`file_sha256`、`size_bytes`，且不包含本地绝对路径；`content_references.local_path` 只保存在本地 SQLite。
-- P1 阶段 7 已验收：云端候选查询只在返回对象的完整 SHA256 和 size 与本地内容对象一致时标记 `cloud_duplicate_candidate`；404/missing 或字段不一致不会被当成可跳过 payload 的重复内容。
-- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-dedupe-all` 通过，97 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过。
+- P1 阶段 8 已验收：`needs_payload` 来源会写入 archive 内部 `/payload/{content_id}`，本地重复或云端候选引用不会重复写 payload，但会进入 manifest 引用记录；没有新增 payload 的 job 会生成 manifest-only archive。
+- P1 阶段 8 已验收：manifest 明文 JSON 只存在于 job 缓存临时目录和压缩 staging 目录；archive 标准验证通过后会删除 `manifest_plain/`、staging payload 目录和 verify 解压目录。
+- P1 阶段 8 已验收：本机已安装真实 7-Zip 26.01，测试密码使用 `Test123456789`，阶段测试真实执行 archive 创建、`7z t` 标准验证和 manifest 解压 SHA256 复核；`7z.exe` 路径为 `C:\Program Files\7-Zip\7z.exe`。
+- P1 阶段 8 已验收：新增 `archives` 同步实体写入与 `sync_outbox` 同事务完成，outbox payload 不包含用户密码、本地 archive 路径、明文 manifest 路径或 payload staging 路径；`archive_members` 保留本地成员映射。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-archive-all` 通过，100 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过。
 
 ## 开发排期
 
@@ -36,7 +36,7 @@
 | P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 已完成；P1 阶段 5 备份任务主 UI 与任务模型开发完成 | 下一个开发阶段为 P1 阶段 6 扫描与内容指纹 |
 | P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 已完成；P1 阶段 6 扫描与内容指纹开发完成 | 下一个开发阶段为 P1 阶段 7 去重索引与来源引用 |
 | P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 已完成；P1 阶段 7 去重索引与来源引用开发完成 | 下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest |
-| P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 未开始 | 真实 7-Zip test、manifest hash 校验、明文 manifest 生命周期测试通过 |
+| P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 已完成；P1 阶段 8 7-Zip 加密归档与 manifest 开发完成 | 下一个开发阶段为 P1 阶段 9 端到端备份编排 |
 | P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 底层上传链路已验证；主编排未开始 | 小文件、跨分片、重复内容、冲突、断点恢复均用真实链路验收 |
 | P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 未开始 | 缓存不足时阻止新任务或暂停低优先级阶段，不删除源文件 |
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 未开始 | UI 能展示差异、允许本地/云端/百度实际状态人工处理，所有动作留版本记录 |
@@ -75,6 +75,35 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P1 阶段 8 7-Zip 加密归档与 manifest
+
+- P1 阶段 8 7-Zip 加密归档与 manifest 开发完成；下一个开发阶段为 P1 阶段 9 端到端备份编排。
+- 按用户要求安装真实 7-Zip 后再做压缩验收：从 7-Zip 官方首页指向的 GitHub release 下载 `7z2601-x64.exe`，SHA256 为 `D64A0468F5B5B0B0FC5B2188450BCD655B70809D97B1C4535F2884635094377D`；安装后 `C:\Program Files\7-Zip\7z.exe` 显示 7-Zip 26.01。
+- 官方依据记录：已通过 `curl.exe -L https://www.7-zip.org/` 获取 7-Zip 官方首页，确认 7z/ZIP 支持 AES-256 加密和存在命令行版本；浏览/搜索工具与 `curl.exe` 均未获取到 7-Zip CHM 命令行参数页内容，直链返回 404。本轮 CLI 参数依据来自项目规格、官方首页能力说明和本机真实 7-Zip 26.01 行为验收。
+- 新增 SQLite 迁移 `client/migrations/sqlite/006_archive_manifest.sql`，包含版本化同步实体 `archives` 和本地归档成员索引 `archive_members`。
+- 扩展 `SQLiteClientStore`，新增 `put_archive`、`put_archive_member`、`list_archives`、`list_archive_members` 和 `update_content_reference_archive`；`archives` 会同事务写入 `sync_outbox`，本地 `local_archive_path` 不进入同步 payload 和规范化记录哈希。
+- 新增 `client/src/auto_backup_client/archive_packager.py`，实现本地归档服务：读取 `backup_jobs`、`backup_sources`、`content_references`、`file_items`、`folder_items`，生成稳定 manifest，把 `needs_payload` 内容 staging 到 `payload/{content_id}`，并调用真实 7-Zip 生成加密 7z archive。
+- 标准验证已落地：打包后计算 archive MD5/SHA256，执行 `7z t`，再解出 `manifest/manifest.json` 并校验 manifest SHA256；验证通过后写入 `archives`、`archive_members` 并回填 `content_references.archive_id/archive_sha256/archive_member_path`。
+- 明文 manifest 生命周期已覆盖：`manifest_plain/`、压缩 staging 目录和 verify 解压目录会在标准验证结束后删除；测试确认 outbox 不包含用户密码、本地 archive 路径、明文 manifest 路径或 staging 路径。
+- 支持 manifest-only archive：当某个 job 全部来源都是本地重复或云端候选引用时，仍会生成只包含 manifest 的 archive，用于保存本次 job 的恢复语义。
+- 更新 `client/README.md`，记录 `ArchivePackager`、7-Zip 可执行文件发现顺序、真实测试密码、明文 manifest 生命周期和本阶段不接入上传/缓存/恢复/UI 编排的边界。
+- 将本机缺少 7-Zip 且不得模拟压缩验收的问题沉淀到 `AGENTS.MD`。
+- 新增 `client/tests/test_archive_packager.py`，使用真实 7-Zip 和密码 `Test123456789` 覆盖混合 payload/archive、manifest-only archive、源文件扫描后变化拒绝、`7z t` 标准验证、manifest 解压 SHA256 复核和明文目录清理。
+- 扩展 `client/tests/test_sqlite_store.py`，覆盖新增 `archives` 和 `archive_members` 迁移。
+- 已验证客户端定向测试 `tests/test_archive_packager.py tests/test_sqlite_store.py` 通过，9 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-archive-all` 通过，100 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交完成 P1 阶段 8 7-Zip 加密归档与 manifest，新增本地归档/manifest 表和 `ArchivePackager` 服务，把去重引用接入真实 7-Zip 加密归档、标准验证、manifest SHA256 复核和明文临时目录清理；`archives` 已作为同步实体进入 `sync_outbox`，但本阶段不执行百度上传、远端元数据生成、缓存额度调度、严格验证、恢复或 UI 编排。
+
+后续待办：
+
+- 下一个开发阶段为 P1 阶段 9 端到端备份编排；下一轮开始前必须在当前工作项写明“本次开发阶段：P1 阶段 9 端到端备份编排”。
+- P1 阶段 9 需要把任务创建、扫描、去重、`ArchivePackager`、百度 `upload-resumable`、`sync-outbox` 和远端校对串成最小端到端主流程，并继续使用真实云端 API 和真实百度 API 验收。
+- P1 阶段 9 接入上传后，需要生成并上传 `.meta.json`/`job.index.json`，把 archive 远端路径、fs_id、远端 md5 和校对状态回写到现有上传/远端对象账本。
+- 严格解压验证、缓存额度/生命周期、来源映射 UI、原始数据清理和恢复仍留到 P2 对应阶段，不能把本阶段标准验证等同于完整发布就绪。
 
 ### P1 阶段 7 去重索引与来源引用
 

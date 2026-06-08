@@ -362,3 +362,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：继续设置 `UV_LINK_MODE=copy` 和仓库内 `UV_CACHE_DIR`，并把 `TMP`、`TEMP`、pytest `--basetemp` 都指向仓库内 `.cache/` 子目录；必要时加 `-p no:cacheprovider` 避免 `.pytest_cache` 权限噪声。本轮使用 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-sync` 后 56 个测试通过。
 
 后续约束：客户端 pytest 验收优先使用仓库内临时目录，例如 `$env:TMP='<repo>\.cache\tmp'; $env:TEMP='<repo>\.cache\tmp'; uv run python -m pytest -p no:cacheprovider --basetemp <repo>\.cache\pytest-basetemp`；不得把 Temp 目录权限错误误判为项目代码失败。
+
+### 2026-06-08：P1-8 压缩阶段本机缺少 7-Zip
+
+问题：进入 P1 阶段 8 7-Zip 加密归档与 manifest 开发时，PATH 和常见安装路径中均未发现 `7z.exe`、`7za.exe` 或 `7zr.exe`，无法执行真实压缩和 `7z t` 标准验证。
+
+原因：当前 Windows 环境尚未安装 7-Zip；仅靠单元测试模拟 7-Zip runner 会绕过本阶段最关键的真实归档行为验收。
+
+解决方案：从 7-Zip 官方首页指向的 GitHub release 下载 `7z2601-x64.exe` 到 `C:\tmp`，记录 SHA256 `D64A0468F5B5B0B0FC5B2188450BCD655B70809D97B1C4535F2884635094377D`；安装器 Authenticode 状态为 `NotSigned`，但来源 URL 来自 7-Zip 官方首页。通过静默安装将 7-Zip 26.01 安装到 `C:\Program Files\7-Zip\7z.exe`，并用真实 7-Zip 运行 P1-8 归档测试，测试压缩密码固定为 `Test123456789`。
+
+后续约束：P1-8 及后续涉及压缩、验证、恢复的测试不得在本机缺少 7-Zip 时退化为模拟验收；应先安装或定位真实 `7z.exe`，必要时通过 `AUTO_BACKUP_7ZIP_PATH` 指定路径，再执行真实 `7z a`、`7z t` 和解压校验。

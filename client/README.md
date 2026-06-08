@@ -21,6 +21,7 @@
 - `src/auto_backup_client/backup_jobs.py`：备份任务模型服务层，负责创建任务、持久化来源和任务状态机版本化更新。
 - `src/auto_backup_client/scan_fingerprints.py`：扫描与内容指纹服务，负责递归扫描、默认跳过链接/快捷方式、记录不可读问题、计算 quick fingerprint、完整 MD5/SHA256、`content_id` 和文件夹 hash。
 - `src/auto_backup_client/dedupe_index.py`：内容级去重索引服务，负责把 `file_items` 汇总成 `content_objects` 和 `content_references`，并可查询云端内容候选。
+- `src/auto_backup_client/archive_packager.py`：7-Zip 加密归档与 manifest 服务，负责生成临时明文 manifest、staging payload、AES-256 7z archive、标准验证和本地归档索引。
 - `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
@@ -50,6 +51,14 @@ uv run python -m auto_backup_client.ui.main_window
 最终重复判断只使用完整 `sha256 + size_bytes`，并校验 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`。同一内容的首个本地引用标记为 `needs_payload`，后续本地引用标记为 `local_duplicate`；如果云端 `GET /v1/contents/{content_id}` 返回的 `file_sha256` 和 `size_bytes` 与本地一致，引用才可标记为 `cloud_duplicate_candidate`。404、临时错误或 sha256/size 不一致都不能作为跳过 payload 的依据。
 
 本阶段不执行 7-Zip 归档、manifest 文件生成、archive_objects 归档索引、百度上传、缓存清理或恢复；后续 P1-8 到 P1-9 会把 `content_references` 接入 manifest/archive 和端到端编排。
+
+## 7-Zip 加密归档与 manifest
+
+阶段 P1-8 已新增 `archives` 和 `archive_members` 表，以及 `ArchivePackager` 本地归档服务。服务会读取 `content_references`、`file_items` 和 `folder_items`，生成稳定 manifest JSON，并把需要 payload 的内容写入 archive 内部 `payload/{content_id}`；本地重复或云端候选引用不会重复写 payload，但会在 manifest 和 `archive_members` 中保留引用。没有新增 payload 的 job 也会生成 manifest-only archive。
+
+7-Zip 可执行文件优先使用 `AUTO_BACKUP_7ZIP_PATH`，其次查找 PATH 中的 `7z`，再尝试 `C:\Program Files\7-Zip\7z.exe` 和 `C:\Program Files (x86)\7-Zip\7z.exe`。归档命令使用 7z 格式、LZMA2、密码参数和文件名加密参数；本机阶段测试使用真实 7-Zip 26.01 和密码 `Test123456789` 执行创建、`7z t` 标准验证、解出 `manifest/manifest.json` 并比对 manifest SHA256。
+
+明文 manifest 只写入 job 缓存的 `manifest_plain/` 和压缩 staging 目录；标准验证完成后会删除 `manifest_plain/`、staging payload 目录和 verify 解压目录。`archives` 作为同步实体写入 `sync_outbox`，同步 payload 不包含本地 archive 路径、明文 manifest 路径、payload staging 路径或用户密码。本阶段不上传 archive、`.meta.json` 或 `job.index.json`，也不做缓存额度调度、严格解压验证、恢复或 UI 编排；这些继续回到 P1-9 和 P2 阶段。
 
 ## PySide6 百度设置页
 

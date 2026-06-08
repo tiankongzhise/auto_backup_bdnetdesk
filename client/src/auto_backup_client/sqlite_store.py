@@ -16,6 +16,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
 CLIENT_SCHEMA_VERSION = 1
 LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "local_path", "uploadid", "error_message"})
 SYNC_ENTITY_TABLES = {
+    "archives": "archives",
     "backup_jobs": "backup_jobs",
     "content_objects": "content_objects",
     "file_items": "file_items",
@@ -426,6 +427,118 @@ class SQLiteClientStore:
 
     def put_content_reference(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
         _put_row(conn, "content_references", dict(payload), key_field="content_reference_id")
+
+    def update_content_reference_archive(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        content_reference_id: str,
+        archive_id: str,
+        archive_sha256: str,
+        archive_member_path: str,
+        dedupe_status: str,
+        updated_at: str,
+        updated_by_device_id: str,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE content_references
+            SET archive_id = ?,
+                archive_sha256 = ?,
+                archive_member_path = ?,
+                dedupe_status = ?,
+                updated_at = ?,
+                updated_by_device_id = ?
+            WHERE content_reference_id = ?
+            """,
+            (
+                archive_id,
+                archive_sha256,
+                archive_member_path,
+                dedupe_status,
+                updated_at,
+                updated_by_device_id,
+                content_reference_id,
+            ),
+        )
+
+    def put_archive(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+        row = dict(payload)
+        _put_row(conn, "archives", row, key_field="archive_id")
+        record = revision_from_payload(
+            entity_type="archives",
+            entity_id=str(row["entity_id"]),
+            revision_id=str(row["revision_id"]),
+            schema_version=int(row["schema_version"]),
+            data_version=int(row["data_version"]),
+            canonical_record_sha256=str(row["canonical_record_sha256"]),
+            payload=row,
+            updated_at=str(row["updated_at"]),
+            deleted_at=row.get("deleted_at"),
+        )
+        self.enqueue_revision(conn, record)
+        return record
+
+    def put_archive_member(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
+        _put_row(conn, "archive_members", dict(payload), key_field="archive_member_id")
+
+    def get_archive(self, archive_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM archives WHERE archive_id = ?",
+                (archive_id,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def list_archives(self, job_id: str = "", *, limit: int = 500) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5000:
+            raise ValueError("archive list limit must be between 1 and 5000")
+        cleaned_job_id = job_id.strip()
+        with self.connect() as conn:
+            if cleaned_job_id:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM archives
+                    WHERE job_id = ?
+                    ORDER BY archive_seq, archive_id
+                    LIMIT ?
+                    """,
+                    (cleaned_job_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM archives
+                    ORDER BY created_at DESC, archive_id
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_archive_members(self, archive_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM archive_members
+                WHERE archive_id = ?
+                ORDER BY
+                    CASE member_type
+                        WHEN 'manifest' THEN 1
+                        WHEN 'payload' THEN 2
+                        WHEN 'reference' THEN 3
+                        WHEN 'folder' THEN 4
+                        ELSE 9
+                    END,
+                    member_path,
+                    archive_member_id
+                """,
+                (archive_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def replace_content_references_for_job(self, conn: sqlite3.Connection, *, backup_job_id: str) -> set[str]:
         rows = conn.execute(
