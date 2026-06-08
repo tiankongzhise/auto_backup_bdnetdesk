@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -595,7 +596,7 @@ class BaiduResumableUploader:
 
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with open(_fs_path(path), "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -723,4 +724,15 @@ def _part_entity_id(upload_session_id: str, partseq: int) -> str:
 
 
 def _file_mtime_seconds(path: Path) -> int:
-    return int(path.stat().st_mtime)
+    return int(os.stat(_fs_path(path)).st_mtime)
+
+
+def _fs_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = str(path.resolve())
+    if resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved[2:]
+    return "\\\\?\\" + resolved

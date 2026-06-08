@@ -148,10 +148,20 @@ class BackupPipeline:
             if completed:
                 stage = "complete"
                 manager.transition_job(cleaned_job_id, "completed", now=options.now)
+                if options.sync_outbox:
+                    stage = "final_sync"
+                    final_sync = _run_sync_until_idle(
+                        self.store,
+                        self.cloud_client,  # type: ignore[arg-type]
+                        batch_size=options.sync_batch_size,
+                        max_batches=options.max_sync_batches,
+                        now=options.now,
+                    )
+                    sync = _merge_sync_results(sync or SyncWorkerResult(selected=0, sent=0, synced=0, conflicts=0, rejected=0, retryable=0), final_sync)
 
             return BackupPipelineResult(
                 backup_job_id=cleaned_job_id,
-                final_stage=stage,
+                final_stage="complete" if completed else stage,
                 completed=completed,
                 scan=scan,
                 content_index=content_index,

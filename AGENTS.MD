@@ -382,3 +382,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：归档服务对最终 `.7z` 的哈希读取、rename 和 stat 使用 Windows `\\?\` 长路径包装；CLI 测试的短工作目录放在仓库内 `.cache/pt/`，仍保持在可写根内。
 
 后续约束：涉及 `{archive_sha256}.7z`、深层 job cache、pytest basetemp 或清理测试产物时，优先使用仓库内短目录 `.cache/pt`、`.cache/pytest-*`；不得假定 `C:\tmp` 在 pytest 子进程中一定可写。产品代码读取或移动长 archive 路径时应继续使用长路径安全包装。
+
+### 2026-06-08：真实全链路 staging payload 与 resumable archive 读取长路径问题
+
+问题：补跑真实 `BackupPipeline` 全链路测试时，pytest 长 basetemp 叠加 `jobs/{job_id}/tmp/archive_000001/payload/{content_id}` 后，staging payload 复制、staging 目录删除和 `BaiduResumableUploader.file_sha256(...)` 读取最终 `.7z` 均可能出现 `FileNotFoundError`。
+
+原因：P1-9 前一轮只修复了最终 archive 的 rename/stat 和百度上传分片读取，但 staging payload 文件名使用 64 位 `content_id`，路径深度同样会触发 Windows 普通路径 API 限制；`shutil.rmtree` 和 `Path.open()` 仍按普通路径工作。
+
+解决方案：`archive_packager` 的 payload staging 复制、目录清理、文件存在/size 校验改用 Windows `\\?\` 路径包装；`baidu/resumable_upload.py` 的 archive SHA256 和 mtime 读取也改为长路径安全包装。
+
+后续约束：涉及明文 manifest staging、payload staging、verify/tmp 清理、archive hash 或续传读取时，不得只修最终 `.7z` 路径；必须覆盖从源文件复查、payload 复制、临时目录删除到上传读取的整条本地文件生命周期。

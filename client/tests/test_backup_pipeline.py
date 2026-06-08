@@ -172,6 +172,7 @@ def test_pipeline_uploads_syncs_reconciles_and_marks_job_completed(tmp_path) -> 
     assert result.reconcile.status_counts["consistent"] == 3
     assert result.sync is not None
     assert result.sync.retryable == 0
+    assert result.sync.selected >= 1
     assert cloud.synced_event_ids
 
     archive = store.list_archives(job_id)[0]
@@ -182,6 +183,7 @@ def test_pipeline_uploads_syncs_reconciles_and_marks_job_completed(tmp_path) -> 
     assert all(row["archive_id"] == result.archive.archive_id or row["object_type"] == "job_index" for row in remote_objects)
     assert job is not None
     assert job["status"] == "completed"
+    assert job["sync_status"] == "synced"
 
 
 def test_pipeline_upload_failure_keeps_job_retryable_and_never_completed(tmp_path) -> None:

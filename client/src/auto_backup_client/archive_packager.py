@@ -566,16 +566,17 @@ def _stage_payload_members(payload_refs: Sequence[Mapping[str, Any]], payload_di
     members: dict[str, str] = {}
     for ref in payload_refs:
         source = Path(str(ref["local_path"]))
-        if not source.is_file():
+        if not os.path.isfile(_fs_path(source)):
             raise ArchivePackagingError("payload source file is missing")
         expected_size = int(ref["size_bytes"])
-        if source.stat().st_size != expected_size or file_sha256(source) != str(ref["file_sha256"]):
+        if _file_size(source) != expected_size or file_sha256(source) != str(ref["file_sha256"]):
             raise ArchivePackagingError("payload source file changed after scan")
         content_id = str(ref["content_id"])
         payload_dir.mkdir(parents=True, exist_ok=True)
         target = payload_dir / content_id
-        if not target.exists():
-            shutil.copyfile(source, target)
+        if not os.path.exists(_fs_path(target)):
+            with open(_fs_path(source), "rb") as src, open(_fs_path(target), "wb") as dst:
+                shutil.copyfileobj(src, dst)
         members[content_id] = _payload_member_path(content_id)
     return members
 
@@ -662,8 +663,8 @@ def _reset_dir(path: Path) -> None:
 
 
 def _remove_dir(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path)
+    if os.path.exists(_fs_path(path)):
+        shutil.rmtree(_fs_path(path))
 
 
 def _replace_file(source: Path, target: Path) -> None:

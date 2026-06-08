@@ -10,19 +10,18 @@
 
 ## 当前工作项
 
-- P1 阶段 9 端到端备份编排开发完成；下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理。
-- 本轮已完成客户端端到端编排服务：新增 `BackupPipeline`，可顺序执行扫描、内容去重、7-Zip 加密归档、可选真实百度可恢复上传、可选 outbox 同步和可选远端校对；新增 `backup_pipeline_cli`，默认只跑本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
-- 本轮实现边界：只落地可由 UI/CLI 复用的最小主流程编排、状态推进和测试覆盖；不新增恢复、缓存额度调度、严格解压验证、原始数据清理、校对 UI 或自动清理远端对象。
+- P1 阶段 9 端到端备份编排真实百度全链路补测完成；下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理。
+- 本轮属于用户明确要求插入的真实联调补测，不改变主排期；已在进入 P2 阶段 10 前，把 `BackupPipeline` 主流程的真实百度上传验收补齐为可复跑入口。
+- 本轮已新增真实全链路测试 CLI，使用本机 DPAPI Device Token、KDF store 和运行时授权密码，生成临时源文件后执行扫描、内容去重、7-Zip 加密归档、真实百度可恢复上传、Cloud Sync、远端校对、同路径冲突探针和百度 `filemanager/delete` 清理；同时补齐完成状态 final sync。
 - 下一阶段开始前必须把“本次开发阶段：P2 阶段 10 缓存额度与 artifact 管理”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- P1 阶段 9 已验收：编排服务能对已创建 job 顺序执行扫描、内容去重、7-Zip 加密归档、可选上传、可选 outbox 同步和可选远端校对，并返回每个阶段的可审计计数。
-- P1 阶段 9 已验收：本地闭环不读取 Device Token、不解密百度 token、不标记 completed；真实上传模式要求传入百度账号和真实客户端，且 `mark_completed=True` 时必须同时完成 outbox 同步和远端校对。
-- P1 阶段 9 已验收：上传账本沿用归档阶段 `archives.archive_id`，并在上传后回填 `archives.remote_path`；`remote_objects` 中 archive/archive_meta/job_index 与归档实体可关联。
-- P1 阶段 9 已验收：上传失败会把 running job 转为 `failed_retryable`，保留本地归档和 outbox，不写 `remote_objects`，不会误标 completed。
-- P1 阶段 9 已验收：CLI 输出只展示阶段计数、hash 和远端路径 hash，不输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
-- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-pipeline-all3` 通过，107 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过；Go 沙箱内 `go list runtime` 失败，提升权限后 `go version; go list runtime; go test ./...` 通过。
+- 真实全链路补测已验收：新增 CLI 能生成小文件和跨分片随机源文件，执行 `scan -> dedupe -> 7-Zip archive -> quota -> precreate/resume -> locateupload -> superfile2 -> create -> .meta.json -> job.index.json -> sync-outbox -> cloud-summary -> baidu listall reconcile -> completed -> final sync -> conflict probe -> filemanager/delete cleanup`。
+- 真实全链路补测已验收：跨分片 archive 实际上传 `uploaded_part_count=2`；`.meta.json` 和 `job.index.json` 真实上传并返回 fs_id；同路径 `rtype=0` 冲突探针返回百度错误 `-8`；远端校对 3 个对象全部 `consistent`；清理删除本批 3 个远端对象且 `cleanup_delete_errno=0`。
+- 真实全链路补测已验收：完成状态写入后的最终 job revision 已通过 `/v1/reconcile/entities/{entity_id}` 校验 `completed_job_cloud_summary_verified=true`；同步总计 `sync_selected=25`、`sync_synced=25`、无 conflict/rejected/retryable。
+- 真实全链路补测已验收：入口默认使用本机已有 DPAPI Device Token 和 KDF store，可从本地忽略的 `client/.env` 读取 `BAIDU_AUTH_PASSWORD`，输出未写入密钥、token、真实本地路径或真实远端路径。
+- 已验证客户端定向测试 `tests/test_backup_pipeline.py tests/test_real_backup_pipeline_test_cli.py tests/test_backup_pipeline_cli.py` 通过，9 个测试通过。
 
 ## 开发排期
 
@@ -54,6 +53,16 @@
 - 产品规格要求的扫描、内容指纹、最终去重、7-Zip 加密 manifest、缓存策略、来源映射、清理和恢复尚无对应实现文件或测试，不能把当前上传链路联调成功等同于完整 v1.3 发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-08：P1-9 端到端备份编排真实百度全链路补测
+
+变更原因：用户明确要求“补全真实百度上传测试，要求全链路实测，使用本机的已有密钥”；P1 阶段 9 原完成记录中仍标注真实 `backup_pipeline_cli --upload --sync-outbox --reconcile-remote` 需要人工联调窗口执行。
+
+影响阶段：挂靠 P1 阶段 9 端到端备份编排，不改变主排期；完成后继续回到 P2 阶段 10 缓存额度与 artifact 管理。
+
+验收标准：新增可复跑真实全链路测试入口；使用本机 DPAPI Device Token、KDF store 和运行时授权密码，真实执行扫描、去重、7-Zip 归档、百度可恢复上传、Cloud Sync、远端校对、completed final sync、同路径冲突探针和百度删除清理；输出保持脱敏。
+
+回到主排期条件：真实全链路跑测成功、远端清理完成、客户端回归检查通过并提交后，下一阶段回到 P2 阶段 10。
 
 ### 2026-06-08：辅助 JSON 远端 md5 口径误报修复
 
@@ -95,15 +104,25 @@
 - 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
 - 已验证仓库根目录 `git diff --check` 通过。
 - 已验证沙箱内 Go 自检 `go version; go list runtime` 仍出现 `package runtime is not in std`，按既有约束提升权限后 `go version; go list runtime; go test ./...` 通过，确认不是 Go 服务代码回归。
+- P1 阶段 9 真实百度全链路补测已完成；下一个开发阶段仍为 P2 阶段 10 缓存额度与 artifact 管理。
+- 新增 `client/src/auto_backup_client/real_backup_pipeline_test_cli.py`，作为可复跑真实主流程验收入口：默认使用仓库 `.cache/real-pipeline/` 临时 SQLite、缓存和源文件目录，复用本机 DPAPI Device Token 和 KDF store，从运行时环境读取授权/归档密码。
+- 真实测试入口会生成小文件和跨 4 MiB 分片源文件，执行扫描、去重、7-Zip 归档、百度容量检查、可恢复上传、Cloud Sync、远端校对、job completed、completed final sync、同路径 `rtype=0` 冲突探针和百度 `filemanager/delete` 清理。
+- `BackupPipeline` 已补齐 completed final sync：远端校对一致并写入 job `completed` 后，会再次同步 outbox，把最终完成状态 revision 推送到真实云端。
+- 修复真实全链路暴露的 Windows 长路径问题：payload staging 复制、staging 目录删除、`BaiduResumableUploader` archive SHA256 和 mtime 读取均改为 Windows `\\?\` 长路径安全包装。
+- 更新 `client/README.md`，将 `real_backup_pipeline_test_cli` 记录为 P1-9 主流程真实验收入口，并把 `integration_cli run-resumable` 定位为底层上传账本排障入口。
+- 将 staging payload、staging cleanup 和 resumable archive 读取长路径问题沉淀到 `AGENTS.MD`。
+- 新增 `client/tests/test_real_backup_pipeline_test_cli.py`，覆盖真实测试入口的主控制流、completed summary 校验、冲突探针、远端清理和输出脱敏。
+- 已使用本机已有 DPAPI Device Token、KDF store 和 `client/.env` 中运行时授权密码执行真实 `uv run python -m auto_backup_client.real_backup_pipeline_test_cli --password-env BAIDU_AUTH_PASSWORD`：`completed=true`、`uploaded_part_count=2`、`sync_selected=25`、`sync_synced=25`、`sync_conflicts=0`、`sync_rejected=0`、`sync_retryable=0`、`reconcile_consistent=3`、`completed_job_cloud_summary_verified=true`、`conflict_probe_error_code=-8`、`cleanup_object_count=3`、`cleanup_delete_errno=0`。
+- 已验证客户端定向测试 `tests/test_backup_pipeline.py tests/test_real_backup_pipeline_test_cli.py tests/test_backup_pipeline_cli.py` 通过，9 个测试通过。
 
-提交摘要：本次提交完成 P1 阶段 9 端到端备份编排，新增可由 CLI/UI 复用的 `BackupPipeline`，把任务、扫描、去重、7-Zip 归档、可恢复上传、outbox 同步和远端校对串成最小主流程；默认本地模式不碰真实云端，真实上传模式继续复用已验收的百度和云端链路，并在 outbox 同步成功且校对一致后才允许 job completed。
+提交摘要：本次提交完成 P1 阶段 9 真实百度全链路补测，新增 `real_backup_pipeline_test_cli` 作为可复跑主流程验收入口，补齐 completed final sync，并修复 staging payload、staging cleanup 和 resumable archive 读取长路径问题；已用本机已有凭据跑通真实百度上传、同步、远端校对、同路径冲突探针和远端清理。
 
 后续待办：
 
 - 下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理；下一轮开始前必须在当前工作项写明“本次开发阶段：P2 阶段 10 缓存额度与 artifact 管理”。
 - P2 阶段 10 需要新增缓存 artifact 记录、40GiB 有效预算、可释放统计、缓存清理等级和 artifact 生命周期；不得删除用户源文件。
 - P2 阶段 10 需要把 P1-8/P1-9 的 archive、manifest_plain、staging、verify、upload 临时文件纳入统一 artifact 生命周期，并明确哪些阶段前不可删除。
-- 真实 `backup_pipeline_cli --upload --sync-outbox --reconcile-remote` 仍需要在有授权密码的人工联调窗口执行，并在完成后按既有清理入口清理本批远端测试对象；本轮单元测试没有把 fake 百度/云端结果当作真实验收结论。
+- 后续 P2/P3 每次改动归档、缓存、恢复或校对链路后，应优先复跑 `real_backup_pipeline_test_cli`，并确认远端清理 `cleanup_delete_errno=0`。
 
 ### P1 阶段 8 7-Zip 加密归档与 manifest
 

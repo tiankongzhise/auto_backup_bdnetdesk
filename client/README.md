@@ -24,6 +24,7 @@
 - `src/auto_backup_client/archive_packager.py`：7-Zip 加密归档与 manifest 服务，负责生成临时明文 manifest、staging payload、AES-256 7z archive、标准验证和本地归档索引。
 - `src/auto_backup_client/backup_pipeline.py`：端到端备份编排服务，负责串联扫描、去重、归档、可选真实百度上传、可选 outbox 同步和可选远端校对。
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
+- `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
 - `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
@@ -85,7 +86,26 @@ $env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
 uv run python -m auto_backup_client.backup_pipeline_cli --password-env BAIDU_AUTH_PASSWORD --source .\path\to\file --cache-root ..\var\cache --upload --sync-outbox --reconcile-remote
 ```
 
-真实模式会复用 `BaiduResumableUploader` 上传 archive、`.meta.json` 和 `job.index.json`，并把上传账本中的 `archive_id` 对齐到归档阶段生成的 `archives.archive_id`。CLI 输出只展示 job、计数、hash、fs_id 相关摘要和远端路径 hash；不得输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
+真实模式会复用 `BaiduResumableUploader` 上传 archive、`.meta.json` 和 `job.index.json`，并把上传账本中的 `archive_id` 对齐到归档阶段生成的 `archives.archive_id`。`mark_completed=True` 时，编排器会在远端校对一致后写入 job `completed`，并追加一次 final sync，把完成状态 revision 推送到真实云端。CLI 输出只展示 job、计数、hash、fs_id 相关摘要和远端路径 hash；不得输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
+
+真实全链路测试入口：
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:TMP='..\.cache\tmp'
+$env:TEMP='..\.cache\tmp'
+
+# 可直接复用本目录被 git 忽略的 .env 中 CLOUD_API_BASE_URL 和 BAIDU_AUTH_PASSWORD；
+# 如需临时覆盖，也可在当前 PowerShell 会话设置：
+$env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
+
+uv run python -m auto_backup_client.real_backup_pipeline_test_cli --password-env BAIDU_AUTH_PASSWORD
+```
+
+`real_backup_pipeline_test_cli` 默认使用仓库内 `.cache/real-pipeline/` 的临时 SQLite、缓存和源文件目录，不污染常规 `var/data`；会生成小文件和跨 4 MiB 分片源文件，执行 `scan -> dedupe -> 7-Zip archive -> quota -> precreate/resume -> locateupload -> superfile2 -> create -> .meta.json -> job.index.json -> sync-outbox -> cloud-summary -> baidu listall reconcile -> completed -> final sync -> conflict probe -> filemanager/delete cleanup`。验收时要求跨分片 archive 上传分片数大于 1、远端 3 个对象全部 `consistent`、completed job 云端 summary 匹配、同路径 `rtype=0` 冲突探针命中、清理 `errno=0`。如加 `--keep-remote` 保留远端对象，必须用输出的 `job_id` 和本次临时 SQLite 另行清理。
 
 ## PySide6 百度设置页
 
@@ -140,7 +160,7 @@ uv run python -m auto_backup_client.baidu.upload_cli --password-env BAIDU_AUTH_P
 
 ## upload-resumable 一键联调 CLI
 
-阶段验收优先使用 `integration_cli run-resumable`，它会生成临时 archive，并在同一入口完成真实百度上传、本地 SQLite outbox 写入、真实 Cloud Sync 推送、云端 revision 摘要校验和百度 `filemanager/delete` 清理。默认会检查百度容量、校验云端 summary 并删除本批远端临时对象；排障时可用 `--keep-remote` 保留远端对象，再用 `cleanup-resumable` 按 `job_id` 或 `upload_session_id` 清理。
+底层上传账本排障可使用 `integration_cli run-resumable`，它会生成临时 archive，并在同一入口完成真实百度上传、本地 SQLite outbox 写入、真实 Cloud Sync 推送、云端 revision 摘要校验和百度 `filemanager/delete` 清理。默认会检查百度容量、校验云端 summary 并删除本批远端临时对象；排障时可用 `--keep-remote` 保留远端对象，再用 `cleanup-resumable` 按 `job_id` 或 `upload_session_id` 清理。P1-9 主流程验收优先使用上一节 `real_backup_pipeline_test_cli`。
 
 ```powershell
 cd client
@@ -206,7 +226,7 @@ uv run python -m auto_backup_client.sync_cli sync-outbox --verify-cloud-summary
 
 固定真实联调顺序：
 
-1. 优先运行 `integration_cli run-resumable`，真实上传临时 archive、`.meta.json`、`job.index.json`，写入本地 outbox，推送 Cloud Sync revision，校验云端 summary 并清理本批远端对象。
+1. 优先运行 `real_backup_pipeline_test_cli`，从临时源文件开始真实执行 P1-9 主流程，上传 archive、`.meta.json`、`job.index.json`，同步 Cloud Sync revision，远端校对一致后写入 completed 并 final sync，随后执行同路径冲突探针和百度删除清理。
 2. 若需要分步排障，先运行 `upload-resumable --check-quota`，再运行 `sync-outbox --verify-cloud-summary`，最后使用 `integration_cli cleanup-resumable` 或百度 `filemanager/delete` 清理本批远端测试文件。
 3. 清理失败只记录脱敏状态和人工清理待办。
 
