@@ -9,6 +9,9 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -20,6 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -27,6 +31,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from auto_backup_client.baidu.reconcile import RemoteObjectReconciler, RemoteReconcileReport, RemoteReconcileScope
+from auto_backup_client.baidu.reconcile_repair import (
+    CONFIRM_REPAIR_TEXT,
+    RemoteObjectRepairer,
+    RemoteRepairPlan,
+    build_remote_repair_plan,
+)
+from auto_backup_client.baidu.upload import BaiduNetdiskClient
+from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
+from auto_backup_client.baidu.cloud_api import BaiduCloudClient
 from auto_backup_client.backup_jobs import (
     BackupJobError,
     BackupJobManager,
@@ -37,6 +51,7 @@ from auto_backup_client.backup_jobs import (
 )
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.settings import ClientSettings
+from auto_backup_client.source_mapping import SourceMappingQuery, SourceMappingReport, path_digest, short_digest
 from auto_backup_client.sqlite_store import SQLiteClientStore
 from auto_backup_client.ui.baidu_settings import BaiduSettingsPage, BaiduSettingsPageConfig
 
@@ -306,13 +321,287 @@ class BackupTaskPage(QWidget):
         QMessageBox.warning(self, "提示", message)
 
 
+class SourceMappingPage(QWidget):
+    status_changed = Signal(str)
+
+    def __init__(self, store: SQLiteClientStore, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._query = SourceMappingQuery(store)
+        self._build_ui()
+        self.refresh_mapping()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("来源映射")
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("任务 ID"))
+        self.job_id_input = QLineEdit()
+        self.job_id_input.setPlaceholderText("留空显示最近记录")
+        filters.addWidget(self.job_id_input, stretch=2)
+        filters.addWidget(QLabel("关键字"))
+        self.keyword_input = QLineEdit()
+        self.keyword_input.setPlaceholderText("任务名、文件名、relative path、content/archive hash")
+        filters.addWidget(self.keyword_input, stretch=2)
+        self.refresh_button = QPushButton("刷新")
+        self.refresh_button.clicked.connect(self.refresh_mapping)
+        filters.addWidget(self.refresh_button)
+        layout.addLayout(filters)
+
+        self.summary_label = QLabel("尚未加载")
+        layout.addWidget(self.summary_label)
+
+        self.mapping_table = QTableWidget(0, 14)
+        self.mapping_table.setHorizontalHeaderLabels(
+            [
+                "任务",
+                "状态",
+                "设备",
+                "来源",
+                "文件名",
+                "大小",
+                "SHA256",
+                "content_id",
+                "去重",
+                "archive",
+                "成员",
+                "远端",
+                "清理",
+                "恢复",
+            ]
+        )
+        self.mapping_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.mapping_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.mapping_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.mapping_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.mapping_table, stretch=1)
+
+    @Slot()
+    def refresh_mapping(self) -> None:
+        try:
+            report = self._query.list_rows(
+                backup_job_id=self.job_id_input.text(),
+                keyword=self.keyword_input.text(),
+                limit=500,
+            )
+        except ValueError as exc:
+            self._warn(str(exc))
+            return
+        self._render_report(report)
+        self.status_changed.emit(f"来源映射已刷新：{report.summary.total_rows} 行。")
+
+    def _render_report(self, report: SourceMappingReport) -> None:
+        summary = report.summary
+        self.summary_label.setText(
+            " / ".join(
+                [
+                    f"映射行 {summary.total_rows}",
+                    f"任务 {summary.job_count}",
+                    f"来源 {summary.source_count}",
+                    f"内容 {summary.content_count}",
+                    f"归档 {summary.archive_count}",
+                    f"远端对象 {summary.remote_object_count}",
+                    f"可恢复候选 {summary.baidu_ready_count}",
+                ]
+            )
+        )
+        self.mapping_table.setRowCount(len(report.rows))
+        for row_index, row in enumerate(report.rows):
+            remote_label = "已确认" if row.baidu_ready else row.remote_archive_status
+            values = [
+                row.job_name,
+                row.job_status,
+                short_digest(row.device_id),
+                f"{row.source_seq}:{row.source_display_name} {short_digest(row.source_path_sha256)}",
+                row.display_name,
+                str(row.size_bytes),
+                short_digest(row.sha256),
+                short_digest(row.content_id),
+                row.dedupe_status,
+                f"{row.archive_seq or ''} {short_digest(row.archive_sha256)} {row.archive_type}",
+                row.archive_member_path,
+                f"{remote_label} {short_digest(row.remote_archive_path_sha256)}",
+                row.cleanup_status,
+                row.restore_status,
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, row.backup_job_id)
+                self.mapping_table.setItem(row_index, col, item)
+
+    def _warn(self, message: str) -> None:
+        self.status_changed.emit(message)
+        QMessageBox.warning(self, "提示", message)
+
+
+class RemoteReconcilePage(QWidget):
+    status_changed = Signal(str)
+
+    def __init__(
+        self,
+        store: SQLiteClientStore,
+        *,
+        cloud_api_base_url: str,
+        device_token: str,
+        device_id: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._store = store
+        self._cloud_api_base_url = cloud_api_base_url
+        self._device_token = device_token
+        self._device_id = device_id or "current-device"
+        self._last_report: RemoteReconcileReport | None = None
+        self._last_plan: RemoteRepairPlan | None = None
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("远端校对")
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+
+        scope_group = QGroupBox("校对范围")
+        form = QFormLayout(scope_group)
+        self.scope_type_combo = QComboBox()
+        self.scope_type_combo.addItems(["job_id", "upload_session_id", "remote_dir"])
+        self.scope_value_input = QLineEdit()
+        self.scope_value_input.setPlaceholderText("输入 job_id、upload_session_id 或百度远端目录")
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.setPlaceholderText("授权密码仅用于本机解密，不保存")
+        self.account_id_input = QLineEdit()
+        self.account_id_input.setPlaceholderText("留空使用当前设备已选择账号")
+        self.recursive_checkbox = QCheckBox("递归 listall")
+        self.recursive_checkbox.setChecked(True)
+        self.page_limit_spin = QSpinBox()
+        self.page_limit_spin.setRange(1, 5000)
+        self.page_limit_spin.setValue(1000)
+        form.addRow("范围类型", self.scope_type_combo)
+        form.addRow("范围值", self.scope_value_input)
+        form.addRow("账号 ID", self.account_id_input)
+        form.addRow("授权密码", self.password_input)
+        form.addRow("列表方式", self.recursive_checkbox)
+        form.addRow("分页上限", self.page_limit_spin)
+        layout.addWidget(scope_group)
+
+        toolbar = QHBoxLayout()
+        self.reconcile_button = QPushButton("执行校对")
+        self.reconcile_button.clicked.connect(self.run_reconcile)
+        self.apply_button = QPushButton("确认修复")
+        self.apply_button.clicked.connect(self.apply_selected_repairs)
+        self.confirm_input = QLineEdit()
+        self.confirm_input.setPlaceholderText(CONFIRM_REPAIR_TEXT)
+        toolbar.addWidget(self.reconcile_button)
+        toolbar.addWidget(QLabel("确认短语"))
+        toolbar.addWidget(self.confirm_input, stretch=1)
+        toolbar.addWidget(self.apply_button)
+        layout.addLayout(toolbar)
+
+        self.summary_label = QLabel("尚未校对")
+        layout.addWidget(self.summary_label)
+
+        self.findings_table = QTableWidget(0, 8)
+        self.findings_table.setHorizontalHeaderLabels(["状态", "对象", "建议", "动作", "选择", "写入", "远端路径", "本地对象"])
+        self.findings_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.findings_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.findings_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.findings_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.findings_table, stretch=1)
+
+    @Slot()
+    def run_reconcile(self) -> None:
+        try:
+            scope = self._scope_from_inputs()
+            password = self.password_input.text()
+            if not password:
+                raise ValueError("authorization password is required")
+            with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0) as cloud:
+                workflow = BaiduAuthWorkflow(cloud)
+                account_id = self.account_id_input.text().strip() or _selected_account_id_for_ui(workflow)
+                decrypted = workflow.decrypt_password_token(account_id, authorization_password=password)
+            with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
+                report = RemoteObjectReconciler(store=self._store, baidu=baidu).reconcile(scope)
+            plan = build_remote_repair_plan(report)
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        self._last_report = report
+        self._last_plan = plan
+        self._render_plan(plan)
+        self.status_changed.emit(f"远端校对完成：{len(report.findings)} 个 finding。")
+
+    @Slot()
+    def apply_selected_repairs(self) -> None:
+        if self._last_plan is None:
+            self._warn("请先执行校对。")
+            return
+        if self.confirm_input.text().strip() != CONFIRM_REPAIR_TEXT:
+            self._warn("确认短语不匹配。")
+            return
+        try:
+            result = RemoteObjectRepairer(
+                store=self._store,
+                updated_by_device_id=self._device_id,
+            ).apply(self._last_plan, dry_run=False)
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        self.summary_label.setText(
+            f"修复完成：候选 {result.candidate_count}，可写 {result.writable_count}，选中 {result.selected_count}，已写入 {result.applied_count}。"
+        )
+        self.status_changed.emit(f"远端修复已写入 {result.applied_count} 条版本记录。")
+
+    def _scope_from_inputs(self) -> RemoteReconcileScope:
+        scope_type = self.scope_type_combo.currentText()
+        value = self.scope_value_input.text().strip()
+        if scope_type == "job_id":
+            return RemoteReconcileScope(job_id=value, recursive=self.recursive_checkbox.isChecked(), page_limit=self.page_limit_spin.value())
+        if scope_type == "upload_session_id":
+            return RemoteReconcileScope(upload_session_id=value, recursive=self.recursive_checkbox.isChecked(), page_limit=self.page_limit_spin.value())
+        return RemoteReconcileScope(remote_dir=value, recursive=self.recursive_checkbox.isChecked(), page_limit=self.page_limit_spin.value())
+
+    def _render_plan(self, plan: RemoteRepairPlan) -> None:
+        report = plan.report
+        counts = ", ".join(f"{key}={value}" for key, value in sorted(report.status_counts.items()) if value)
+        self.summary_label.setText(
+            f"范围 {report.scope.scope_type} / 本地 {report.local_object_count} / 百度 {report.remote_object_count} / findings {len(report.findings)} / {counts or '无差异'}"
+        )
+        self.findings_table.setRowCount(len(plan.candidates))
+        for row_index, candidate in enumerate(plan.candidates):
+            values = [
+                candidate.status,
+                candidate.object_type,
+                candidate.reason,
+                candidate.action,
+                "是" if candidate.selected else "否",
+                "是" if candidate.will_write else "否",
+                short_digest(path_digest(_candidate_remote_path(candidate))),
+                short_digest(candidate.local_remote_object_id),
+            ]
+            for col, value in enumerate(values):
+                self.findings_table.setItem(row_index, col, QTableWidgetItem(value))
+
+    def _warn(self, message: str) -> None:
+        self.status_changed.emit(message)
+        QMessageBox.warning(self, "提示", message)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: MainWindowConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
-        store = SQLiteClientStore(config.sqlite_path)
-        store.migrate()
-        self._backup_page = BackupTaskPage(BackupJobManager(store, device_id=config.device_id or "current-device"))
+        self._store = SQLiteClientStore(config.sqlite_path)
+        self._store.migrate()
+        self._backup_page = BackupTaskPage(BackupJobManager(self._store, device_id=config.device_id or "current-device"))
         self._baidu_page = BaiduSettingsPage(
             BaiduSettingsPageConfig(
                 cloud_api_base_url=config.cloud_api_base_url,
@@ -320,6 +609,13 @@ class MainWindow(QMainWindow):
                 device_id=config.device_id,
                 device_credential_source=config.device_credential_source,
             )
+        )
+        self._source_mapping_page = SourceMappingPage(self._store)
+        self._reconcile_page = RemoteReconcilePage(
+            self._store,
+            cloud_api_base_url=config.cloud_api_base_url,
+            device_token=config.device_token,
+            device_id=config.device_id,
         )
         self._build_ui()
 
@@ -334,16 +630,22 @@ class MainWindow(QMainWindow):
         self.nav.setFixedWidth(180)
         self.nav.addItem(QListWidgetItem("备份任务"))
         self.nav.addItem(QListWidgetItem("百度设置"))
+        self.nav.addItem(QListWidgetItem("来源映射"))
+        self.nav.addItem(QListWidgetItem("远端校对"))
         self.nav.currentRowChanged.connect(self._set_current_page)
         layout.addWidget(self.nav)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self._backup_page)
         self.stack.addWidget(self._baidu_page)
+        self.stack.addWidget(self._source_mapping_page)
+        self.stack.addWidget(self._reconcile_page)
         layout.addWidget(self.stack, stretch=1)
 
         self.status_label = QLabel("准备就绪")
         self._backup_page.status_changed.connect(self.status_label.setText)
+        self._source_mapping_page.status_changed.connect(self.status_label.setText)
+        self._reconcile_page.status_changed.connect(self.status_label.setText)
         self.setCentralWidget(shell)
         self.statusBar().addPermanentWidget(self.status_label, stretch=1)
         self.nav.setCurrentRow(0)
@@ -412,6 +714,23 @@ def _path_hash_for_display(local_path: str) -> str:
     return path_sha256(local_path)[:12]
 
 
+def _selected_account_id_for_ui(workflow: BaiduAuthWorkflow) -> str:
+    selected = [account for account in workflow.load_accounts() if account.selected]
+    if not selected:
+        raise ValueError("account_id is required because current device has no selected Baidu account")
+    return selected[0].account_id
+
+
+def _safe_ui_error(exc: Exception) -> str:
+    text = str(exc)
+    if len(text) > 180:
+        text = text[:177] + "..."
+    return text.replace("\n", " ").replace("\r", " ")
+
+
+def _candidate_remote_path(candidate) -> str:  # type: ignore[no-untyped-def]
+    return str(getattr(candidate, "remote_path", ""))
+
+
 if __name__ == "__main__":
     raise SystemExit(run_main_window_app())
-

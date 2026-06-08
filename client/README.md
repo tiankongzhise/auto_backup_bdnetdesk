@@ -25,15 +25,16 @@
 - `src/auto_backup_client/local_fs.py`：Windows 长路径安全本地文件访问工具。
 - `src/auto_backup_client/cache_artifacts.py`：缓存 artifact 登记、预算检查、缓存等级和清理服务。
 - `src/auto_backup_client/cache_artifacts_cli.py`：缓存状态和清理 CLI，输出只包含大小、状态和路径 hash。
+- `src/auto_backup_client/source_mapping.py`：来源映射只读聚合服务，面向 UI 展示 job/source/file/content/archive/remote object 关系。
 - `src/auto_backup_client/backup_pipeline.py`：端到端备份编排服务，负责串联扫描、去重、归档、可选真实百度上传、可选 outbox 同步和可选远端校对。
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
-- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
+- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页和远端校对页；远端校对页复用底层校对/修复服务，写入前要求确认短语。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
 ## PySide6 主窗口
 
-阶段 P1-5 的主窗口提供备份任务页和百度设置页入口。备份任务页当前只完成任务创建、来源持久化和状态机闭环，不执行递归扫描、内容指纹、去重、7-Zip 加密归档、manifest 生成、百度上传、清理或恢复。
+主窗口提供备份任务、百度设置、来源映射和远端校对入口。备份任务页支持选择/拖拽来源、创建任务、开始、暂停、继续和取消；端到端执行仍由 `backup_pipeline_cli` 和后续任务编排入口承载。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。
 
 ```powershell
 cd client
@@ -44,7 +45,7 @@ $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.ui.main_window
 ```
 
-`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。
+`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。来源映射和远端校对 UI 不把本地 SQLite 路径、Device Token、百度 token、用户密码或 wrapping key 输出到界面日志。
 
 ## 扫描与内容指纹
 
