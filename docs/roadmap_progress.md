@@ -11,16 +11,16 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- P3 阶段 14 发布打包工程骨架开发完成；P3 阶段 14 仍在进行中，下一个开发小项为干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
-- 本轮已新增 GUI 启动入口、PyInstaller onedir Windows GUI 构建脚本、打包运行时 SQLite 迁移目录定位、发布验收矩阵和自动化测试。
-- 本轮未修改 Go 云端 API 或 PostgreSQL schema；未执行干净 Windows 机器安装/升级/卸载验收，真实全链路最终验收留在 P3-14 后续发布候选验证中执行。
+- P3 阶段 14 发布候选云服务同步真实性审计开发完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 本轮新增可复跑的真实 Cloud Sync 审计探针，生成无敏感 payload 的临时 revision，真实调用 `POST /v1/sync/revisions` 并通过 `GET /v1/reconcile/entities/{entity_id}` 回读校验；同步更新发布验收矩阵、客户端文档、AGENTS.MD 和测试。
+- 本轮未修改 Go 云端 API 或 PostgreSQL schema；真实线上审计证明当前云服务同步不是虚假同步，但干净 Windows 发布候选仍需复验完整 R04-R14 矩阵。
 
 ## 本次验收标准
 
-- P3-14 本轮已验收：客户端存在可复用 GUI 启动入口，PyInstaller 构建命令固定使用 Windows GUI onedir 方案，并把 SQLite 迁移目录作为 data 加入发行包。
-- P3-14 本轮已验收：打包后的运行时可通过 PyInstaller `_MEIPASS` 定位 `migrations/sqlite`；源码运行仍沿用 `client/migrations/sqlite`，并支持测试/排障覆盖迁移目录。
-- P3-14 本轮已验收：发布验收矩阵覆盖安装/授权/备份/校对/清理/恢复/升级/卸载/敏感信息检查，并明确哪些项目必须在干净 Windows 环境执行。
-- P3-14 本轮已验收：PyInstaller 官方文档依据已记录；客户端定向测试、全量 pytest、compileall、`git diff --check`、dry-run 和真实 PyInstaller onedir 构建通过。
+- P3-14 本轮已验收：真实 `https://backup.baichengedu.com/v1/readyz` 可用，审计探针首次提交唯一 revision 返回 `synced`。
+- P3-14 本轮已验收：`GET /v1/reconcile/entities/{entity_id}` 回读到相同 `revision_id`、`data_version` 和 `canonical_record_sha256`，确认不是仅让本地 `sync_outbox` 标记为 `synced` 的虚假同步。
+- P3-14 本轮已验收：重复提交同一 revision 返回 `duplicate`，证明云端存在当前实体投影或不可变 revision 幂等记录。
+- P3-14 本轮已验收：CLI 输出脱敏，不打印 Device Token、payload 正文、本地 SQLite 路径、百度 token、用户密码或完整敏感路径。
 
 ## 开发排期
 
@@ -41,7 +41,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；发布打包工程骨架已完成，P3 阶段 14 尚未整体完成 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复和卸载/升级测试 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；发布打包工程骨架和开发机云同步真实性审计已完成，P3 阶段 14 尚未整体完成 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
 
 ## 进度差异审计
 
@@ -53,6 +53,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-08：P3-14 发布候选云服务同步真实性审计
+
+变更原因：用户要求“完成下一阶段开发，同时审计云服务同步是否真实可用，是否是虚假同步”；P3 阶段 14 当前正处于最终验收阶段，云同步真实性属于发布候选阻塞验收项。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；完成后继续回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+
+验收标准：新增可复跑真实 Cloud Sync 审计探针；使用本机 DPAPI Device Token 或运行时 Device Token，真实检查 `/v1/readyz`，提交无敏感临时 revision，回读云端 summary 并比对 `revision_id`、`data_version`、`canonical_record_sha256`，重复提交同一 revision 返回 `duplicate`；输出保持脱敏。
+
+回到主排期条件：真实线上探针通过、定向测试通过、发布验收矩阵记录开发机结果并提交后，下一开发小项回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-08：P1-9 端到端备份编排真实百度全链路补测
 
@@ -85,6 +95,29 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：云服务同步真实性审计
+
+- P3 阶段 14 发布候选云服务同步真实性审计开发完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 新增 `client/src/auto_backup_client/cloud_sync_audit_cli.py`，作为可复跑真实 Cloud Sync 审计探针；该入口不依赖本地 SQLite outbox，不上传百度文件，只生成无敏感临时 revision 直连真实 Cloud Sync API。
+- 审计探针先检查真实云端 `/v1/readyz` 必须 ready，再提交唯一 `release_sync_audits` revision；首次同步必须返回 `synced`，随后通过 `GET /v1/reconcile/entities/{entity_id}` 回读云端 summary 并比对 `revision_id`、`data_version` 和 `canonical_record_sha256`。
+- 审计探针会重复提交完全相同的 revision，要求云端返回 `duplicate`，用于证明云端存在当前实体投影或不可变 revision 幂等记录，而不是每次盲目成功。
+- CLI 输出只包含 Device Token 来源、probe entity/event 的 SHA256、revision id、record hash、同步状态和布尔结论；不输出 Device Token、payload 正文、本地 SQLite 路径、百度 token、用户密码或完整敏感路径。
+- 更新 `docs/release_acceptance_matrix.md`，新增 R13 云同步真实性审计，把原敏感信息审计顺延为 R14，并记录开发机真实审计证据。
+- 更新 `client/README.md`，补充 `auto_backup_client.cloud_sync_audit_cli` 的发布候选复跑命令、通过标准和“不得只看本地 sync_outbox 状态”的验收边界。
+- 将沙箱内无法读取本机 DPAPI Device Token 导致 `device_credential_store_error` 的问题沉淀到 `AGENTS.MD`；该错误发生在凭据读取阶段，不代表 Cloud Sync API 失败，需提升权限或提供运行时 `CLOUD_API_DEVICE_TOKEN` 重跑。
+- 已验证定向测试 `tests/test_cloud_sync_audit_cli.py tests/test_sync_cli.py` 通过，6 个测试通过。
+- 已执行真实线上审计：沙箱内因 DPAPI 凭据读取权限返回 `device_credential_store_error`；按权限流程提升后同一命令通过，输出 `first_sync_status=synced`、`summary_matched=true`、`duplicate_sync_status=duplicate`、`duplicate_verified=true`、`cloud_sync_truthful=true`。
+- 真实审计可追溯摘要：`probe_entity_id_sha256=3983c32795e88a23d32bbb0a9e9e7514eeec4093bbfec641716e511fa459a2e6`，`probe_event_id_sha256=39ce68fa416500ec7ef0aba93171d7e3e7024d9dad5fae67818b7549f8dc3b7c`，`probe_revision_id=019ea787-7b7c-729e-bf7c-d9af48cd4707`，`probe_record_sha256=8f6afc61936c27f27ecc30b662eaf2c72786cde4e3272a20dc2a49e67e2008c5`。
+- 本轮未修改 Go 云端 API、PostgreSQL schema 或发布构建脚本；审计结论是当前线上云服务同步真实可用，不是虚假同步。
+
+提交摘要：本次提交完成 P3 阶段 14 发布候选云服务同步真实性审计，新增真实 Cloud Sync 探针、发布矩阵 R13、客户端复跑说明和 DPAPI 沙箱边界记录；真实线上探针证明云端 revision 可写入、可 summary 回读、重复提交返回幂等 duplicate。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 干净 Windows 验收时必须复跑 R13 云同步真实性审计，并继续执行 R04-R12、R14 的首次启动、授权、备份、校对、清理、恢复、断网补偿、升级、卸载/清理和敏感信息审计。
+- 后续若发现 `sync-outbox` 标记为 `synced` 但云端 summary 不匹配，必须进入同步一致性阻塞修复，不得把本地状态当作发布验收通过。
 
 ### P3 阶段 14 打包发布与最终验收：发布打包工程骨架
 

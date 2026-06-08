@@ -64,10 +64,22 @@ PyInstaller 官方文档获取记录：
 | R10 | 断网补偿 | 干净 Windows | 云端临时不可用时执行本地任务并恢复网络 | 本地 SQLite 落盘；云端恢复后 outbox 可补偿同步 | 待执行 |
 | R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动 | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等 | 待执行 |
 | R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据 | 程序目录可移除；用户数据、凭据和缓存清理边界清晰 | 待执行 |
-| R13 | 敏感信息审计 | 开发机/干净 Windows | 检查 dist、日志、SQLite outbox 和 UI 输出 | 无 `.env`、token、密码、wrapping key、明文 manifest 或完整敏感路径泄漏 | 待执行 |
+| R13 | 云同步真实性审计 | 开发机/干净 Windows | 运行 `auto_backup_client.cloud_sync_audit_cli` | 真实云端 `/v1/readyz` 为 ready；探针 revision 返回 `synced`；`GET /v1/reconcile/entities/{entity_id}` 回读 `revision_id`、`data_version`、`canonical_record_sha256` 匹配；重复提交同一 revision 返回 `duplicate` | 开发机已验收：`first_sync_status=synced`、`summary_matched=true`、`duplicate_sync_status=duplicate`、`duplicate_verified=true`、`cloud_sync_truthful=true`；干净机待复验 |
+| R14 | 敏感信息审计 | 开发机/干净 Windows | 检查 dist、日志、SQLite outbox 和 UI 输出 | 无 `.env`、token、密码、wrapping key、明文 manifest 或完整敏感路径泄漏 | 待执行 |
 
 ## 发布阻塞项
 
 - 尚未执行干净 Windows 真实安装/授权/备份/校对/清理/恢复/升级/卸载矩阵。
 - 尚未生成最终安装器；当前是 onedir 发行目录，后续可在同一矩阵基础上接入安装器。
 - 覆盖恢复仍未开放；如发布前要求覆盖恢复，必须先实现覆盖前回收站保护并新增验收项。
+- 云同步真实性审计不得只看本地 `sync_outbox` 状态；必须保留真实 Cloud Sync API 写入和云端 summary 回读匹配证据，确认不是虚假同步。
+
+## R13 开发机审计记录
+
+2026-06-08 使用本机 DPAPI Device Token 对真实 `https://backup.baichengedu.com` 执行 `uv run python -m auto_backup_client.cloud_sync_audit_cli`，结果：
+
+- `probe_entity_id_sha256=3983c32795e88a23d32bbb0a9e9e7514eeec4093bbfec641716e511fa459a2e6`
+- `probe_event_id_sha256=39ce68fa416500ec7ef0aba93171d7e3e7024d9dad5fae67818b7549f8dc3b7c`
+- `probe_revision_id=019ea787-7b7c-729e-bf7c-d9af48cd4707`
+- `probe_record_sha256=8f6afc61936c27f27ecc30b662eaf2c72786cde4e3272a20dc2a49e67e2008c5`
+- 首次同步返回 `synced`，云端 summary 回读匹配，重复提交返回 `duplicate`。

@@ -32,6 +32,7 @@
 - `src/auto_backup_client/backup_pipeline.py`：端到端备份编排服务，负责串联扫描、去重、归档、可选真实百度上传、可选 outbox 同步和可选远端校对。
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
+- `src/auto_backup_client/cloud_sync_audit_cli.py`：真实 Cloud Sync 同步真实性审计探针，直接提交无敏感临时 revision 并回读云端 summary，确认不是仅本地假同步。
 - `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页、远端校对页、原始数据清理页和恢复页；写入类动作默认脱敏展示。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
@@ -315,6 +316,18 @@ $env:UV_CACHE_DIR='..\.cache\uv'
 $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.sync_cli sync-outbox --verify-cloud-summary
 ```
+
+发布候选阶段可先运行 Cloud Sync 同步真实性审计探针。它不依赖本地 SQLite outbox，不上传百度文件；只生成无敏感临时 revision，真实调用 `/v1/sync/revisions`，再通过 `/v1/reconcile/entities/{entity_id}` 回读校验同一 revision，并重复提交验证云端幂等 `duplicate` 语义。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
+uv run python -m auto_backup_client.cloud_sync_audit_cli
+```
+
+通过标准是输出 `first_sync_status: synced`、`summary_matched: true`、`duplicate_sync_status: duplicate`、`duplicate_verified: true` 和 `cloud_sync_truthful: true`。若只看到本地 `sync_outbox` 标记为 `synced`，但没有云端 summary 回读匹配，不能作为真实同步验收依据。
 
 固定真实联调顺序：
 

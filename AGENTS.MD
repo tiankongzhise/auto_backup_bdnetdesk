@@ -412,3 +412,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：使用进程级执行策略绕过运行同一脚本：`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun`，dry-run 成功输出 PyInstaller 命令。
 
 后续约束：若本地 PowerShell 执行 `.ps1` 出现 `PSSecurityException`，优先用进程级 `-ExecutionPolicy Bypass -File` 复跑；不得把该错误误判为脚本语法或构建逻辑失败。
+
+### 2026-06-08：Cloud Sync 真实性审计在沙箱内无法读取 DPAPI Device Token
+
+问题：P3-14 云服务同步真实性审计中，沙箱内执行 `uv run python -m auto_backup_client.cloud_sync_audit_cli` 返回 `device_credential_store_error`，未能读取本机 DPAPI Device Token，因此探针尚未进入真实云端同步请求。
+
+原因：当前沙箱无法访问或解密 `%LOCALAPPDATA%\auto_backup_bdnetdesk\credentials\device_credentials.json` 中的当前用户 DPAPI 凭据；这属于本机凭据读取权限边界，不是 Cloud Sync API 失败。
+
+解决方案：按权限流程提升后运行同一命令，真实 `https://backup.baichengedu.com` 探针通过：`/v1/readyz` ready，首次 `POST /v1/sync/revisions` 返回 `synced`，`GET /v1/reconcile/entities/{entity_id}` 回读 `revision_id`、`data_version`、`canonical_record_sha256` 匹配，重复提交同一 revision 返回 `duplicate`。
+
+后续约束：真实云同步审计不得只看本地 `sync_outbox` 状态；必须用云端 summary 回读匹配和重复提交 `duplicate` 证明不是虚假同步。若沙箱内出现 `device_credential_store_error`，不得误判为云服务不可用；应使用提升权限或运行时 `CLOUD_API_DEVICE_TOKEN` 重跑同一审计命令。
