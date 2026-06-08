@@ -247,6 +247,64 @@ def test_pipeline_requires_sync_before_completion_after_upload(tmp_path) -> None
         )
 
 
+def test_pipeline_cache_budget_failure_keeps_job_queued(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    store, job_id = _job(store_path=tmp_path / "backup_state.sqlite3", sources=[source])
+
+    with pytest.raises(BackupPipelineError, match="effective budget"):
+        BackupPipeline(store=store, device_id="device-1").run_job(
+            job_id,
+            BackupPipelineOptions(
+                cache_root=tmp_path / "cache",
+                password=TEST_ARCHIVE_PASSWORD,
+                enforce_cache_budget=True,
+                cache_quota_bytes=1,
+                min_effective_cache_budget_bytes=2,
+                max_archive_size_bytes=1,
+                mark_completed=False,
+            ),
+        )
+
+    job = store.get_backup_job(job_id)
+    assert job is not None
+    assert job["status"] == "queued"
+
+
+def test_pipeline_records_artifacts_and_cleanup_dry_run_after_completed(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    store, job_id = _job(store_path=tmp_path / "backup_state.sqlite3", sources=[source])
+    baidu = FakeBaiduForPipeline()
+    cloud = FakeCloudForPipeline()
+
+    result = BackupPipeline(store=store, device_id="device-1", baidu_client=baidu, cloud_client=cloud).run_job(
+        job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password=TEST_ARCHIVE_PASSWORD,
+            account_id="account-1",
+            run_upload=True,
+            sync_outbox=True,
+            reconcile_remote=True,
+            cleanup_cache_artifacts=True,
+            cleanup_cache_dry_run=True,
+            cache_quota_bytes=1024 * 1024 * 1024,
+            min_effective_cache_budget_bytes=0,
+            now="2026-06-08T09:30:00Z",
+        ),
+    )
+
+    artifacts = store.list_cache_artifacts(job_id=job_id, include_deleted=True)
+    assert result.completed is True
+    assert result.cache_cleanup is not None
+    assert result.cache_cleanup.dry_run is True
+    assert {row["artifact_type"] for row in artifacts} >= {"archive", "manifest_plain", "staging", "verify"}
+    assert any(row["artifact_type"] == "archive" and row["remote_confirmed"] == 1 for row in artifacts)
+    assert all("\\\\?\\" not in row["artifact_path"] for row in artifacts)
+    assert all("\\\\?\\" not in path_hash for path_hash in result.cache_cleanup.path_sha256s)
+
+
 def _job(*, store_path, sources) -> tuple[SQLiteClientStore, str]:
     store = SQLiteClientStore(store_path)
     store.migrate()

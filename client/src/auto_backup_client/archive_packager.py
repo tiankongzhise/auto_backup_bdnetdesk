@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from auto_backup_client import local_fs
+from auto_backup_client.cache_artifacts import CacheArtifactManager, build_job_cache_dir
 from auto_backup_client.sqlite_store import (
     SQLiteClientStore,
     build_version_fields,
@@ -131,6 +132,7 @@ class ArchivePackager:
         *,
         device_id: str,
         seven_zip_path: str | Path | None = None,
+        artifact_manager: CacheArtifactManager | None = None,
     ) -> None:
         cleaned_device_id = device_id.strip()
         if not cleaned_device_id:
@@ -138,6 +140,7 @@ class ArchivePackager:
         self.store = store
         self.device_id = cleaned_device_id
         self.runner = SevenZipRunner(seven_zip_path)
+        self.artifact_manager = artifact_manager
 
     def package_job(
         self,
@@ -173,7 +176,7 @@ class ArchivePackager:
         manifest_bytes = manifest_text.encode("utf-8")
         manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-        job_cache = Path(cache_root).expanduser().resolve() / "jobs" / cleaned_job_id
+        job_cache = build_job_cache_dir(cache_root, cleaned_job_id)
         manifest_plain_dir = job_cache / "manifest_plain"
         staging_dir = job_cache / "tmp" / f"archive_{archive_seq:06d}"
         verify_dir = job_cache / "verify" / f"archive_{archive_seq:06d}"
@@ -183,6 +186,27 @@ class ArchivePackager:
         _reset_dir(manifest_plain_dir)
         _reset_dir(staging_dir)
         _reset_dir(verify_dir)
+        self._register_artifact(
+            manifest_plain_dir,
+            artifact_type="manifest_plain",
+            job_id=cleaned_job_id,
+            required_until_stage="verified",
+            now=actual_now,
+        )
+        self._register_artifact(
+            staging_dir,
+            artifact_type="staging",
+            job_id=cleaned_job_id,
+            required_until_stage="verified",
+            now=actual_now,
+        )
+        self._register_artifact(
+            verify_dir,
+            artifact_type="verify",
+            job_id=cleaned_job_id,
+            required_until_stage="strict_verified",
+            now=actual_now,
+        )
         local_fs.make_dirs(archives_dir)
 
         manifest_plain_path = manifest_plain_dir / "manifest.json"
@@ -220,8 +244,18 @@ class ArchivePackager:
             _remove_dir(manifest_plain_dir)
             _remove_dir(staging_dir)
             _remove_dir(verify_dir)
+            self._mark_artifact_missing(manifest_plain_dir, now=actual_now)
+            self._mark_artifact_missing(staging_dir, now=actual_now)
+            self._mark_artifact_missing(verify_dir, now=actual_now)
 
         archive_size = _file_size(final_archive)
+        self._register_artifact(
+            final_archive,
+            artifact_type="archive",
+            job_id=cleaned_job_id,
+            required_until_stage="completed",
+            now=actual_now,
+        )
         result = ArchivePackageResult(
             backup_job_id=cleaned_job_id,
             archive_id=archive_id,
@@ -245,6 +279,39 @@ class ArchivePackager:
             now=actual_now,
         )
         return result
+
+    def _register_artifact(
+        self,
+        path: Path,
+        *,
+        artifact_type: str,
+        job_id: str,
+        required_until_stage: str,
+        now: str,
+    ) -> None:
+        if self.artifact_manager is None:
+            return
+        self.artifact_manager.register_path(
+            path=path,
+            artifact_type=artifact_type,
+            job_id=job_id,
+            required_until_stage=required_until_stage,
+            now=now,
+        )
+
+    def _mark_artifact_missing(self, path: Path, *, now: str) -> None:
+        if self.artifact_manager is None:
+            return
+        artifact_id = f"artifact_{hashlib.sha256(str(path.resolve()).encode('utf-8')).hexdigest()}"
+        with self.store.transaction() as conn:
+            self.store.update_cache_artifact_status(
+                conn,
+                artifact_id=artifact_id,
+                lifecycle_status="deleted",
+                size_bytes=0,
+                deleted_at=now,
+                last_accessed_at=now,
+            )
 
     def _write_archive_state(
         self,

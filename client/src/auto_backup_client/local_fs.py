@@ -31,6 +31,10 @@ def is_file(path: str | Path) -> bool:
     return os.path.isfile(native_path(path))
 
 
+def is_dir(path: str | Path) -> bool:
+    return os.path.isdir(native_path(path))
+
+
 def stat(path: str | Path) -> os.stat_result:
     return os.stat(native_path(path))
 

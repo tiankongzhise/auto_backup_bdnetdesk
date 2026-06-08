@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from auto_backup_client.backup_jobs import BackupJobError, BackupJobManager, Bac
 from auto_backup_client.baidu.reconcile import RemoteObjectReconciler, RemoteReconcileReport, RemoteReconcileScope, RequestRateLimiter
 from auto_backup_client.baidu.resumable_upload import BaiduResumableUploader, ResumableArchiveInput, ResumableUploadResult
 from auto_backup_client.baidu.upload import DEFAULT_BACKUP_ROOT_DIR, DEFAULT_PART_SIZE, BaiduNetdiskError, BaiduQuota
+from auto_backup_client.cache_artifacts import CacheArtifactError, CacheArtifactManager, CacheBudget, CacheCleanupResult, CacheUsage
 from auto_backup_client.dedupe_index import CloudCandidateResult, ContentDedupeIndexer
 from auto_backup_client.scan_fingerprints import BackupScanner, JobScanResult
 from auto_backup_client.sqlite_store import SQLiteClientStore, utc_now_iso
@@ -41,6 +43,12 @@ class BackupPipelineOptions:
     mark_completed: bool = True
     sync_batch_size: int = 100
     max_sync_batches: int = 20
+    enforce_cache_budget: bool = False
+    cache_quota_bytes: int = 40 * 1024**3
+    min_effective_cache_budget_bytes: int = 40 * 1024**3
+    max_archive_size_bytes: int = 4 * 1024**3
+    cleanup_cache_artifacts: bool = False
+    cleanup_cache_dry_run: bool = False
     now: str | None = None
 
 
@@ -56,6 +64,8 @@ class BackupPipelineResult:
     upload: ResumableUploadResult | None = None
     sync: SyncWorkerResult | None = None
     reconcile: RemoteReconcileReport | None = None
+    cache_usage: CacheUsage | None = None
+    cache_cleanup: CacheCleanupResult | None = None
 
 
 class BackupPipeline:
@@ -87,6 +97,13 @@ class BackupPipeline:
         self._validate_dependencies(options)
 
         manager = BackupJobManager(self.store, device_id=self.device_id)
+        artifact_manager = CacheArtifactManager(self.store, cache_root=options.cache_root)
+        cache_usage = None
+        if options.enforce_cache_budget:
+            try:
+                cache_usage = artifact_manager.ensure_can_start(_cache_budget(options))
+            except CacheArtifactError as exc:
+                raise BackupPipelineError(str(exc)) from exc
         self._ensure_running(manager, cleaned_job_id, now=options.now)
         stage = "start"
         try:
@@ -111,6 +128,7 @@ class BackupPipeline:
                 self.store,
                 device_id=self.device_id,
                 seven_zip_path=self.seven_zip_path,
+                artifact_manager=artifact_manager,
             ).package_job(
                 cleaned_job_id,
                 cache_root=options.cache_root,
@@ -148,6 +166,11 @@ class BackupPipeline:
             if completed:
                 stage = "complete"
                 manager.transition_job(cleaned_job_id, "completed", now=options.now)
+                _mark_archive_remote_confirmed(
+                    self.store,
+                    archive_path=archive.archive_path,
+                    now=options.now,
+                )
                 if options.sync_outbox:
                     stage = "final_sync"
                     final_sync = _run_sync_until_idle(
@@ -158,6 +181,18 @@ class BackupPipeline:
                         now=options.now,
                     )
                     sync = _merge_sync_results(sync or SyncWorkerResult(selected=0, sent=0, synced=0, conflicts=0, rejected=0, retryable=0), final_sync)
+
+            cache_cleanup = None
+            if options.cleanup_cache_artifacts:
+                stage = "cache_cleanup"
+                usage_for_cleanup = artifact_manager.usage(_cache_budget(options))
+                cache_cleanup = artifact_manager.cleanup(
+                    current_stage="completed" if completed else stage,
+                    cache_level=usage_for_cleanup.level,
+                    dry_run=options.cleanup_cache_dry_run,
+                    job_id=cleaned_job_id,
+                    now=options.now,
+                )
 
             return BackupPipelineResult(
                 backup_job_id=cleaned_job_id,
@@ -170,11 +205,15 @@ class BackupPipeline:
                 upload=upload,
                 sync=sync,
                 reconcile=reconcile,
+                cache_usage=cache_usage,
+                cache_cleanup=cache_cleanup,
             )
         except Exception as exc:
             self._mark_failed_retryable(manager, cleaned_job_id, now=options.now)
             if isinstance(exc, BackupPipelineError):
                 raise
+            if isinstance(exc, CacheArtifactError):
+                raise BackupPipelineError(str(exc)) from exc
             raise BackupPipelineError(f"backup pipeline failed at stage: {stage}") from exc
 
     def _upload_archive(
@@ -195,6 +234,7 @@ class BackupPipeline:
             store=self.store,
             baidu=baidu,  # type: ignore[arg-type]
             updated_by_device_id=self.device_id,
+            artifact_manager=CacheArtifactManager(self.store, cache_root=options.cache_root),
         ).upload(
             ResumableArchiveInput(
                 local_path=archive.archive_path,
@@ -263,10 +303,39 @@ def _validate_options(options: BackupPipelineOptions) -> None:
         raise BackupPipelineError("sync_batch_size must be between 1 and 100")
     if options.max_sync_batches < 1:
         raise BackupPipelineError("max_sync_batches must be >= 1")
+    if options.cache_quota_bytes < 1:
+        raise BackupPipelineError("cache_quota_bytes must be >= 1")
+    if options.min_effective_cache_budget_bytes < 0:
+        raise BackupPipelineError("min_effective_cache_budget_bytes must be >= 0")
+    if options.max_archive_size_bytes < 1:
+        raise BackupPipelineError("max_archive_size_bytes must be >= 1")
     if options.mark_completed and options.run_upload and not options.sync_outbox:
         raise BackupPipelineError("sync_outbox is required before a job can be marked completed")
     if options.mark_completed and options.run_upload and not options.reconcile_remote:
         raise BackupPipelineError("reconcile_remote is required before a job can be marked completed")
+
+
+def _cache_budget(options: BackupPipelineOptions) -> CacheBudget:
+    return CacheBudget(
+        cache_root=Path(options.cache_root),
+        cache_quota_bytes=options.cache_quota_bytes,
+        min_effective_budget_bytes=options.min_effective_cache_budget_bytes,
+        max_archive_size_bytes=options.max_archive_size_bytes,
+    )
+
+
+def _mark_archive_remote_confirmed(store: SQLiteClientStore, *, archive_path: Path, now: str | None) -> None:
+    artifact_id = f"artifact_{hashlib.sha256(str(archive_path.resolve()).encode('utf-8')).hexdigest()}"
+    with store.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE cache_artifacts
+            SET remote_confirmed = 1,
+                last_accessed_at = ?
+            WHERE artifact_id = ?
+            """,
+            (now or utc_now_iso(), artifact_id),
+        )
 
 
 def _run_sync_until_idle(

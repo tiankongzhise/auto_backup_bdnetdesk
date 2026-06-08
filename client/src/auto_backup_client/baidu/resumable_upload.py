@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from auto_backup_client import local_fs
+from auto_backup_client.cache_artifacts import CacheArtifactManager
 from auto_backup_client.baidu.metadata import (
     ArchiveMetaInput,
     JobIndexArchive,
@@ -77,10 +78,12 @@ class BaiduResumableUploader:
         store: SQLiteClientStore,
         baidu: BaiduNetdiskClient,
         updated_by_device_id: str,
+        artifact_manager: CacheArtifactManager | None = None,
     ) -> None:
         self._store = store
         self._baidu = baidu
         self._updated_by_device_id = updated_by_device_id
+        self._artifact_manager = artifact_manager
 
     def upload(self, value: ResumableArchiveInput) -> ResumableUploadResult:
         plan = compute_file_block_plan(value.local_path, part_size=value.part_size)
@@ -434,15 +437,38 @@ class BaiduResumableUploader:
         )
 
     def _upload_bytes_document(self, *, document: StableJsonDocument, remote_path: str, work_name: str) -> CreateFileResult:
-        with tempfile.TemporaryDirectory(prefix="auto-backup-upload-meta-") as temp_dir:
+        temp_parent = None
+        if self._artifact_manager is not None:
+            temp_parent = self._artifact_manager.cache_root / "upload_tmp"
+            local_fs.make_dirs(temp_parent)
+        with tempfile.TemporaryDirectory(prefix="auto-backup-upload-meta-", dir=str(temp_parent) if temp_parent is not None else None) as temp_dir:
             path = Path(temp_dir) / work_name
             path.write_bytes(document.bytes)
-            return self._baidu.upload_file_complete(
-                local_path=path,
-                remote_path=remote_path,
-                part_size=DEFAULT_PART_SIZE,
-                rtype=0,
-            ).created
+            if self._artifact_manager is not None:
+                self._artifact_manager.register_path(
+                    path=path,
+                    artifact_type="upload_temp",
+                    required_until_stage="uploaded",
+                )
+            try:
+                return self._baidu.upload_file_complete(
+                    local_path=path,
+                    remote_path=remote_path,
+                    part_size=DEFAULT_PART_SIZE,
+                    rtype=0,
+                ).created
+            finally:
+                if self._artifact_manager is not None:
+                    artifact_id = f"artifact_{hashlib.sha256(str(path.resolve()).encode('utf-8')).hexdigest()}"
+                    with self._store.transaction() as conn:
+                        self._store.update_cache_artifact_status(
+                            conn,
+                            artifact_id=artifact_id,
+                            lifecycle_status="deleted",
+                            size_bytes=0,
+                            deleted_at=utc_now_iso(),
+                            last_accessed_at=utc_now_iso(),
+                        )
 
     def _write_session_and_parts(self, session_payload: dict[str, Any], plan: FileBlockPlan) -> None:
         with self._store.transaction() as conn:

@@ -93,7 +93,7 @@ def _run(args: argparse.Namespace) -> int:
 
     store = SQLiteClientStore(sqlite_path)
     store.migrate()
-    source_paths = _prepare_sources(work_dir, small_bytes=args.small_bytes, multipart_bytes=args.multipart_bytes)
+    source_paths = _prepare_sources(work_dir, small_bytes=args.small_bytes, multipart_bytes=args.multipart_bytes, run_id=run_id)
     device_id = credentials.device_id or "environment"
     job_id = args.job_id.strip() or _create_job(store, device_id=device_id, job_name=args.job_name, sources=source_paths)
 
@@ -118,6 +118,9 @@ def _run(args: argparse.Namespace) -> int:
                     mark_completed=True,
                     sync_batch_size=args.sync_batch_size,
                     max_sync_batches=args.max_sync_batches,
+                    enforce_cache_budget=True,
+                    cleanup_cache_artifacts=True,
+                    cleanup_cache_dry_run=True,
                 ),
             )
             remaining_before_final = store.list_outbox_events_for_sync(limit=args.sync_batch_size, now=utc_now_iso())
@@ -155,6 +158,12 @@ def _run(args: argparse.Namespace) -> int:
     _print(f"archive_sha256: {result.archive.archive_sha256}")
     _print(f"archive_size: {result.archive.archive_size}")
     _print(f"archive_type: {result.archive.archive_type}")
+    if result.cache_usage is not None:
+        _print(f"cache_level_before: {result.cache_usage.level}")
+        _print(f"cache_effective_budget_bytes_before: {result.cache_usage.effective_budget_bytes}")
+    if result.cache_cleanup is not None:
+        _print(f"cache_cleanup_selected_count: {result.cache_cleanup.selected_count}")
+        _print(f"cache_cleanup_dry_run: {str(result.cache_cleanup.dry_run).lower()}")
     _print(f"manifest_sha256: {result.archive.manifest_sha256}")
     if result.upload is not None:
         _print(f"upload_session_id: {result.upload.upload_session_id}")
@@ -227,12 +236,13 @@ def _path_arg(value: str, *default_parts: str) -> Path:
     return Path(cleaned) if cleaned else Path(*default_parts)
 
 
-def _prepare_sources(work_dir: Path, *, small_bytes: int, multipart_bytes: int) -> tuple[Path, Path]:
+def _prepare_sources(work_dir: Path, *, small_bytes: int, multipart_bytes: int, run_id: str) -> tuple[Path, Path]:
     work_dir.mkdir(parents=True, exist_ok=True)
     small = work_dir / "small-source.bin"
     multipart = work_dir / "multipart-source.bin"
-    _write_deterministic_file(small, small_bytes, seed=b"small")
-    _write_deterministic_file(multipart, multipart_bytes, seed=b"multipart")
+    seed_prefix = run_id.encode("utf-8")
+    _write_deterministic_file(small, small_bytes, seed=seed_prefix + b":small")
+    _write_deterministic_file(multipart, multipart_bytes, seed=seed_prefix + b":multipart")
     return small, multipart
 
 

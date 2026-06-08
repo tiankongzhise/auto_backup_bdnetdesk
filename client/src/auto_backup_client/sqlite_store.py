@@ -408,6 +408,71 @@ class SQLiteClientStore:
     def put_scan_issue(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
         _put_row(conn, "scan_issues", dict(payload), key_field="scan_issue_id")
 
+    def put_cache_artifact(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
+        _put_row(conn, "cache_artifacts", dict(payload), key_field="artifact_id")
+
+    def update_cache_artifact_status(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        artifact_id: str,
+        lifecycle_status: str,
+        size_bytes: int | None = None,
+        deleted_at: str | None = None,
+        last_accessed_at: str | None = None,
+    ) -> None:
+        fields = ["lifecycle_status = ?"]
+        values: list[Any] = [lifecycle_status]
+        if size_bytes is not None:
+            fields.append("size_bytes = ?")
+            values.append(int(size_bytes))
+        if deleted_at is not None:
+            fields.append("deleted_at = ?")
+            values.append(deleted_at)
+        if last_accessed_at is not None:
+            fields.append("last_accessed_at = ?")
+            values.append(last_accessed_at)
+        values.append(artifact_id)
+        conn.execute(
+            f"""
+            UPDATE cache_artifacts
+            SET {', '.join(fields)}
+            WHERE artifact_id = ?
+            """,
+            tuple(values),
+        )
+
+    def list_cache_artifacts(
+        self,
+        *,
+        job_id: str = "",
+        include_deleted: bool = False,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5000:
+            raise ValueError("cache artifact list limit must be between 1 and 5000")
+        clauses: list[str] = []
+        values: list[Any] = []
+        cleaned_job_id = job_id.strip()
+        if cleaned_job_id:
+            clauses.append("job_id = ?")
+            values.append(cleaned_job_id)
+        if not include_deleted:
+            clauses.append("lifecycle_status != 'deleted'")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM cache_artifacts
+                {where}
+                ORDER BY created_at, artifact_id
+                LIMIT ?
+                """,
+                tuple(values + [limit]),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def put_content_object(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
         row = dict(payload)
         _put_row(conn, "content_objects", row, key_field="content_id")

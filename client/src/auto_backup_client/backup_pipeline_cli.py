@@ -30,6 +30,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--password-env", default="", help="从指定环境变量读取归档密码；未指定时交互读取。")
     parser.add_argument("--sqlite-path", default="", help="本地 SQLite 路径；默认读取 LOCAL_SQLITE_PATH。")
     parser.add_argument("--cache-root", default="", help="缓存目录；默认读取 LOCAL_CACHE_DIR。")
+    parser.add_argument("--skip-cache-budget-check", action="store_true", help="跳过本地缓存有效预算检查。")
+    parser.add_argument("--cache-quota-gib", type=float, default=40.0)
+    parser.add_argument("--min-effective-cache-gib", type=float, default=40.0)
+    parser.add_argument("--max-archive-gib", type=float, default=4.0)
+    parser.add_argument("--cleanup-cache-artifacts", action="store_true", help="完成后按缓存等级清理已登记 artifact。")
+    parser.add_argument("--cleanup-cache-dry-run", action="store_true", help="只输出缓存清理计划，不实际删除。")
     parser.add_argument("--job-id", default="", help="运行已有 job；省略时必须提供 source 并创建新 job。")
     parser.add_argument("--job-name", default="", help="创建新 job 时使用的任务名。")
     parser.add_argument("--source", action="append", default=[], help="创建新 job 时添加来源，可重复传入。")
@@ -98,6 +104,12 @@ def _run(args: argparse.Namespace) -> int:
                 mark_completed=not args.no_complete,
                 sync_batch_size=args.sync_batch_size,
                 max_sync_batches=args.max_sync_batches,
+                enforce_cache_budget=not args.skip_cache_budget_check,
+                cache_quota_bytes=_gib_to_bytes(args.cache_quota_gib),
+                min_effective_cache_budget_bytes=_gib_to_bytes(args.min_effective_cache_gib),
+                max_archive_size_bytes=_gib_to_bytes(args.max_archive_gib),
+                cleanup_cache_artifacts=args.cleanup_cache_artifacts,
+                cleanup_cache_dry_run=args.cleanup_cache_dry_run,
             ),
         )
     finally:
@@ -120,6 +132,9 @@ def _run(args: argparse.Namespace) -> int:
     _print(f"archive_sha256: {result.archive.archive_sha256}")
     _print(f"archive_type: {result.archive.archive_type}")
     _print(f"manifest_sha256: {result.archive.manifest_sha256}")
+    if result.cache_usage is not None:
+        _print(f"cache_level_before: {result.cache_usage.level}")
+        _print(f"cache_effective_budget_bytes_before: {result.cache_usage.effective_budget_bytes}")
     if result.cloud_candidates is not None:
         _print(f"cloud_candidates_checked: {result.cloud_candidates.checked_content_count}")
         _print(f"cloud_duplicate_candidates: {result.cloud_candidates.cloud_duplicate_candidate_count}")
@@ -139,6 +154,11 @@ def _run(args: argparse.Namespace) -> int:
         for status, count in sorted(result.reconcile.status_counts.items()):
             if count:
                 _print(f"reconcile_{status}: {count}")
+    if result.cache_cleanup is not None:
+        _print(f"cache_cleanup_dry_run: {str(result.cache_cleanup.dry_run).lower()}")
+        _print(f"cache_cleanup_selected_count: {result.cache_cleanup.selected_count}")
+        _print(f"cache_cleanup_deleted_count: {result.cache_cleanup.deleted_count}")
+        _print(f"cache_cleanup_freed_bytes: {result.cache_cleanup.freed_bytes}")
     _print("端到端编排完成")
     return 0
 
@@ -188,6 +208,12 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _gib_to_bytes(value: float) -> int:
+    if value < 0:
+        raise ValueError("GiB value must be >= 0")
+    return int(value * 1024 * 1024 * 1024)
+
+
 def _safe_error_summary(exc: Exception) -> str:
     if isinstance(exc, CloudAPIError):
         return f"cloud_api_error status={exc.status_code} code={exc.error_code or 'unknown'}"
@@ -199,6 +225,7 @@ def _safe_error_summary(exc: Exception) -> str:
         allowed = {
             "account_id is required because current device has no selected Baidu account",
             "archive password is required",
+            "GiB value must be >= 0",
             "source is required when job_id is not provided",
         }
         message = str(exc)

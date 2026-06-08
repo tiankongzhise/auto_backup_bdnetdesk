@@ -10,17 +10,18 @@
 
 ## 当前工作项
 
-- 本次开发阶段：P1 阶段 9 长路径公共 API 硬化。
-- 本轮属于进入 P2 阶段 10 前的安全性/可维护性前置修复，不改变主排期；完成后立即回到 P2 阶段 10 缓存额度与 artifact 管理。
-- 计划修改范围：新增客户端公共本地文件访问工具，集中 Windows `\\?\` 长路径包装；替换 `archive_packager.py`、`baidu/upload.py`、`baidu/resumable_upload.py` 中重复 `_fs_path` 实现；补充长路径文件访问单元测试。
-- 约束：数据库、日志和 CLI 输出仍保存普通本地路径，不把 `\\?\` 前缀写入业务状态或用户可见输出。
+- P2 阶段 10 缓存额度与 artifact 管理开发完成；下一个开发阶段为 P2 阶段 11 来源映射和校对 UI。
+- 本轮属于主排期 P2 阶段 10，不改变阶段顺序；前置 P1-9 长路径公共 API 硬化已完成并提交。
+- 本轮已新增本地-only `cache_artifacts` SQLite 表、缓存 artifact 管理服务、缓存状态/清理 CLI；P1-8/P1-9 的 archive、manifest_plain、staging/tmp、verify、上传临时 JSON 已纳入 artifact 生命周期。
+- `BackupPipeline` 已在扫描/哈希/压缩前支持缓存预算检查，有效预算低于 40GiB 或缓存进入临界状态时阻止新任务；完成后可按缓存等级执行可删除 artifact 清理。
+- 下一阶段开始前必须把“本次开发阶段：P2 阶段 11 来源映射和校对 UI”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- 长路径公共 API 已验收：统一工具能对超过 Windows 普通路径限制的文件执行 open/stat/exists/is_file/replace/rmtree/mtime 操作。
-- 长路径公共 API 已验收：归档打包、百度分片上传计划和可恢复上传 archive hash/mtime 均复用公共工具，不再保留重复 `_fs_path` 实现。
-- 长路径公共 API 已验收：测试确认业务路径字符串仍为普通路径，不含 `\\?\` 前缀。
-- 已验证客户端长路径定向测试、相关归档/上传测试和 `git diff --check` 通过。
+- P2-10 已验收：新增 artifact 记录服务能登记 archive、manifest_plain、staging/tmp、verify、上传临时 JSON 等本地缓存文件/目录，并能统计总占用、可释放占用和缓存等级。
+- P2-10 已验收：清理入口支持 dry-run 和实际删除，只删除 cache root 内已登记且当前阶段允许删除的 artifact；路径输出使用 SHA256 摘要，不泄露真实本地路径。
+- P2-10 已验收：`BackupPipeline` 在新任务开始前执行缓存预算检查，有效预算低于 40GiB 或临界状态时拒绝扫描/哈希/压缩；完成后可触发 artifact 清理。
+- P2-10 已验收：测试覆盖 artifact 生命周期、未上传 archive/meta 不被删、缓存等级和预算不足阻止任务；客户端定向/全量测试、compileall 和 `git diff --check` 通过。
 
 ## 开发排期
 
@@ -37,7 +38,7 @@
 | P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 已完成；P1 阶段 7 去重索引与来源引用开发完成 | 下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest |
 | P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 已完成；P1 阶段 8 7-Zip 加密归档与 manifest 开发完成 | 下一个开发阶段为 P1 阶段 9 端到端备份编排 |
 | P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 已完成；P1 阶段 9 端到端备份编排开发完成 | 下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理 |
-| P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 未开始 | 缓存不足时阻止新任务或暂停低优先级阶段，不删除源文件 |
+| P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 已完成；P2 阶段 10 缓存额度与 artifact 管理开发完成 | 下一个开发阶段为 P2 阶段 11 来源映射和校对 UI |
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 未开始 | UI 能展示差异、允许本地/云端/百度实际状态人工处理，所有动作留版本记录 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 未开始 | 远端确认和本地记录完整前不可清理；源文件变化时按钮禁用 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 未开始 | 原路径/手动路径恢复均可验收，覆盖缺失外部 archive 和密码错误 |
@@ -84,6 +85,32 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P2 阶段 10 缓存额度与 artifact 管理
+
+- P2 阶段 10 缓存额度与 artifact 管理开发完成；下一个开发阶段为 P2 阶段 11 来源映射和校对 UI。
+- 新增 SQLite 迁移 `client/migrations/sqlite/007_cache_artifacts.sql`，创建本地-only `cache_artifacts` 表；缓存路径、staging、verify、上传临时 JSON 等本地状态不进入 `sync_outbox`。
+- 新增 `client/src/auto_backup_client/cache_artifacts.py`，实现 artifact 登记、cache root 边界校验、占用统计、有效预算检查、缓存等级分类和 dry-run/实际清理。
+- 新增 `client/src/auto_backup_client/cache_artifacts_cli.py`，提供 `status` 和 `cleanup` 入口；输出只包含缓存等级、大小、数量和路径 SHA256，不输出真实缓存路径。
+- `ArchivePackager` 已登记 `manifest_plain`、staging、verify 和最终 archive；临时目录标准验证后标记为 deleted，最终 archive 保留为 active artifact。
+- `BaiduResumableUploader` 已将 `.meta.json` 和 `job.index.json` 上传临时文件放入 cache root 下的 `upload_tmp/` 并登记为 `upload_temp` artifact，上传结束后标记 deleted。
+- `BackupPipeline` 支持 40GiB 有效缓存预算检查、缓存等级清理 dry-run/实际清理、archive 远端确认后标记 `remote_confirmed`；预算不足时在扫描/哈希/压缩前拒绝新任务且不改变 queued job 状态。
+- `backup_pipeline_cli` 默认启用缓存预算检查，支持 `--skip-cache-budget-check`、预算参数和 `--cleanup-cache-artifacts`；真实全链路测试入口也输出缓存预算和清理 dry-run 摘要。
+- 修复 `real_backup_pipeline_test_cli` 可复跑冲突问题：临时源文件按 run id 生成确定性内容，避免多次真实验收复用相同 `content_id` 后与云端历史 content revision 冲突。
+- 更新 `client/README.md`，记录缓存 artifact 服务、CLI、40GiB 预算门槛、安全清理边界和输出脱敏要求。
+- 已验证客户端定向测试 `tests/test_cache_artifacts.py tests/test_backup_pipeline.py tests/test_archive_packager.py tests/test_baidu_resumable_upload.py tests/test_sqlite_store.py` 通过，26 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-all-p2-cache` 通过，117 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证真实 `real_backup_pipeline_test_cli --password-env BAIDU_AUTH_PASSWORD` 通过：`completed=true`、`cache_level_before=sufficient`、`cache_effective_budget_bytes_before=42949672960`、`cache_cleanup_dry_run=true`、`uploaded_part_count=2`、`sync_synced=25`、无 conflict/rejected/retryable、远端 3 个对象全部 `consistent`、`completed_job_cloud_summary_verified=true`、同路径冲突探针错误码 `-8`、本批远端清理 `cleanup_delete_errno=0`。
+- 已补清理前一次固定源内容导致 `content_objects` 云端 revision conflict 的失败真实验收残留远端对象，`cleanup_object_count=3` 且 `cleanup_delete_errno=0`。
+
+提交摘要：本次提交完成 P2 阶段 10 缓存额度与 artifact 管理，新增本地-only artifact 记录、预算检查、缓存等级和安全清理入口，并把归档、上传临时文件和端到端 pipeline 接入统一 artifact 生命周期；清理仅作用于 cache root 内已登记 artifact，不触碰用户源文件或断点续传 SQLite 状态。
+
+后续待办：
+
+- 下一个开发阶段为 P2 阶段 11 来源映射和校对 UI；下一轮开始前必须在当前工作项写明“本次开发阶段：P2 阶段 11 来源映射和校对 UI”。
+- P2 阶段 11 需要在 UI 中展示来源、归档、远端对象和百度实际状态的映射关系，并保留所有人工修复动作的版本记录。
+- 后续恢复、下载缓存和严格验证接入时，必须复用 `cache_artifacts` 和 `local_fs`，不得新增未登记的可删除缓存目录。
 
 ### P1 阶段 9 长路径公共 API 硬化
 

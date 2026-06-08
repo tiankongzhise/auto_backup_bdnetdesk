@@ -27,6 +27,7 @@ def test_sqlite_migrations_are_idempotent_and_enable_upload_tables(tmp_path) -> 
         "remote_objects",
         "archives",
         "archive_members",
+        "cache_artifacts",
         "content_objects",
         "content_references",
         "schema_migrations",
