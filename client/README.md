@@ -27,15 +27,17 @@
 - `src/auto_backup_client/cache_artifacts_cli.py`：缓存状态和清理 CLI，输出只包含大小、状态和路径 hash。
 - `src/auto_backup_client/source_mapping.py`：来源映射只读聚合服务，面向 UI 展示 job/source/file/content/archive/remote object 关系。
 - `src/auto_backup_client/source_cleanup.py`：原始数据清理候选、清理前源文件身份复查、回收站/隔离目录/高级永久删除执行和版本化清理记录。
+- `src/auto_backup_client/restore_flow.py`：恢复候选、archive 复用/下载边界、7-Zip 解密解压、manifest 恢复、SHA256 复验、冲突保留两者和版本化恢复记录。
+- `src/auto_backup_client/restore_cli.py`：脱敏恢复 CLI，可列出候选并执行本地 archive 恢复。
 - `src/auto_backup_client/backup_pipeline.py`：端到端备份编排服务，负责串联扫描、去重、归档、可选真实百度上传、可选 outbox 同步和可选远端校对。
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
-- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页、远端校对页和原始数据清理页；远端校对和清理写入前都要求确认短语。
+- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页、远端校对页、原始数据清理页和恢复页；写入类动作默认脱敏展示。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
 ## PySide6 主窗口
 
-主窗口提供备份任务、百度设置、来源映射、远端校对和原始数据清理入口。备份任务页支持选择/拖拽来源、创建任务、开始、暂停、继续和取消；端到端执行仍由 `backup_pipeline_cli` 和后续任务编排入口承载。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；隔离目录和永久删除需要显式选择，永久删除还要求额外确认短语。
+主窗口提供备份任务、百度设置、来源映射、远端校对、原始数据清理和恢复入口。备份任务页支持选择/拖拽来源、创建任务、开始、暂停、继续和取消；端到端执行仍由 `backup_pipeline_cli` 和后续任务编排入口承载。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；隔离目录和永久删除需要显式选择，永久删除还要求额外确认短语。恢复页可按 job/关键字筛选候选，选择手动目录或原路径，运行时输入归档密码后执行 7-Zip 解压恢复。
 
 ```powershell
 cd client
@@ -138,6 +140,29 @@ uv run python -m auto_backup_client.real_backup_pipeline_test_cli --password-env
 ```
 
 `real_backup_pipeline_test_cli` 默认使用仓库内 `.cache/real-pipeline/` 的临时 SQLite、缓存和源文件目录，不污染常规 `var/data`；会生成小文件和跨 4 MiB 分片源文件，执行 `scan -> dedupe -> 7-Zip archive -> quota -> precreate/resume -> locateupload -> superfile2 -> create -> .meta.json -> job.index.json -> sync-outbox -> cloud-summary -> baidu listall reconcile -> completed -> final sync -> conflict probe -> filemanager/delete cleanup`。验收时要求跨分片 archive 上传分片数大于 1、远端 3 个对象全部 `consistent`、completed job 云端 summary 匹配、同路径 `rtype=0` 冲突探针命中、清理 `errno=0`。如加 `--keep-remote` 保留远端对象，必须用输出的 `job_id` 和本次临时 SQLite 另行清理。
+
+## 恢复流程
+
+阶段 P2-13 新增 `restore_records` 同步实体和 `RestoreService`。恢复候选来自 `content_references`、`archives` 和 `remote_objects`，只要求备份 job 已 `completed`、archive 标准验证通过且来源已有 archive assignment；即使原始源文件已经清理，只要本地 archive 或已确认远端 archive 可用，仍会被列为可恢复候选。
+
+恢复优先复用 `archives.local_archive_path` 指向的本地 archive。若本地 archive 缺失且 `remote_objects` 记录 archive 为 `remote_created` 并带有 `fs_id`，候选会进入 `needs_download`；恢复服务支持注入 `BaiduArchiveDownloader` 下载 archive。百度下载官方依据来自百度网盘开放平台文档：`filemetas` 通过 `GET /rest/2.0/xpan/multimedia?method=filemetas&fsids=[...]&dlink=1` 获取 `dlink`，下载时在 `dlink` 后追加 `access_token` 并设置 `User-Agent: pan.baidu.com`，`dlink` 有效期 8 小时且可能 302 跳转。
+
+恢复执行会先校验 archive SHA256，再用真实 7-Zip 执行 `t` 和完整解压到 `{cache_root}/jobs/{job}/restore/` 临时目录，读取 `manifest/manifest.json` 并比对 manifest SHA256。恢复文件复制到目标后会重新计算 SHA256，与 manifest/content index 比对一致才写入 `restored`。密码错误、manifest 缺失、archive SHA256 不匹配、外部 payload archive 缺失或复制后 hash 不一致都会写入 failed 恢复记录，不会标记为恢复成功。
+
+目标支持 `manual_path` 和 `original_path`。手动路径会按 manifest 的 `relative_path` 放到用户指定目录下；原路径使用 manifest/local reference 记录的原始路径。冲突策略默认 `keep_both`，生成 `restored yyyyMMdd-HHmmss` 后缀文件名，不覆盖现有文件；`skip_existing` 可跳过已有文件。覆盖恢复仍留待后续需要回收站保护时单独实现。
+
+恢复 CLI 示例：
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-archive-password>'
+uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --job-id <job_id> list
+uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --job-id <job_id> --password-env BAIDU_AUTH_PASSWORD restore --target-root .\restored
+```
+
+`restore_cli` 和恢复页输出只展示数量、状态、文件名、content/archive hash 和路径 hash，不输出完整本地来源路径、目标路径、SQLite 路径、缓存路径、归档密码或百度 token。每个实际结果都会写入 `restore_records`，并同事务更新 `content_references.restore_status`；同步 payload 会过滤 `target_path`、`final_path` 和 `archive_path`。
 
 ## PySide6 百度设置页
 

@@ -7,12 +7,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from auto_backup_client.backup_jobs import BackupJobManager
+from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineOptions
 from auto_backup_client.baidu.upload import BaiduFileItem, BaiduFileListResult
 from auto_backup_client.dedupe_index import ContentDedupeIndexer
 from auto_backup_client.scan_fingerprints import BackupScanner
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields
 from auto_backup_client.ui import main_window
-from auto_backup_client.ui.main_window import BackupTaskPage, RemoteReconcilePage, SourceMappingPage
+from auto_backup_client.ui.main_window import BackupTaskPage, RemoteReconcilePage, RestorePage, SourceMappingPage
+from test_backup_pipeline import FakeBaiduForPipeline, FakeCloudForPipeline
 
 
 def _app() -> QApplication:
@@ -128,6 +130,53 @@ def test_remote_reconcile_page_applies_confirmed_safe_repair(tmp_path, monkeypat
     assert remote["data_version"] == 2
     assert outbox_count == 2
     assert remote_path not in _table_text(page.findings_table)
+
+
+def test_restore_page_restores_selected_candidate_without_path_leak(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    source = tmp_path / "secret-folder" / "secret.txt"
+    source.parent.mkdir()
+    source.write_text("payload", encoding="utf-8")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    created = BackupJobManager(store, device_id="device-1").create_job([str(source)], job_name="restore ui")
+    BackupPipeline(
+        store=store,
+        device_id="device-1",
+        baidu_client=FakeBaiduForPipeline(),
+        cloud_client=FakeCloudForPipeline(),
+    ).run_job(
+        created.job.backup_job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password="Test123456789",
+            account_id="account-1",
+            run_upload=True,
+            sync_outbox=True,
+            reconcile_remote=True,
+            now="2026-06-08T21:10:00Z",
+        ),
+    )
+    target_root = tmp_path / "restored"
+
+    page = RestorePage(store, device_id="device-1", cache_root=str(tmp_path / "cache"))
+    page.job_id_input.setText(created.job.backup_job_id)
+    page.refresh_candidates()
+
+    assert page.candidates_table.rowCount() == 1
+    table_text = _table_text(page.candidates_table)
+    assert "secret.txt" in table_text
+    assert str(source) not in table_text
+    assert str(tmp_path) not in table_text
+
+    page.candidates_table.selectRow(0)
+    page.target_root_input.setText(str(target_root))
+    page.password_input.setText("Test123456789")
+    page.apply_restore()
+
+    assert (target_root / "secret.txt").read_text(encoding="utf-8") == "payload"
+    assert store.list_restore_records(created.job.backup_job_id)[0]["restore_status"] == "restored"
 
 
 def _table_text(table) -> str:  # type: ignore[no-untyped-def]

@@ -225,6 +225,73 @@ def test_list_all_raises_for_unreadable_remote_path() -> None:
         raise AssertionError("expected BaiduNetdiskError")
 
 
+def test_file_metas_builds_official_dlink_params_and_parses_result() -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/rest/2.0/xpan/multimedia"
+        nonlocal seen
+        seen = dict(request.url.params)
+        return _json_response(
+            {
+                "errno": 0,
+                "request_id": "req-metas",
+                "list": [
+                    {
+                        "fs_id": 101,
+                        "path": "/apps/app/archive.7z",
+                        "filename": "archive.7z",
+                        "isdir": 0,
+                        "size": 42,
+                        "md5": "a" * 32,
+                        "dlink": "https://d.pcs.baidu.com/file/abc?sign=1",
+                    }
+                ],
+            }
+        )
+
+    client = BaiduNetdiskClient(
+        "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.file_metas((101,), dlink=True)
+
+    assert seen == {
+        "method": "filemetas",
+        "access_token": "access-token",
+        "fsids": "[101]",
+        "dlink": "1",
+    }
+    assert result.request_id == "req-metas"
+    assert result.items[0].fs_id == 101
+    assert result.items[0].dlink.startswith("https://d.pcs.baidu.com/file/")
+
+
+def test_download_dlink_appends_access_token_and_uses_pan_user_agent(tmp_path) -> None:
+    seen_headers: dict[str, str] = {}
+    seen_query: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/file/archive"
+        nonlocal seen_headers, seen_query
+        seen_headers = dict(request.headers)
+        seen_query = dict(request.url.params)
+        return httpx.Response(200, content=b"archive-bytes")
+
+    client = BaiduNetdiskClient(
+        "access-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    target = tmp_path / "download" / "archive.7z"
+
+    client.download_dlink("https://d.pcs.baidu.com/file/archive?sign=abc", target)
+
+    assert target.read_bytes() == b"archive-bytes"
+    assert seen_headers["user-agent"] == "pan.baidu.com"
+    assert seen_query == {"sign": "abc", "access_token": "access-token"}
+
+
 def test_real_batch_does_not_require_user_info_probe(monkeypatch, tmp_path, capsys) -> None:
     class FakeBaiduNetdiskClient:
         uploaded_paths: set[str] = set()

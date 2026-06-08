@@ -4,25 +4,26 @@
 
 ## 当前阶段
 
-2026-06-08 进度审计结论：项目已经完成云端同步服务、真实云端部署联调、百度授权与账号选择、本机 Device Token/KDF 凭据、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、`sync_outbox` worker、脱敏 `sync-outbox` CLI、百度 `list/listall` 客户端列表能力、远端对象校对与人工修复入口、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对 UI、原始数据清理服务与 UI。当前已经完成 P2 阶段 12，尚未进入完整桌面端备份产品可发布状态。
+2026-06-08 进度审计结论：项目已经完成云端同步服务、真实云端部署联调、百度授权与账号选择、本机 Device Token/KDF 凭据、百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`.meta.json`/`job.index.json` 生成、`sync_outbox` worker、脱敏 `sync-outbox` CLI、百度 `list/listall` 客户端列表能力、远端对象校对与人工修复入口、备份任务主 UI 与任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对 UI、原始数据清理服务与 UI、恢复流程服务/CLI/UI。当前已经完成 P2 阶段 13，尚未进入完整桌面端备份产品可发布状态。
 
-离完整完成开发计划的主要缺口：恢复流程、打包发布和端到端验收。按产品规格 v1.3 的阶段拆分估算，离可交付仍约剩 15%-20%；最大风险集中在恢复正确性、恢复冲突策略和最终打包验收。
+离完整完成开发计划的主要缺口：打包发布和端到端验收。按产品规格 v1.3 的阶段拆分估算，离可交付仍约剩 8%-12%；最大风险集中在干净 Windows 环境验收、安装/升级/卸载和最终真实链路验收矩阵。
 
 ## 当前工作项
 
-- P2 阶段 12 原始数据清理开发完成；下一个开发阶段为 P2 阶段 13 恢复流程。
-- 本轮属于主排期 P2 阶段 12，不改变阶段顺序；已实现手动触发的原始数据清理候选、清理前复查、回收站/隔离目录/高级永久删除入口和版本化清理记录。
-- 本轮已新增 `source_cleanup_records` 同步实体、文件身份复查、原始数据清理服务和 PySide6 原始数据清理页。
-- 本阶段未新增 Go API、未修改云端 schema、未实现恢复流程、未实现自动定时清理；云端同步仍通过现有 `sync_outbox` revision ingest 表达 `source_cleanup_records`。
-- 下一阶段开始前必须把“本次开发阶段：P2 阶段 13 恢复流程”写入当前工作项，并同步计划修改范围和验收标准。
+- P2 阶段 13 恢复流程开发完成；下一个开发阶段为 P3 阶段 14 打包发布与最终验收。
+- 本轮属于主排期 P2 阶段 13，不改变阶段顺序；已实现恢复对象查询、本地 archive 复用、远端下载接口边界、7-Zip 解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者和版本化恢复记录。
+- 本轮已新增 `restore_records` 同步实体、恢复服务、脱敏恢复 CLI、PySide6 恢复页、百度 `filemetas(dlink=1)` 与 `dlink` 下载封装。
+- 本阶段未修改 Go 云端 API 或 PostgreSQL schema；恢复记录落本地 SQLite 并通过现有 `sync_outbox` 表达必要同步状态。
+- 下一阶段开始前必须把“本次开发阶段：P3 阶段 14 打包发布与最终验收”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- P2-12 已验收：只有 `job_status=completed`、archive 标准验证通过、upload session `remote_created`、`.meta.json`/`job.index.json` 已上传且本地记录完整的文件才进入清理候选；云端同步待同步时允许清理但 UI 显示提示。
-- P2-12 已验收：清理前复查源文件 `size`、`mtime_ns`、`volume_id`/`file_index`，任何不一致都禁止清理并记录失败原因。
-- P2-12 已验收：默认清理方式为 Windows 回收站；支持用户指定隔离目录；永久删除作为高级选项，必须通过清理确认短语和永久删除确认短语。
-- P2-12 已验收：每个清理结果写入 `source_cleanup_records` 并同事务写入 `sync_outbox`，同时更新来源引用的清理状态；输出和 UI 默认只展示路径 hash、文件名、状态和错误摘要。
-- P2-12 已验收：客户端清理服务/UI 定向测试、全量 pytest、compileall、`git diff --check` 通过；Go 本阶段不改服务端代码，仅执行工具链自检并按已知沙箱问题记录结果。
+- P2-13 已验收：可按 job、文件名或 content hash 查询可恢复对象，恢复候选不把已清理源文件误判为不可恢复。
+- P2-13 已验收：本地存在 archive 时可复用；本地缺失 archive 时进入明确的待下载状态；百度下载封装已覆盖 `filemetas(dlink=1)`、`dlink + access_token` 和 `User-Agent: pan.baidu.com` 参数构造并记录官方依据。
+- P2-13 已验收：使用真实 7-Zip 解密解压 archive，密码错误会失败且不写目标文件；manifest 缺失、manifest SHA256 不匹配或外部 archive 缺失会写入可审计失败记录。
+- P2-13 已验收：支持恢复到原路径和用户指定路径；目标冲突默认保留两者，追加 `restored yyyyMMdd-HHmmss`，不覆盖现有文件；`skip_existing` 可跳过已有文件，覆盖恢复留待后续单独实现回收站保护。
+- P2-13 已验收：恢复完成后重新计算 SHA256 并比对 manifest/content index；恢复结果写入 SQLite，更新 `content_references.restore_status`，输出/UI 默认不暴露完整敏感路径。
+- P2-13 已验收：客户端恢复服务/UI/CLI 定向测试、全量 pytest、compileall、`git diff --check` 通过；本阶段未修改 Go 服务端，仅执行工具链自检并记录结果。
 
 ## 开发排期
 
@@ -42,7 +43,7 @@
 | P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 已完成；P2 阶段 10 缓存额度与 artifact 管理开发完成 | 下一个开发阶段为 P2 阶段 11 来源映射和校对 UI |
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
-| P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 未开始 | 原路径/手动路径恢复均可验收，覆盖缺失外部 archive 和密码错误 |
+| P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
 | P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 未开始 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复和卸载/升级测试 |
 
 ## 进度差异审计
@@ -87,6 +88,32 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P2 阶段 13 恢复流程
+
+- P2 阶段 13 恢复流程开发完成；下一个开发阶段为 P3 阶段 14 打包发布与最终验收。
+- 新增 SQLite 迁移 `client/migrations/sqlite/009_restore_records.sql`，创建 `restore_records` 同步实体，用于记录恢复目标模式、冲突策略、archive 来源、目标路径 hash、最终路径 hash、archive/manifest/content SHA256、状态和错误摘要。
+- `sqlite_store` 新增 `restore_records` 写入/查询和 `content_references.restore_status` 更新；同步 payload 过滤 `target_path`、`final_path` 和 `archive_path`，避免完整本地路径进入 outbox。
+- 新增 `client/src/auto_backup_client/restore_flow.py`，实现恢复候选查询、本地 archive 复用、可注入下载器、真实 7-Zip `t` + 完整解压、manifest SHA256 校验、payload 复制、恢复后 SHA256 复验、冲突默认保留两者和失败记录。
+- 恢复候选只要求 job 已 completed、archive 标准验证通过且来源已有 archive assignment；即使原始源文件已清理，只要 archive 可用仍列为可恢复。
+- 目标模式支持 `manual_path` 和 `original_path`；手动路径按 manifest `relative_path` 放到用户指定目录下；冲突默认生成 `restored yyyyMMdd-HHmmss` 文件名，不覆盖现有文件；`skip_existing` 支持跳过已有文件。
+- 新增 `client/src/auto_backup_client/restore_cli.py`，提供脱敏 `list` 和 `restore` 入口；输出只含数量、状态、record id、路径 hash、content/archive hash 和 archive 来源，不输出完整路径或密码。
+- PySide6 主窗口新增“恢复”页面，支持按 job/关键字筛选候选、选择手动目录或原路径、设置冲突策略、输入运行时归档密码并执行恢复；表格只展示文件名和 hash 摘要。
+- 百度下载官方依据：已通过提升后的 `curl.exe -L` 获取百度网盘开放平台官方页面 `https://pan.baidu.com/union/doc/Fksg0sbcm` 与 `https://pan.baidu.com/union/doc/pkuo3snyp` 的 page-data。官方文档说明 `filemetas` 使用 `GET /rest/2.0/xpan/multimedia?method=filemetas&fsids=[...]&dlink=1` 获取 `dlink`，下载时在 `dlink` 后追加 `access_token` 并设置 `User-Agent: pan.baidu.com`；`dlink` 有效期 8 小时且可能 302 跳转。
+- `BaiduNetdiskClient` 新增 `file_metas(..., dlink=True)` 和 `download_dlink(...)`，为后续真实远端 archive 下载恢复提供受控封装；本轮自动化测试覆盖参数构造和 header，不执行真实大文件下载联调。
+- 已验证定向测试 `tests/test_restore_flow.py tests/test_baidu_upload.py tests/test_backup_task_page.py` 通过，23 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-p2-13-full` 通过，134 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已执行 `cloud-api/` 下 Go 工具链自检：`go version` 返回 `go1.25.10 windows/amd64`；沙箱内 `go list runtime` 仍返回 `package runtime is not in std (C:\Program Files\Go\src\runtime)`，按既有约束提升后 `go list runtime` 返回 `runtime`。本阶段未修改 Go 服务端代码、迁移或路由，不需要重新编译部署 Go 服务。
+
+提交摘要：本次提交完成 P2 阶段 13 恢复流程，新增版本化 `restore_records`、恢复服务、恢复 CLI、PySide6 恢复页和百度官方下载接口封装；恢复可复用本地 archive，按 manifest 解密解压并恢复到原路径或手动路径，默认冲突保留两者，恢复后 SHA256 复验，失败也写入可审计记录。
+
+后续待办：
+
+- 下一个开发阶段为 P3 阶段 14 打包发布与最终验收；下一轮开始前必须在当前工作项写明“本次开发阶段：P3 阶段 14 打包发布与最终验收”。
+- P3 阶段 14 需要完成 PyInstaller/Nuitka 或等效打包方案、版本号/构建产物、发布文档、干净 Windows 环境安装、授权、备份、校对、清理、恢复、卸载/升级测试。
+- 后续若要求覆盖恢复，必须新增“覆盖前旧文件移入回收站”的保护实现和测试后再开放 UI/CLI 入口；不得直接覆盖现有文件。
 
 ### P2 阶段 12 原始数据清理
 

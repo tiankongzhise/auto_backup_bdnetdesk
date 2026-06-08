@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from typing import Any, Mapping
 
 import httpx
@@ -238,6 +239,41 @@ class BaiduFileListResult:
             has_more=bool(int(data.get("has_more", 0) or 0)),
             cursor=int(data.get("cursor", 0) or 0),
         )
+
+
+@dataclass(frozen=True)
+class BaiduFileMeta:
+    fs_id: int
+    path: str
+    filename: str
+    isdir: bool
+    size: int
+    md5: str = ""
+    dlink: str = ""
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "BaiduFileMeta":
+        return cls(
+            fs_id=int(data.get("fs_id", 0) or 0),
+            path=str(data.get("path", "")),
+            filename=str(data.get("filename") or data.get("server_filename") or ""),
+            isdir=int(data.get("isdir", 0) or 0) == 1,
+            size=int(data.get("size", 0) or 0),
+            md5=str(data.get("md5", "")),
+            dlink=str(data.get("dlink", "")),
+        )
+
+
+@dataclass(frozen=True)
+class BaiduFileMetasResult:
+    items: tuple[BaiduFileMeta, ...]
+    request_id: str = ""
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "BaiduFileMetasResult":
+        raw_items = data.get("list", [])
+        items = tuple(BaiduFileMeta.from_json(item) for item in raw_items) if isinstance(raw_items, list) else tuple()
+        return cls(items=items, request_id=str(data.get("request_id", "")))
 
 
 class BaiduNetdiskClient:
@@ -518,6 +554,49 @@ class BaiduNetdiskClient:
                 break
         return tuple(items)
 
+    def file_metas(self, fs_ids: tuple[int, ...] | list[int], *, dlink: bool = False) -> BaiduFileMetasResult:
+        cleaned_ids = tuple(_validate_positive_int(value, "fs_id") for value in fs_ids)
+        if not cleaned_ids:
+            raise ValueError("fs_ids must not be empty")
+        if len(cleaned_ids) > 100:
+            raise ValueError("fs_ids may contain at most 100 items")
+        data = self._request_json(
+            "GET",
+            f"{self._pan_api_base_url}/rest/2.0/xpan/multimedia",
+            params={
+                "method": "filemetas",
+                "access_token": self._access_token,
+                "fsids": json.dumps(list(cleaned_ids), separators=(",", ":")),
+                "dlink": int(dlink),
+            },
+        )
+        _ensure_baidu_success(data, error_field="errno")
+        return BaiduFileMetasResult.from_json(data)
+
+    def download_dlink(self, dlink: str, target_path: str | Path, *, chunk_size: int = 1024 * 1024) -> None:
+        cleaned_dlink = dlink.strip()
+        if not cleaned_dlink:
+            raise ValueError("dlink is required")
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1")
+        target = Path(target_path)
+        local_fs.make_dirs(target.parent)
+        url = _append_access_token(cleaned_dlink, self._access_token)
+        try:
+            with self._client.stream("GET", url, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as response:
+                if response.status_code >= 400:
+                    raise BaiduNetdiskError(
+                        "baidu netdisk dlink download returned HTTP error",
+                        status_code=response.status_code,
+                        error_code="download_http_error",
+                    )
+                with local_fs.open_file(target, "wb") as handle:
+                    for chunk in response.iter_bytes(chunk_size=chunk_size):
+                        if chunk:
+                            handle.write(chunk)
+        except httpx.HTTPError as exc:
+            raise BaiduNetdiskError("baidu netdisk dlink download failed", error_code="download_http_request_failed") from exc
+
     def upload_file_complete(
         self,
         *,
@@ -769,6 +848,13 @@ def _validate_positive_int(value: int, field: str) -> int:
     if actual < 1:
         raise ValueError(f"{field} must be >= 1")
     return actual
+
+
+def _append_access_token(dlink: str, access_token: str) -> str:
+    split = urlsplit(dlink)
+    query = [(key, value) for key, value in parse_qsl(split.query, keep_blank_values=True) if key != "access_token"]
+    query.append(("access_token", access_token))
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
 
 
 def _validate_list_order(value: str) -> str:

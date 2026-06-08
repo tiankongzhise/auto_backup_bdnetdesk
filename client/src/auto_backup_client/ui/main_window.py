@@ -53,6 +53,7 @@ from auto_backup_client.device_credentials import resolve_or_register_device_cre
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.source_mapping import SourceMappingQuery, SourceMappingReport, path_digest, short_digest
 from auto_backup_client.source_cleanup import CLEANUP_CONFIRM_TEXT, PERMANENT_DELETE_CONFIRM_TEXT, SourceCleanupService
+from auto_backup_client.restore_flow import RestoreService
 from auto_backup_client.sqlite_store import SQLiteClientStore
 from auto_backup_client.ui.baidu_settings import BaiduSettingsPage, BaiduSettingsPageConfig
 
@@ -63,6 +64,7 @@ class MainWindowConfig:
     device_token: str
     device_id: str
     sqlite_path: str
+    cache_root: str
     device_credential_source: str = ""
 
 
@@ -748,6 +750,151 @@ class SourceCleanupPage(QWidget):
         QMessageBox.warning(self, "提示", message)
 
 
+class RestorePage(QWidget):
+    status_changed = Signal(str)
+
+    def __init__(self, store: SQLiteClientStore, *, device_id: str, cache_root: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._service = RestoreService(store, device_id=device_id or "current-device", cache_root=cache_root)
+        self._candidates = []
+        self._build_ui()
+        self.refresh_candidates()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("恢复")
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+
+        filters = QHBoxLayout()
+        filters.addWidget(QLabel("任务 ID"))
+        self.job_id_input = QLineEdit()
+        self.job_id_input.setPlaceholderText("留空显示最近候选")
+        filters.addWidget(self.job_id_input, stretch=2)
+        filters.addWidget(QLabel("关键字"))
+        self.keyword_input = QLineEdit()
+        self.keyword_input.setPlaceholderText("任务名、文件名、relative path、content hash")
+        filters.addWidget(self.keyword_input, stretch=2)
+        self.refresh_button = QPushButton("刷新")
+        self.refresh_button.clicked.connect(self.refresh_candidates)
+        filters.addWidget(self.refresh_button)
+        layout.addLayout(filters)
+
+        target_group = QGroupBox("恢复目标")
+        form = QFormLayout(target_group)
+        self.target_mode_combo = QComboBox()
+        self.target_mode_combo.addItem("恢复到手动路径", "manual_path")
+        self.target_mode_combo.addItem("恢复到原路径", "original_path")
+        self.target_root_input = QLineEdit()
+        self.target_root_input.setPlaceholderText("手动路径模式需要")
+        self.choose_target_button = QPushButton("选择")
+        self.choose_target_button.clicked.connect(self.choose_target_root)
+        target_row = QHBoxLayout()
+        target_row.addWidget(self.target_root_input, stretch=1)
+        target_row.addWidget(self.choose_target_button)
+        self.conflict_combo = QComboBox()
+        self.conflict_combo.addItem("保留两者", "keep_both")
+        self.conflict_combo.addItem("跳过已有文件", "skip_existing")
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.setPlaceholderText("归档密码仅用于本次解压")
+        form.addRow("目标模式", self.target_mode_combo)
+        form.addRow("目标目录", target_row)
+        form.addRow("冲突策略", self.conflict_combo)
+        form.addRow("归档密码", self.password_input)
+        layout.addWidget(target_group)
+
+        toolbar = QHBoxLayout()
+        self.restore_button = QPushButton("执行恢复")
+        self.restore_button.clicked.connect(self.apply_restore)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.restore_button)
+        layout.addLayout(toolbar)
+
+        self.summary_label = QLabel("尚未加载")
+        layout.addWidget(self.summary_label)
+
+        self.candidates_table = QTableWidget(0, 10)
+        self.candidates_table.setHorizontalHeaderLabels(["状态", "任务", "文件名", "大小", "SHA256", "路径", "清理", "恢复", "archive", "原因"])
+        self.candidates_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.candidates_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.candidates_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.candidates_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.candidates_table, stretch=1)
+
+    @Slot()
+    def refresh_candidates(self) -> None:
+        try:
+            report = self._service.list_candidates(
+                backup_job_id=self.job_id_input.text(),
+                keyword=self.keyword_input.text(),
+                limit=500,
+            )
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        self._candidates = list(report.candidates)
+        self.summary_label.setText(
+            f"候选 {len(report.candidates)} / 可恢复 {report.restorable_count} / 本地可用 {report.local_ready_count} / 需下载 {report.needs_download_count} / 阻塞 {report.blocked_count}"
+        )
+        self.candidates_table.setRowCount(len(self._candidates))
+        for row_index, candidate in enumerate(self._candidates):
+            values = [
+                candidate.candidate_status,
+                candidate.job_name,
+                candidate.display_name,
+                str(candidate.size_bytes),
+                short_digest(candidate.sha256),
+                short_digest(candidate.path_sha256),
+                candidate.cleanup_status,
+                candidate.restore_status,
+                short_digest(candidate.archive_sha256),
+                candidate.reason,
+            ]
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, candidate.content_reference_id)
+                self.candidates_table.setItem(row_index, col, item)
+        self.status_changed.emit(f"恢复候选已刷新：可恢复 {report.restorable_count} 条。")
+
+    @Slot()
+    def choose_target_root(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择恢复目标目录")
+        if directory:
+            self.target_root_input.setText(directory)
+
+    @Slot()
+    def apply_restore(self) -> None:
+        selected_ids = tuple(
+            str(self.candidates_table.item(row, 0).data(Qt.ItemDataRole.UserRole))
+            for row in sorted({index.row() for index in self.candidates_table.selectedIndexes()})
+            if self.candidates_table.item(row, 0) is not None
+        )
+        try:
+            result = self._service.restore(
+                backup_job_id=self.job_id_input.text(),
+                content_reference_ids=selected_ids,
+                target_mode=self.target_mode_combo.currentData(),
+                target_root=self.target_root_input.text(),
+                password=self.password_input.text(),
+                conflict_strategy=self.conflict_combo.currentData(),
+            )
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        self.status_changed.emit(
+            f"恢复完成：成功 {result.restored_count}，跳过 {result.skipped_count}，失败 {result.failed_count}。"
+        )
+        self.refresh_candidates()
+
+    def _warn(self, message: str) -> None:
+        self.status_changed.emit(message)
+        QMessageBox.warning(self, "提示", message)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, config: MainWindowConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -771,6 +918,11 @@ class MainWindow(QMainWindow):
             device_id=config.device_id,
         )
         self._cleanup_page = SourceCleanupPage(self._store, device_id=config.device_id)
+        self._restore_page = RestorePage(
+            self._store,
+            device_id=config.device_id,
+            cache_root=config.cache_root,
+        )
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -787,6 +939,7 @@ class MainWindow(QMainWindow):
         self.nav.addItem(QListWidgetItem("来源映射"))
         self.nav.addItem(QListWidgetItem("远端校对"))
         self.nav.addItem(QListWidgetItem("原始数据清理"))
+        self.nav.addItem(QListWidgetItem("恢复"))
         self.nav.currentRowChanged.connect(self._set_current_page)
         layout.addWidget(self.nav)
 
@@ -796,6 +949,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._source_mapping_page)
         self.stack.addWidget(self._reconcile_page)
         self.stack.addWidget(self._cleanup_page)
+        self.stack.addWidget(self._restore_page)
         layout.addWidget(self.stack, stretch=1)
 
         self.status_label = QLabel("准备就绪")
@@ -803,6 +957,7 @@ class MainWindow(QMainWindow):
         self._source_mapping_page.status_changed.connect(self.status_label.setText)
         self._reconcile_page.status_changed.connect(self.status_label.setText)
         self._cleanup_page.status_changed.connect(self.status_label.setText)
+        self._restore_page.status_changed.connect(self.status_label.setText)
         self.setCentralWidget(shell)
         self.statusBar().addPermanentWidget(self.status_label, stretch=1)
         self.nav.setCurrentRow(0)
@@ -846,6 +1001,7 @@ def run_main_window_app(settings: ClientSettings | None = None) -> int:
             device_token=credentials.device_token,
             device_id=credentials.device_id,
             sqlite_path=loaded.local_sqlite_path,
+            cache_root=loaded.local_cache_dir,
             device_credential_source=source,
         )
     )
