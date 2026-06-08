@@ -372,3 +372,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：从 7-Zip 官方首页指向的 GitHub release 下载 `7z2601-x64.exe` 到 `C:\tmp`，记录 SHA256 `D64A0468F5B5B0B0FC5B2188450BCD655B70809D97B1C4535F2884635094377D`；安装器 Authenticode 状态为 `NotSigned`，但来源 URL 来自 7-Zip 官方首页。通过静默安装将 7-Zip 26.01 安装到 `C:\Program Files\7-Zip\7z.exe`，并用真实 7-Zip 运行 P1-8 归档测试，测试压缩密码固定为 `Test123456789`。
 
 后续约束：P1-8 及后续涉及压缩、验证、恢复的测试不得在本机缺少 7-Zip 时退化为模拟验收；应先安装或定位真实 `7z.exe`，必要时通过 `AUTO_BACKUP_7ZIP_PATH` 指定路径，再执行真实 `7z a`、`7z t` 和解压校验。
+
+### 2026-06-08：P1-9 归档长路径与 pytest 临时目录约束
+
+问题：P1 阶段 9 编排 CLI 测试中，pytest 默认长 basetemp 路径叠加 job id 和 `{archive_seq}-{archive_sha256}.7z` 文件名后，在 Windows 上出现 `FileNotFoundError`；PowerShell `Remove-Item -Recurse` 清理这些长路径测试产物时也会失败。改用 `C:\tmp` 短路径后，pytest 子进程又遇到 `PermissionError: [WinError 5] 拒绝访问`。
+
+原因：Windows 普通路径 API 和 PowerShell 5.1 对长路径支持不稳定；当前沙箱/pytest 子进程对 `C:\tmp` 目录创建也可能受限。
+
+解决方案：归档服务对最终 `.7z` 的哈希读取、rename 和 stat 使用 Windows `\\?\` 长路径包装；CLI 测试的短工作目录放在仓库内 `.cache/pt/`，仍保持在可写根内。
+
+后续约束：涉及 `{archive_sha256}.7z`、深层 job cache、pytest basetemp 或清理测试产物时，优先使用仓库内短目录 `.cache/pt`、`.cache/pytest-*`；不得假定 `C:\tmp` 在 pytest 子进程中一定可写。产品代码读取或移动长 archive 路径时应继续使用长路径安全包装。

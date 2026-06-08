@@ -42,6 +42,7 @@ class ResumableArchiveInput:
     job_id: str
     device_id: str
     account_id: str
+    archive_id: str = ""
     archive_seq: int = 1
     archive_type: str = "payload"
     manifest_id: str = ""
@@ -83,7 +84,7 @@ class BaiduResumableUploader:
     def upload(self, value: ResumableArchiveInput) -> ResumableUploadResult:
         plan = compute_file_block_plan(value.local_path, part_size=value.part_size)
         archive_sha256 = file_sha256(value.local_path)
-        archive_id = f"archive_{archive_sha256}"
+        archive_id = value.archive_id.strip() or f"archive_{archive_sha256}"
         job_created_at = value.job_created_at or datetime.now(timezone.utc)
         upload_session_id = _session_id(value.job_id, archive_sha256, value.archive_seq)
         stored = self._store.get_upload_session(upload_session_id)

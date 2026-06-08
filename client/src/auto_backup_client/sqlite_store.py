@@ -482,6 +482,47 @@ class SQLiteClientStore:
     def put_archive_member(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
         _put_row(conn, "archive_members", dict(payload), key_field="archive_member_id")
 
+    def update_archive_remote_path(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        archive_id: str,
+        remote_path: str,
+        updated_by_device_id: str,
+        now: str | None = None,
+    ) -> RevisionRecord:
+        row = conn.execute(
+            "SELECT * FROM archives WHERE archive_id = ?",
+            (archive_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("archive not found")
+        payload = dict(row)
+        if str(payload.get("remote_path", "")) == remote_path:
+            return revision_from_payload(
+                entity_type="archives",
+                entity_id=str(payload["entity_id"]),
+                revision_id=str(payload["revision_id"]),
+                schema_version=int(payload["schema_version"]),
+                data_version=int(payload["data_version"]),
+                canonical_record_sha256=str(payload["canonical_record_sha256"]),
+                payload=payload,
+                updated_at=str(payload["updated_at"]),
+                deleted_at=payload.get("deleted_at"),
+            )
+        payload["remote_path"] = remote_path
+        versioned = build_version_fields(
+            entity_payload=payload,
+            updated_by_device_id=updated_by_device_id,
+            data_version=self.next_data_version(conn, "archives", "archive_id", archive_id),
+            schema_version=int(payload["schema_version"]),
+            now=now,
+            sync_status="sync_pending",
+            deleted_at=payload.get("deleted_at"),
+            last_synced_revision_id=payload.get("last_synced_revision_id"),
+        )
+        return self.put_archive(conn, versioned)
+
     def get_archive(self, archive_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute(

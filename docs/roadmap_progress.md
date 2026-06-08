@@ -10,18 +10,19 @@
 
 ## 当前工作项
 
-- P1 阶段 8 7-Zip 加密归档与 manifest 开发完成；下一个开发阶段为 P1 阶段 9 端到端备份编排。
-- 本轮已完成客户端本地归档/manifest 最小闭环：新增 `archives` 和 `archive_members` SQLite 表，`ArchivePackager` 可读取 `content_references`、生成稳定 manifest、真实调用 7-Zip 26.01 创建加密 `.7z`、执行 `7z t` 标准验证、解出 manifest 复核 SHA256，并在验证通过后删除明文 manifest/staging/verify 目录。
-- 本轮实现边界：只做本地 manifest/archive 生成、标准验证、明文 manifest 生命周期和本地归档索引；不接入真实百度上传、不生成远端 `.meta.json`/`job.index.json`、不做缓存额度调度、严格解压验证、恢复流程或 UI 编排，这些回到 P1 阶段 9 和 P2 阶段。
-- 下一阶段开始前必须把“本次开发阶段：P1 阶段 9 端到端备份编排”写入当前工作项，并同步计划修改范围和验收标准。
+- P1 阶段 9 端到端备份编排开发完成；下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理。
+- 本轮已完成客户端端到端编排服务：新增 `BackupPipeline`，可顺序执行扫描、内容去重、7-Zip 加密归档、可选真实百度可恢复上传、可选 outbox 同步和可选远端校对；新增 `backup_pipeline_cli`，默认只跑本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
+- 本轮实现边界：只落地可由 UI/CLI 复用的最小主流程编排、状态推进和测试覆盖；不新增恢复、缓存额度调度、严格解压验证、原始数据清理、校对 UI 或自动清理远端对象。
+- 下一阶段开始前必须把“本次开发阶段：P2 阶段 10 缓存额度与 artifact 管理”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- P1 阶段 8 已验收：`needs_payload` 来源会写入 archive 内部 `/payload/{content_id}`，本地重复或云端候选引用不会重复写 payload，但会进入 manifest 引用记录；没有新增 payload 的 job 会生成 manifest-only archive。
-- P1 阶段 8 已验收：manifest 明文 JSON 只存在于 job 缓存临时目录和压缩 staging 目录；archive 标准验证通过后会删除 `manifest_plain/`、staging payload 目录和 verify 解压目录。
-- P1 阶段 8 已验收：本机已安装真实 7-Zip 26.01，测试密码使用 `Test123456789`，阶段测试真实执行 archive 创建、`7z t` 标准验证和 manifest 解压 SHA256 复核；`7z.exe` 路径为 `C:\Program Files\7-Zip\7z.exe`。
-- P1 阶段 8 已验收：新增 `archives` 同步实体写入与 `sync_outbox` 同事务完成，outbox payload 不包含用户密码、本地 archive 路径、明文 manifest 路径或 payload staging 路径；`archive_members` 保留本地成员映射。
-- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-archive-all` 通过，100 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过。
+- P1 阶段 9 已验收：编排服务能对已创建 job 顺序执行扫描、内容去重、7-Zip 加密归档、可选上传、可选 outbox 同步和可选远端校对，并返回每个阶段的可审计计数。
+- P1 阶段 9 已验收：本地闭环不读取 Device Token、不解密百度 token、不标记 completed；真实上传模式要求传入百度账号和真实客户端，且 `mark_completed=True` 时必须同时完成 outbox 同步和远端校对。
+- P1 阶段 9 已验收：上传账本沿用归档阶段 `archives.archive_id`，并在上传后回填 `archives.remote_path`；`remote_objects` 中 archive/archive_meta/job_index 与归档实体可关联。
+- P1 阶段 9 已验收：上传失败会把 running job 转为 `failed_retryable`，保留本地归档和 outbox，不写 `remote_objects`，不会误标 completed。
+- P1 阶段 9 已验收：CLI 输出只展示阶段计数、hash 和远端路径 hash，不输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-pipeline-all3` 通过，107 个测试通过；已验证 `uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 通过；Go 沙箱内 `go list runtime` 失败，提升权限后 `go version; go list runtime; go test ./...` 通过。
 
 ## 开发排期
 
@@ -37,7 +38,7 @@
 | P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 已完成；P1 阶段 6 扫描与内容指纹开发完成 | 下一个开发阶段为 P1 阶段 7 去重索引与来源引用 |
 | P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 已完成；P1 阶段 7 去重索引与来源引用开发完成 | 下一个开发阶段为 P1 阶段 8 7-Zip 加密归档与 manifest |
 | P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 已完成；P1 阶段 8 7-Zip 加密归档与 manifest 开发完成 | 下一个开发阶段为 P1 阶段 9 端到端备份编排 |
-| P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 底层上传链路已验证；主编排未开始 | 小文件、跨分片、重复内容、冲突、断点恢复均用真实链路验收 |
+| P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 已完成；P1 阶段 9 端到端备份编排开发完成 | 下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理 |
 | P2 | 10 缓存额度与 artifact 管理 | 缓存目录、40GiB 规则、可释放统计、清理等级、artifact 生命周期 | 未开始 | 缓存不足时阻止新任务或暂停低优先级阶段，不删除源文件 |
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 未开始 | UI 能展示差异、允许本地/云端/百度实际状态人工处理，所有动作留版本记录 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 未开始 | 远端确认和本地记录完整前不可清理；源文件变化时按钮禁用 |
@@ -75,6 +76,34 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P1 阶段 9 端到端备份编排
+
+- P1 阶段 9 端到端备份编排开发完成；下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理。
+- 新增 `client/src/auto_backup_client/backup_pipeline.py`，将 `BackupScanner`、`ContentDedupeIndexer`、`ArchivePackager`、`BaiduResumableUploader`、`SyncOutboxWorker` 和 `RemoteObjectReconciler` 串成单 job 最小主流程。
+- 新增 `client/src/auto_backup_client/backup_pipeline_cli.py`，默认只执行本地扫描、去重和 7-Zip 归档；显式传 `--upload --sync-outbox --reconcile-remote` 后才读取 Device Token、解密百度 token 并接入真实百度/云端链路。
+- 归档上传 ID 已对齐：`ResumableArchiveInput` 支持显式 `archive_id`，P1-9 编排上传时沿用 P1-8 生成的 `archives.archive_id`，避免归档实体和上传账本出现两个 ID 口径。
+- 扩展 `SQLiteClientStore.update_archive_remote_path(...)`，上传成功后把远端 `.7z` 路径回填到 `archives.remote_path` 并同事务进入 `sync_outbox`。
+- 完成状态门槛已落地：本地闭环不标记 completed；上传模式下 `mark_completed=True` 必须同时启用 outbox 同步和远端校对，且校对无差异、同步无 conflict/rejected/retryable 后才把 job 更新为 `completed`。
+- 失败边界已覆盖：上传阶段失败会把 running job 转为 `failed_retryable`，保留本地 archive 和 outbox，中间账本不丢失，不写 `remote_objects`，不误标 completed。
+- 修复 P1-9 CLI 测试暴露的 Windows 长路径问题：归档服务对最终 `.7z` 的哈希读取、rename 和 stat 使用 Windows `\\?\` 长路径包装；百度上传分片计划、分片读取和 mtime 读取也支持长 archive 路径。
+- 更新 `client/README.md`，记录 `BackupPipeline`、端到端编排 CLI、本地模式和真实模式示例、输出脱敏边界，以及本阶段不做缓存/恢复/清理/UI 编排的范围。
+- 将 P1-9 归档长路径与 pytest 临时目录约束沉淀到 `AGENTS.MD`。
+- 新增 `client/tests/test_backup_pipeline.py` 和 `client/tests/test_backup_pipeline_cli.py`，覆盖本地闭环、上传/同步/远端校对完成、失败不完成、完成前必须校对和 CLI 输出脱敏。
+- 已验证客户端定向测试 `tests/test_backup_pipeline.py tests/test_backup_pipeline_cli.py tests/test_archive_packager.py tests/test_dedupe_index.py tests/test_scan_fingerprints.py tests/test_baidu_resumable_upload.py tests/test_baidu_reconcile.py tests/test_sync_worker.py tests/test_sqlite_store.py` 通过，46 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-pipeline-all3` 通过，107 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已验证沙箱内 Go 自检 `go version; go list runtime` 仍出现 `package runtime is not in std`，按既有约束提升权限后 `go version; go list runtime; go test ./...` 通过，确认不是 Go 服务代码回归。
+
+提交摘要：本次提交完成 P1 阶段 9 端到端备份编排，新增可由 CLI/UI 复用的 `BackupPipeline`，把任务、扫描、去重、7-Zip 归档、可恢复上传、outbox 同步和远端校对串成最小主流程；默认本地模式不碰真实云端，真实上传模式继续复用已验收的百度和云端链路，并在 outbox 同步成功且校对一致后才允许 job completed。
+
+后续待办：
+
+- 下一个开发阶段为 P2 阶段 10 缓存额度与 artifact 管理；下一轮开始前必须在当前工作项写明“本次开发阶段：P2 阶段 10 缓存额度与 artifact 管理”。
+- P2 阶段 10 需要新增缓存 artifact 记录、40GiB 有效预算、可释放统计、缓存清理等级和 artifact 生命周期；不得删除用户源文件。
+- P2 阶段 10 需要把 P1-8/P1-9 的 archive、manifest_plain、staging、verify、upload 临时文件纳入统一 artifact 生命周期，并明确哪些阶段前不可删除。
+- 真实 `backup_pipeline_cli --upload --sync-outbox --reconcile-remote` 仍需要在有授权密码的人工联调窗口执行，并在完成后按既有清理入口清理本批远端测试对象；本轮单元测试没有把 fake 百度/云端结果当作真实验收结论。
 
 ### P1 阶段 8 7-Zip 加密归档与 manifest
 

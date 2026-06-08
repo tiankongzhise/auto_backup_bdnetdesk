@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -601,7 +602,7 @@ class BaiduNetdiskClient:
 
 def compute_file_block_plan(local_path: str | Path, *, part_size: int = DEFAULT_PART_SIZE) -> FileBlockPlan:
     actual_path = Path(local_path)
-    if not actual_path.is_file():
+    if not os.path.isfile(_fs_path(actual_path)):
         raise FileNotFoundError(str(actual_path))
     _validate_part_size(part_size)
     content_md5 = hashlib.md5()
@@ -609,7 +610,7 @@ def compute_file_block_plan(local_path: str | Path, *, part_size: int = DEFAULT_
     slice_remaining = SLICE_MD5_SIZE
     parts: list[FileBlockPart] = []
     size = 0
-    with actual_path.open("rb") as handle:
+    with open(_fs_path(actual_path), "rb") as handle:
         partseq = 0
         while True:
             offset = size
@@ -792,10 +793,21 @@ def _safe_path_segment(value: str, field: str) -> str:
 
 
 def _read_file_range(path: Path, offset: int, size: int) -> bytes:
-    with path.open("rb") as handle:
+    with open(_fs_path(path), "rb") as handle:
         handle.seek(offset)
         return handle.read(size)
 
 
 def _file_mtime_seconds(path: Path) -> int:
-    return int(path.stat().st_mtime)
+    return int(os.stat(_fs_path(path)).st_mtime)
+
+
+def _fs_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = str(path.resolve())
+    if resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved[2:]
+    return "\\\\?\\" + resolved

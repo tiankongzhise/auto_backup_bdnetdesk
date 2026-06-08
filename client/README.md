@@ -22,6 +22,8 @@
 - `src/auto_backup_client/scan_fingerprints.py`：扫描与内容指纹服务，负责递归扫描、默认跳过链接/快捷方式、记录不可读问题、计算 quick fingerprint、完整 MD5/SHA256、`content_id` 和文件夹 hash。
 - `src/auto_backup_client/dedupe_index.py`：内容级去重索引服务，负责把 `file_items` 汇总成 `content_objects` 和 `content_references`，并可查询云端内容候选。
 - `src/auto_backup_client/archive_packager.py`：7-Zip 加密归档与 manifest 服务，负责生成临时明文 manifest、staging payload、AES-256 7z archive、标准验证和本地归档索引。
+- `src/auto_backup_client/backup_pipeline.py`：端到端备份编排服务，负责串联扫描、去重、归档、可选真实百度上传、可选 outbox 同步和可选远端校对。
+- `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
 
@@ -59,6 +61,31 @@ uv run python -m auto_backup_client.ui.main_window
 7-Zip 可执行文件优先使用 `AUTO_BACKUP_7ZIP_PATH`，其次查找 PATH 中的 `7z`，再尝试 `C:\Program Files\7-Zip\7z.exe` 和 `C:\Program Files (x86)\7-Zip\7z.exe`。归档命令使用 7z 格式、LZMA2、密码参数和文件名加密参数；本机阶段测试使用真实 7-Zip 26.01 和密码 `Test123456789` 执行创建、`7z t` 标准验证、解出 `manifest/manifest.json` 并比对 manifest SHA256。
 
 明文 manifest 只写入 job 缓存的 `manifest_plain/` 和压缩 staging 目录；标准验证完成后会删除 `manifest_plain/`、staging payload 目录和 verify 解压目录。`archives` 作为同步实体写入 `sync_outbox`，同步 payload 不包含本地 archive 路径、明文 manifest 路径、payload staging 路径或用户密码。本阶段不上传 archive、`.meta.json` 或 `job.index.json`，也不做缓存额度调度、严格解压验证、恢复或 UI 编排；这些继续回到 P1-9 和 P2 阶段。
+
+## 端到端备份编排
+
+阶段 P1-9 新增 `BackupPipeline`，把已完成的任务模型、扫描、内容去重、7-Zip 加密归档、可恢复上传、outbox 同步和远端校对串成单个 job 的最小主流程。默认本地模式只执行扫描、去重和归档，不读取 Device Token，不解密百度 token，也不会把 job 标记为 completed；只有显式启用真实上传并完成远端校对一致后，编排器才允许把任务更新为 completed。
+
+本地闭环示例：
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.backup_pipeline_cli --source .\path\to\file --cache-root ..\var\cache --no-complete
+```
+
+真实链路示例：
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
+uv run python -m auto_backup_client.backup_pipeline_cli --password-env BAIDU_AUTH_PASSWORD --source .\path\to\file --cache-root ..\var\cache --upload --sync-outbox --reconcile-remote
+```
+
+真实模式会复用 `BaiduResumableUploader` 上传 archive、`.meta.json` 和 `job.index.json`，并把上传账本中的 `archive_id` 对齐到归档阶段生成的 `archives.archive_id`。CLI 输出只展示 job、计数、hash、fs_id 相关摘要和远端路径 hash；不得输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
 
 ## PySide6 百度设置页
 

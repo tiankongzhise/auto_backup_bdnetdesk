@@ -172,7 +172,7 @@ class ArchivePackager:
         manifest_bytes = manifest_text.encode("utf-8")
         manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-        job_cache = Path(cache_root) / "jobs" / cleaned_job_id
+        job_cache = Path(cache_root).expanduser().resolve() / "jobs" / cleaned_job_id
         manifest_plain_dir = job_cache / "manifest_plain"
         staging_dir = job_cache / "tmp" / f"archive_{archive_seq:06d}"
         verify_dir = job_cache / "verify" / f"archive_{archive_seq:06d}"
@@ -200,7 +200,7 @@ class ArchivePackager:
             archive_sha256 = file_sha256(temp_archive)
             archive_md5 = file_md5(temp_archive)
             final_archive = archives_dir / f"{archive_seq:06d}-{archive_sha256}.7z"
-            os.replace(temp_archive, final_archive)
+            _replace_file(temp_archive, final_archive)
             self.runner.test_archive(archive_path=final_archive, password=password)
             extracted_manifest = self.runner.extract_manifest(
                 archive_path=final_archive,
@@ -218,7 +218,7 @@ class ArchivePackager:
             _remove_dir(staging_dir)
             _remove_dir(verify_dir)
 
-        archive_size = final_archive.stat().st_size
+        archive_size = _file_size(final_archive)
         result = ArchivePackageResult(
             backup_job_id=cleaned_job_id,
             archive_id=archive_id,
@@ -396,7 +396,7 @@ def resolve_7zip_executable(candidate: str | Path | None = None) -> Path:
 
 def file_sha256(path: str | Path) -> str:
     digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
+    with open(_fs_path(Path(path)), "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -404,7 +404,7 @@ def file_sha256(path: str | Path) -> str:
 
 def file_md5(path: str | Path) -> str:
     digest = hashlib.md5()
-    with Path(path).open("rb") as handle:
+    with open(_fs_path(Path(path)), "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -664,3 +664,23 @@ def _reset_dir(path: Path) -> None:
 def _remove_dir(path: Path) -> None:
     if path.exists():
         shutil.rmtree(path)
+
+
+def _replace_file(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(_fs_path(source), _fs_path(target))
+
+
+def _file_size(path: Path) -> int:
+    return int(os.stat(_fs_path(path)).st_size)
+
+
+def _fs_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = str(path.resolve())
+    if resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved[2:]
+    return "\\\\?\\" + resolved
