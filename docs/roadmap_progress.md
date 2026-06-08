@@ -10,19 +10,18 @@
 
 ## 当前工作项
 
-- P0 阶段 4 远端对象校对与人工修复开发完成；下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型。
-- 本轮已完成人工确认/修复入口最小闭环：P0 阶段 4 只读校对 worker、脱敏 CLI、真实 keep-remote 校对复验、辅助 JSON 远端 md5 口径修复和 CLI 级人工修复入口均已完成。
-- 本轮完成范围：新增客户端 CLI 级人工修复入口，把现有 `RemoteReconcileReport` 的差异状态映射为可审计候选动作；默认 dry-run，只输出脱敏候选动作；只有显式确认后才允许写入本地 SQLite 版本字段并同事务写入 `sync_outbox`。本轮未做完整 PySide6 校对 UI、未新增 PostgreSQL 迁移、未新增 Go 云端接口。
-- 本轮实现边界：支持对已有本地 `remote_objects` 的受控修复，包括将远端缺失类差异标记为 `remote_missing`，以及在用户确认后用百度 `list/listall` 可证明的 size、md5、fs_id 更新本地远端对象记录；`consistent` 不允许修复，`baidu_only`、`remote_unreadable` 和需要重传/下载/删除的动作只给出人工处理建议，不自动执行。
-- 下一阶段开始前必须把“本次开发阶段：P1 阶段 5 备份任务主 UI 与任务模型”写入当前工作项，并同步计划修改范围和验收标准。
+- P1 阶段 5 备份任务主 UI 与任务模型开发完成；下一个开发阶段为 P1 阶段 6 扫描与内容指纹。
+- 本轮已完成任务模型与 UI 最小闭环：客户端本地 `backup_jobs`/`backup_sources` SQLite 任务模型、任务模型服务层、版本化任务状态变更、`sync_outbox` 同事务入队、PySide6 主窗口和备份任务页均已完成。
+- 本轮实现边界：只做任务创建与状态机最小闭环，不执行递归扫描、内容指纹、去重、7-Zip 归档、manifest 生成、百度上传、清理或恢复；`backup_sources.local_path` 只保存在本地 SQLite，不进入 `sync_outbox`，后续 P1 阶段 6-9 再接入实际备份流水线。
+- 下一阶段开始前必须把“本次开发阶段：P1 阶段 6 扫描与内容指纹”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- 单元测试必须覆盖 `consistent` 不允许修复，`db_exists_remote_missing`、`remote_meta_missing`、`fs_id_changed`、`remote_size_mismatch`、`remote_meta_mismatch` 能生成正确候选动作。
-- dry-run 必须不写 SQLite、不写 `sync_outbox`、不调用百度删除/上传；confirmed 模式才允许写入本地版本记录并进入 `sync_outbox`。
-- CLI 测试必须覆盖必须提供 scope、默认 dry-run、写入必须显式确认、脱敏输出和安全错误摘要，并确认不泄露 Device Token、百度 token、用户密码、SQLite 路径、本地路径、payload 明文或远端真实路径。
-- 客户端测试 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-reconcile-repair`、`uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 必须通过。
-- 本轮不要求真实执行删除、覆盖、重传或下载；如使用真实 keep-remote 联调生成差异验证，校对后必须继续用 `cleanup-resumable` 清理远端对象。
+- 单元测试必须覆盖：创建任务会写入 `backup_jobs`、`backup_sources` 和 `sync_outbox`；空来源/重复来源被拒绝；任务状态机只允许 `queued -> running -> paused -> running` 和取消路径；非法跳转不写入新 revision。
+- `sync_outbox.payload_json` 不得包含本地来源路径、SQLite 路径、Device Token、百度 token、用户密码或其他本地敏感内容；`backup_sources.local_path` 本轮只允许留在本地 SQLite。
+- PySide6 任务页测试必须覆盖：直接添加来源后可创建持久化任务，创建/状态变更状态栏不泄露本地路径，开始/暂停/继续/取消按钮能驱动任务模型状态变更。
+- 客户端测试 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-task-ui`、`uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 必须通过。
+- 本轮不要求真实云端 API、真实百度 API 或 7-Zip 联调；如果意外触发真实 API，必须记录原因并确认没有敏感输出。
 
 ## 开发排期
 
@@ -34,8 +33,8 @@
 | P0 | 2 本地/云端同步底座 | SQLite 迁移、版本字段、`sync_outbox`、Go Cloud Sync、PostgreSQL revision 投影、设备认证 | 基本完成 | 后续业务表接入时必须同事务写 outbox，并用真实云端 summary 校验 |
 | P0 | 3 百度授权与上传底座 | OAuth/扫码授权、DPAPI Device Token、KDF store、token 解密、刷新租约、容量、预上传、分片、create、删除清理 | 基本完成 | 保持真实百度 API 验收；补上传失败重试 UI 和 token refresh 自动接入 |
 | P0 | 4 远端对象校对与人工修复 | 百度 `list/listall`、本地 `remote_objects` 对账、差异状态、只读报告、人工修复入口 | 已完成；P0 阶段 4 远端对象校对与人工修复开发完成 | 下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型 |
-| P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 下一阶段待开始 | PySide6 主窗口可创建任务并持久化，状态不遮挡、不泄密 |
-| P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 未开始 | 单元测试覆盖路径无关指纹、symlink/junction 默认跳过、不可读不中断 |
+| P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 已完成；P1 阶段 5 备份任务主 UI 与任务模型开发完成 | 下一个开发阶段为 P1 阶段 6 扫描与内容指纹 |
+| P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 下一阶段待开始 | 单元测试覆盖路径无关指纹、symlink/junction 默认跳过、不可读不中断 |
 | P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 未开始 | 最终去重只按完整 SHA256+size；路径/时间/设备不进入内容指纹 |
 | P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 未开始 | 真实 7-Zip test、manifest hash 校验、明文 manifest 生命周期测试通过 |
 | P1 | 9 端到端备份编排 | 扫描 -> 指纹 -> 去重 -> manifest/archive -> 验证 -> 百度可恢复上传 -> outbox 同步 -> 远端校对 | 底层上传链路已验证；主编排未开始 | 小文件、跨分片、重复内容、冲突、断点恢复均用真实链路验收 |
@@ -76,6 +75,31 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P1 阶段 5 备份任务主 UI 与任务模型
+
+- P1 阶段 5 备份任务主 UI 与任务模型开发完成；下一个开发阶段为 P1 阶段 6 扫描与内容指纹。
+- 新增 SQLite 迁移 `client/migrations/sqlite/003_backup_jobs.sql`，包含版本化同步实体 `backup_jobs` 和本地来源清单 `backup_sources`；`backup_jobs` 写入 `sync_outbox`，`backup_sources.local_path` 当前只保存在本地 SQLite。
+- 扩展 `SQLiteClientStore`，新增 `put_backup_job`、`put_backup_source`、`get_backup_job`、`list_backup_jobs` 和 `list_backup_sources`，并让同步状态回写支持 `backup_jobs`。
+- 新增 `client/src/auto_backup_client/backup_jobs.py`，提供任务创建、来源规范化、重复来源拒绝、任务状态标签和受控状态机；当前允许 `queued -> running -> paused -> running`、取消路径和可重试失败后继续。
+- 新增 `client/src/auto_backup_client/ui/main_window.py`，提供 PySide6 主窗口、左侧导航、备份任务页和百度设置页入口；备份任务页支持选择文件、选择文件夹、拖拽添加、移除/清空待建来源、创建任务、开始、暂停、继续和取消。
+- 本轮 PySide6 UI 结构参考 Qt for Python 官方文档：`QMainWindow`（`https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QMainWindow.html`）、`QStackedWidget`（`https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QStackedWidget.html`）和 `QFileDialog`（`https://doc.qt.io/qtforpython-6/PySide6/QtWidgets/QFileDialog.html`）。
+- UI 状态栏和任务列表不显示完整本地路径；待建来源表只展示类型、名称和路径 SHA256 前缀，避免把源路径扩散到普通状态文案。
+- 更新 `client/README.md`，记录主窗口运行方式、阶段边界和 `backup_sources.local_path` 不进入 `sync_outbox` 的约束。
+- 新增 `client/tests/test_backup_jobs.py`，覆盖任务创建持久化、空来源/重复来源拒绝、状态机版本化更新、非法跳转不写新 revision 和 outbox 不包含本地来源路径。
+- 新增 `client/tests/test_backup_task_page.py`，覆盖 PySide6 任务页直接添加来源后可创建持久化任务，且创建/状态变更消息不泄露完整本地路径，开始/暂停/继续/取消能驱动模型状态变更。
+- 已验证客户端定向测试 `tests/test_backup_jobs.py tests/test_backup_task_page.py` 通过，6 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-task-ui` 通过，83 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交完成 P1 阶段 5 备份任务主 UI 与任务模型，新增版本化 `backup_jobs`、本地 `backup_sources`、任务状态机服务层和 PySide6 主窗口/任务页；任务创建和状态变更已能持久化并进入 `sync_outbox`，但本轮不执行扫描、指纹、归档、上传、清理或恢复。
+
+后续待办：
+
+- 下一个开发阶段为 P1 阶段 6 扫描与内容指纹；下一轮开始前必须在当前工作项写明“本次开发阶段：P1 阶段 6 扫描与内容指纹”。
+- P1 阶段 6 需要实现递归扫描、不可读记录、symlink/junction 默认跳过、快速指纹和完整 MD5/SHA256，并把扫描状态接回本轮 `backup_jobs`/`backup_sources` 模型。
+- 后续接入 P1 阶段 7-9 前，仍需保持内容指纹不混入路径、时间、设备等附属信息，并继续避免把原始路径明文同步到云端。
 
 ### P0 阶段 4 远端对象校对与人工修复入口
 

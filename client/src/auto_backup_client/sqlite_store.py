@@ -16,6 +16,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations" / "sqlite"
 CLIENT_SCHEMA_VERSION = 1
 LOCAL_ONLY_SYNC_FIELDS = frozenset({"local_archive_path", "uploadid", "error_message"})
 SYNC_ENTITY_TABLES = {
+    "backup_jobs": "backup_jobs",
     "upload_sessions": "upload_sessions",
     "upload_parts": "upload_parts",
     "remote_objects": "remote_objects",
@@ -310,6 +311,62 @@ class SQLiteClientStore:
         )
         self.enqueue_revision(conn, record)
         return record
+
+    def put_backup_job(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+        row = dict(payload)
+        _put_row(conn, "backup_jobs", row, key_field="backup_job_id")
+        record = revision_from_payload(
+            entity_type="backup_jobs",
+            entity_id=str(row["entity_id"]),
+            revision_id=str(row["revision_id"]),
+            schema_version=int(row["schema_version"]),
+            data_version=int(row["data_version"]),
+            canonical_record_sha256=str(row["canonical_record_sha256"]),
+            payload=row,
+            updated_at=str(row["updated_at"]),
+            deleted_at=row.get("deleted_at"),
+        )
+        self.enqueue_revision(conn, record)
+        return record
+
+    def put_backup_source(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
+        _put_row(conn, "backup_sources", dict(payload), key_field="backup_source_id")
+
+    def get_backup_job(self, backup_job_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM backup_jobs WHERE backup_job_id = ?",
+                (backup_job_id,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def list_backup_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 500:
+            raise ValueError("backup job list limit must be between 1 and 500")
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM backup_jobs
+                ORDER BY created_at DESC, backup_job_id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_backup_sources(self, backup_job_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM backup_sources
+                WHERE backup_job_id = ?
+                ORDER BY source_seq, backup_source_id
+                """,
+                (backup_job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def put_upload_part(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
         row = dict(payload)

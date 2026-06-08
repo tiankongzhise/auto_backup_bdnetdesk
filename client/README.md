@@ -18,7 +18,24 @@
 - `src/auto_backup_client/baidu/resumable_upload.py`：基于 SQLite 上传账本的 `uploadid` 断点续传编排。
 - `src/auto_backup_client/sync_cli.py`：脱敏 `sync-outbox` CLI，把本地 SQLite outbox 推送到真实云端 Cloud Sync API。
 - `src/auto_backup_client/sync_worker.py`：读取本地 `sync_outbox`、调用云端 revision API 并回写同步状态的 worker。
+- `src/auto_backup_client/backup_jobs.py`：备份任务模型服务层，负责创建任务、持久化来源和任务状态机版本化更新。
+- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口和备份任务页，支持选择/拖拽来源、创建任务、开始、暂停、继续和取消。
 - `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
+
+## PySide6 主窗口
+
+阶段 P1-5 的主窗口提供备份任务页和百度设置页入口。备份任务页当前只完成任务创建、来源持久化和状态机闭环，不执行递归扫描、内容指纹、去重、7-Zip 加密归档、manifest 生成、百度上传、清理或恢复。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+$env:LOCAL_SQLITE_PATH='..\var\data\backup_state.sqlite3'
+$env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
+uv run python -m auto_backup_client.ui.main_window
+```
+
+`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。
 
 ## PySide6 百度设置页
 
