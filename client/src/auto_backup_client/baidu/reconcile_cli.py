@@ -18,6 +18,14 @@ from auto_backup_client.baidu.reconcile import (
     RemoteReconcileScope,
     RequestRateLimiter,
 )
+from auto_backup_client.baidu.reconcile_repair import (
+    CONFIRM_REPAIR_TEXT,
+    RemoteObjectRepairer,
+    RemoteRepairPlan,
+    RemoteRepairResult,
+    action_filter_from_cli,
+    build_remote_repair_plan,
+)
 from auto_backup_client.baidu.upload import BaiduNetdiskClient, BaiduNetdiskError
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.settings import ClientSettings
@@ -48,10 +56,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     remote_parser.add_argument("--max-requests-per-minute", type=int, default=8)
     remote_parser.add_argument("--show-findings", type=int, default=50, help="最多输出的 finding 数量。")
 
+    repair_parser = subparsers.add_parser("repair-remote-objects", help="基于校对报告生成人工修复候选动作。")
+    _add_common_subcommand_options(repair_parser)
+    repair_parser.add_argument("account_id", nargs="?", default="", help="账号 ID；省略时使用当前设备已选择账号。")
+    repair_scope_group = repair_parser.add_mutually_exclusive_group(required=True)
+    repair_scope_group.add_argument("--job-id", default="", help="按 job_id 校对并生成修复候选。")
+    repair_scope_group.add_argument("--upload-session-id", default="", help="按 upload_session_id 校对并生成修复候选。")
+    repair_scope_group.add_argument("--remote-dir", default="", help="按远端目录校对并生成修复候选。")
+    repair_parser.add_argument("--non-recursive", action="store_true", help="使用 list 非递归校对；默认使用 listall。")
+    repair_parser.add_argument("--page-limit", type=int, default=1000)
+    repair_parser.add_argument("--max-requests-per-minute", type=int, default=8)
+    repair_parser.add_argument("--show-candidates", type=int, default=50, help="最多输出的修复候选数量。")
+    repair_parser.add_argument(
+        "--repair-action",
+        default="safe-local",
+        choices=("safe-local", "mark_remote_missing", "accept_baidu_metadata"),
+        help="选择可写修复动作；默认 safe-local 包含本地标记缺失和接受百度元数据。",
+    )
+    repair_parser.add_argument("--apply", action="store_true", help="实际写入 SQLite 和 sync_outbox；默认只 dry-run。")
+    repair_parser.add_argument(
+        "--confirm",
+        default="",
+        help=f"实际写入时必须填写 {CONFIRM_REPAIR_TEXT}。",
+    )
+
     args = parser.parse_args(argv)
     try:
         if args.command == "remote-objects":
             return _remote_objects(args)
+        if args.command == "repair-remote-objects":
+            return _repair_remote_objects(args)
     except (CloudAPIError, BaiduNetdiskError, ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
         _print(f"操作失败: {_safe_error_summary(exc)}")
         return 1
@@ -66,11 +100,41 @@ def _add_common_subcommand_options(command_parser: argparse.ArgumentParser) -> N
 
 
 def _remote_objects(args: argparse.Namespace) -> int:
+    report, source, account_id, _credentials, _store = _run_reconcile_from_args(args)
+    _print_report(report, credential_source=source, account_id=account_id, limit=args.show_findings)
+    return 0
+
+
+def _repair_remote_objects(args: argparse.Namespace) -> int:
+    if args.show_candidates < 0:
+        raise ValueError("show_candidates must be >= 0")
+    if args.apply and args.confirm != CONFIRM_REPAIR_TEXT:
+        raise ValueError("repair confirmation is required")
+
+    report, source, account_id, credentials, store = _run_reconcile_from_args(args)
+    plan = build_remote_repair_plan(report, action_filter=action_filter_from_cli(args.repair_action))
+    dry_run = not args.apply
+    result = RemoteObjectRepairer(
+        store=store,
+        updated_by_device_id=credentials.device_id or "environment",
+    ).apply(plan, dry_run=dry_run)
+
+    _print_repair_plan(
+        plan,
+        result,
+        credential_source=source,
+        account_id=account_id,
+        limit=args.show_candidates,
+    )
+    return 0
+
+
+def _run_reconcile_from_args(args: argparse.Namespace):
     if args.page_limit < 1:
         raise ValueError("page_limit must be >= 1")
     if args.max_requests_per_minute < 1:
         raise ValueError("max_requests_per_minute must be >= 1")
-    if args.show_findings < 0:
+    if getattr(args, "show_findings", 0) < 0:
         raise ValueError("show_findings must be >= 0")
 
     password = _read_authorization_password(args.password_env)
@@ -95,9 +159,7 @@ def _remote_objects(args: argparse.Namespace) -> int:
             baidu=baidu,
             rate_limiter=RequestRateLimiter(max_requests_per_minute=args.max_requests_per_minute),
         ).reconcile(scope)
-
-    _print_report(report, credential_source=source, account_id=decrypted.encrypted.account_id, limit=args.show_findings)
-    return 0
+    return report, source, decrypted.encrypted.account_id, credentials, store
 
 
 def _print_report(
@@ -133,6 +195,51 @@ def _print_report(
     if limit < len(report.findings):
         _print(f"finding_omitted_count: {len(report.findings) - limit}")
     _print("远端对象校对完成: read-only report")
+
+
+def _print_repair_plan(
+    plan: RemoteRepairPlan,
+    result: RemoteRepairResult,
+    *,
+    credential_source: str,
+    account_id: str,
+    limit: int,
+) -> None:
+    _print(f"Device Token 来源: {credential_source}")
+    _print(f"account_id_sha256: {_sha256_text(account_id)}")
+    _print(f"scope_type: {plan.report.scope.scope_type}")
+    _print(f"scope_value_sha256: {_sha256_text(plan.report.scope.scope_value)}")
+    _print(f"recursive: {str(plan.report.scope.recursive).lower()}")
+    _print(f"dry_run: {str(result.dry_run).lower()}")
+    _print(f"candidate_count: {result.candidate_count}")
+    _print(f"writable_count: {result.writable_count}")
+    _print(f"selected_count: {result.selected_count}")
+    _print(f"applied_count: {result.applied_count}")
+    for index, candidate in enumerate(plan.candidates[:limit], start=1):
+        _print(f"candidate_{index}_status: {candidate.status}")
+        _print(f"candidate_{index}_action: {candidate.action}")
+        _print(f"candidate_{index}_object_type: {candidate.object_type}")
+        _print(f"candidate_{index}_remote_path_sha256: {_sha256_text(candidate.remote_path)}")
+        _print(f"candidate_{index}_selected: {str(candidate.selected).lower()}")
+        _print(f"candidate_{index}_will_write: {str(candidate.will_write).lower()}")
+        _print(f"candidate_{index}_reason: {candidate.reason}")
+        if candidate.local_remote_object_id:
+            _print(f"candidate_{index}_local_remote_object_id_sha256: {_sha256_text(candidate.local_remote_object_id)}")
+        if "status" in candidate.updates:
+            _print(f"candidate_{index}_update_status: {candidate.updates['status']}")
+        if "size_bytes" in candidate.updates:
+            _print(f"candidate_{index}_update_size_bytes: {candidate.updates['size_bytes']}")
+        if "md5" in candidate.updates:
+            _print(f"candidate_{index}_update_md5: {candidate.updates['md5']}")
+        if "fs_id" in candidate.updates:
+            _print(f"candidate_{index}_update_fs_id: {candidate.updates['fs_id']}")
+    if limit < len(plan.candidates):
+        _print(f"candidate_omitted_count: {len(plan.candidates) - limit}")
+    for index, applied in enumerate(result.applied_records, start=1):
+        _print(f"applied_{index}_remote_object_id_sha256: {_sha256_text(applied.local_remote_object_id)}")
+        _print(f"applied_{index}_action: {applied.action}")
+        _print(f"applied_{index}_data_version: {applied.data_version}")
+    _print("远端对象人工修复入口完成")
 
 
 def _decrypt_selected_token(cloud: BaiduCloudClient, account_id: str, password: str):
@@ -185,6 +292,9 @@ def _safe_error_summary(exc: Exception) -> str:
             "exactly one of job_id, upload_session_id, or remote_dir is required",
             "max_requests_per_minute must be >= 1",
             "page_limit must be >= 1",
+            "repair action is invalid",
+            "repair confirmation is required",
+            "show_candidates must be >= 0",
             "show_findings must be >= 0",
         }
         return message if message in allowed else "invalid_argument"

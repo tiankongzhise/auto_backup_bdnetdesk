@@ -540,6 +540,42 @@ class SQLiteClientStore:
             ).fetchone()
             return dict(row) if row is not None else None
 
+    def repair_remote_object(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        remote_object_id: str,
+        updates: Mapping[str, Any],
+        updated_by_device_id: str,
+        now: str | None = None,
+    ) -> RevisionRecord:
+        allowed_update_fields = {"status", "size_bytes", "md5", "fs_id"}
+        cleaned_updates = {key: value for key, value in updates.items() if key in allowed_update_fields}
+        if set(updates) != set(cleaned_updates):
+            raise ValueError("remote object repair contains unsupported fields")
+        if not cleaned_updates:
+            raise ValueError("remote object repair updates are required")
+
+        row = conn.execute(
+            "SELECT * FROM remote_objects WHERE remote_object_id = ?",
+            (remote_object_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("remote object repair target not found")
+
+        payload = dict(row)
+        payload.update(cleaned_updates)
+        versioned = build_version_fields(
+            entity_payload=payload,
+            updated_by_device_id=updated_by_device_id,
+            data_version=self.next_data_version(conn, "remote_objects", "remote_object_id", remote_object_id),
+            schema_version=int(payload["schema_version"]),
+            now=now,
+            sync_status="sync_pending",
+            deleted_at=payload.get("deleted_at"),
+        )
+        return self.put_remote_object(conn, versioned)
+
 
 def revision_from_payload(
     *,

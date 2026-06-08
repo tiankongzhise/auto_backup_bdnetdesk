@@ -109,6 +109,22 @@ uv run python -m auto_backup_client.baidu.integration_cli --password-env BAIDU_A
 
 也可使用 `--upload-session-id <upload_session_id>` 或 `--remote-dir /apps/{appname}/backups/...` 发起校对。递归 `listall` 默认按每分钟不超过 8 次限速；`--non-recursive` 可切换到单目录 `list`。输出不得包含 Device Token、百度 token、用户密码、本地路径、SQLite 路径、payload 明文或远端真实路径。
 
+## 远端对象人工修复 CLI
+
+`reconcile_cli repair-remote-objects` 会先执行同一套只读校对，再把差异转换为人工修复候选动作。默认只做 dry-run，不写 SQLite、不写 `sync_outbox`、不删除、不覆盖、不重传。只有同时传入 `--apply --confirm APPLY_REMOTE_REPAIR` 时，才会把可证明的本地账本修复写入 `remote_objects` 并同事务进入 `sync_outbox`。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='<repo>\.cache\uv'
+$env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
+
+uv run python -m auto_backup_client.baidu.reconcile_cli --password-env BAIDU_AUTH_PASSWORD repair-remote-objects --job-id <job_id>
+uv run python -m auto_backup_client.baidu.reconcile_cli --password-env BAIDU_AUTH_PASSWORD repair-remote-objects --job-id <job_id> --apply --confirm APPLY_REMOTE_REPAIR
+```
+
+第一版人工修复入口只支持两类本地可审计修复：远端缺失类差异标记为 `remote_missing`，以及接受百度 `list/listall` 可证明的 size、md5、fs_id 元数据。`baidu_only`、`remote_unreadable` 和需要删除、覆盖、重传、下载读取内容的情况只输出人工处理建议。
+
 ## Cloud Sync outbox 联调 CLI
 
 `sync-outbox` 会读取 `LOCAL_SQLITE_PATH` 或 `--sqlite-path`，执行 SQLite 迁移，复用运行时 `CLOUD_API_DEVICE_TOKEN` 或本机 DPAPI Device Token 凭据，然后调用真实云端 `POST /v1/sync/revisions`。输出只包含 `selected`、`sent`、`synced`、`conflicts`、`rejected`、`retryable` 和可选云端摘要校验计数，不输出 Device Token、payload、本地路径、SQLite 路径、百度 token、用户密码或 wrapping key。

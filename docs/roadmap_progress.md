@@ -10,20 +10,19 @@
 
 ## 当前工作项
 
-- 插入 P0 真实 keep-remote 校对联调阻塞修复：2026-06-08 真实 `integration_cli run-resumable --keep-remote -> reconcile_cli remote-objects -> cleanup-resumable` 已验证上传、同步和清理链路可用，但发现 `.meta.json` 与 `job.index.json` 在本地 `remote_objects.md5` 中记录的是本地字节 MD5，而百度 `list/listall` 返回的是远端对象 md5，导致两个辅助 JSON 对象被误判为 `remote_meta_mismatch`。
-- 本轮计划修改范围：只修改客户端上传账本写入和对应单元测试，让 archive、`.meta.json`、`job.index.json` 三类 `remote_objects.md5` 统一保存百度 create/list 可对齐的远端 md5；本地内容完整性继续由 `sha256` 字段保存。不修改 SQLite schema、Go 云端服务、PostgreSQL 迁移或百度删除/下载接口。
-- 已完成 P0 远端对象校对 worker 第一阶段：客户端本地只读校对模块和脱敏 CLI 报告，读取本地 `remote_objects`/`upload_sessions` 并调用百度 `list/listall` 生成差异清单。
-- 本轮实现继续保持只读边界：不自动删除、覆盖、重传或写入校对结果；不修改 Go 服务端、不新增 PostgreSQL 迁移、不新增百度下载接口。
-- 校对状态已覆盖 `consistent`、`db_exists_remote_missing`、`remote_meta_missing`、`remote_meta_mismatch`、`remote_size_mismatch`、`fs_id_changed`、`baidu_only` 和 `remote_unreadable`。
-- 下一步回到 P0 远端对象校对与人工修复的后半段：基于只读报告设计人工确认/修复入口；真实 keep-remote 校对联调需在运行时凭据和授权密码可用时执行并清理远端对象。
+- P0 阶段 4 远端对象校对与人工修复开发完成；下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型。
+- 本轮已完成人工确认/修复入口最小闭环：P0 阶段 4 只读校对 worker、脱敏 CLI、真实 keep-remote 校对复验、辅助 JSON 远端 md5 口径修复和 CLI 级人工修复入口均已完成。
+- 本轮完成范围：新增客户端 CLI 级人工修复入口，把现有 `RemoteReconcileReport` 的差异状态映射为可审计候选动作；默认 dry-run，只输出脱敏候选动作；只有显式确认后才允许写入本地 SQLite 版本字段并同事务写入 `sync_outbox`。本轮未做完整 PySide6 校对 UI、未新增 PostgreSQL 迁移、未新增 Go 云端接口。
+- 本轮实现边界：支持对已有本地 `remote_objects` 的受控修复，包括将远端缺失类差异标记为 `remote_missing`，以及在用户确认后用百度 `list/listall` 可证明的 size、md5、fs_id 更新本地远端对象记录；`consistent` 不允许修复，`baidu_only`、`remote_unreadable` 和需要重传/下载/删除的动作只给出人工处理建议，不自动执行。
+- 下一阶段开始前必须把“本次开发阶段：P1 阶段 5 备份任务主 UI 与任务模型”写入当前工作项，并同步计划修改范围和验收标准。
 
 ## 本次验收标准
 
-- 单元测试必须覆盖全部差异状态、分页、`listall` 限速、不可读目录、百度侧额外对象、缺失 `.meta.json`、size/md5/fs_id 不一致。
-- CLI 测试必须覆盖 scope 参数互斥、脱敏输出、安全错误摘要，并确认不泄露 Device Token、百度 token、用户密码、SQLite 路径、本地路径、payload 明文或远端真实路径。
-- 递归 `listall` 校对必须按产品规格默认每分钟不超过 8 次，并通过可注入 sleeper/rate limiter 测试。
-- 客户端测试、`compileall` 和仓库根目录 `git diff --check` 必须通过；真实验证若使用 `integration_cli run-resumable --keep-remote` 保留远端对象，校对后必须再用 `cleanup-resumable` 清理。
-- 本次 md5 口径修复完成后，必须重新执行真实 `integration_cli run-resumable --keep-remote -> reconcile_cli remote-objects -> cleanup-resumable`；验收结果应为本批 `local_object_count=3`、`remote_object_count=3`、`status_consistent=3`、`status_remote_meta_mismatch=0`，且清理 `cleanup_delete_errno=0`。
+- 单元测试必须覆盖 `consistent` 不允许修复，`db_exists_remote_missing`、`remote_meta_missing`、`fs_id_changed`、`remote_size_mismatch`、`remote_meta_mismatch` 能生成正确候选动作。
+- dry-run 必须不写 SQLite、不写 `sync_outbox`、不调用百度删除/上传；confirmed 模式才允许写入本地版本记录并进入 `sync_outbox`。
+- CLI 测试必须覆盖必须提供 scope、默认 dry-run、写入必须显式确认、脱敏输出和安全错误摘要，并确认不泄露 Device Token、百度 token、用户密码、SQLite 路径、本地路径、payload 明文或远端真实路径。
+- 客户端测试 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-reconcile-repair`、`uv run python -m compileall src tests` 和仓库根目录 `git diff --check` 必须通过。
+- 本轮不要求真实执行删除、覆盖、重传或下载；如使用真实 keep-remote 联调生成差异验证，校对后必须继续用 `cleanup-resumable` 清理远端对象。
 
 ## 开发排期
 
@@ -34,8 +33,8 @@
 | P0 | 0-1 项目底座 | 仓库初始化、产品规格、Python 客户端骨架、配置加载、日志脱敏、uv 依赖 | 已完成 | 只做维护；入口 README 需保持与真实进度一致 |
 | P0 | 2 本地/云端同步底座 | SQLite 迁移、版本字段、`sync_outbox`、Go Cloud Sync、PostgreSQL revision 投影、设备认证 | 基本完成 | 后续业务表接入时必须同事务写 outbox，并用真实云端 summary 校验 |
 | P0 | 3 百度授权与上传底座 | OAuth/扫码授权、DPAPI Device Token、KDF store、token 解密、刷新租约、容量、预上传、分片、create、删除清理 | 基本完成 | 保持真实百度 API 验收；补上传失败重试 UI 和 token refresh 自动接入 |
-| P0 | 4 远端对象校对与人工修复 | 百度 `list/listall`、本地 `remote_objects` 对账、差异状态、只读报告、人工修复入口 | 只读 worker/脱敏 CLI 已完成；人工修复 UI 未开始 | 后续基于报告设计人工确认与修复入口；任何删除、覆盖或重传必须用户确认并写版本记录 |
-| P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 未开始 | PySide6 主窗口可创建任务并持久化，状态不遮挡、不泄密 |
+| P0 | 4 远端对象校对与人工修复 | 百度 `list/listall`、本地 `remote_objects` 对账、差异状态、只读报告、人工修复入口 | 已完成；P0 阶段 4 远端对象校对与人工修复开发完成 | 下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型 |
+| P1 | 5 备份任务主 UI 与任务模型 | 任务页、拖拽/选择源、暂停继续取消、状态机、任务持久化 | 下一阶段待开始 | PySide6 主窗口可创建任务并持久化，状态不遮挡、不泄密 |
 | P1 | 6 扫描与内容指纹 | 递归扫描、不可读记录、快速指纹、完整 MD5/SHA256、文件夹 manifest hash | 未开始 | 单元测试覆盖路径无关指纹、symlink/junction 默认跳过、不可读不中断 |
 | P1 | 7 去重索引与来源引用 | 本地内容对象、归档对象、来源映射、云端去重候选查询 | 未开始 | 最终去重只按完整 SHA256+size；路径/时间/设备不进入内容指纹 |
 | P1 | 8 7-Zip 加密归档与 manifest | 明文 manifest 临时生成、7-Zip AES-256、archive 分包、标准/严格验证、验证后删除明文 manifest | 未开始 | 真实 7-Zip test、manifest hash 校验、明文 manifest 生命周期测试通过 |
@@ -77,6 +76,29 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P0 阶段 4 远端对象校对与人工修复入口
+
+- P0 阶段 4 远端对象校对与人工修复开发完成；下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型。
+- 在 `AGENTS.MD` 新增“开发阶段接力规则”：每次开发开始必须写明本次开发阶段，完成后必须写明当前阶段开发完成和下一个开发阶段；临时 fix 也必须写明挂靠阶段、是否改变主排期和回到哪个阶段。
+- 新增 `client/src/auto_backup_client/baidu/reconcile_repair.py`，把只读 `RemoteReconcileReport` 转换为人工修复候选动作；`consistent` 不允许修复，远端缺失类差异可标记 `remote_missing`，size/md5/fs_id 差异可选择接受百度 `list/listall` 元数据，`baidu_only` 与 `remote_unreadable` 只输出人工处理建议。
+- 扩展 `client/src/auto_backup_client/baidu/reconcile_cli.py`，新增 `repair-remote-objects` 子命令。默认 dry-run，只输出脱敏候选动作；只有同时传入 `--apply --confirm APPLY_REMOTE_REPAIR` 时才写入。
+- 扩展 `SQLiteClientStore.repair_remote_object(...)`，只允许更新 `remote_objects` 的 `status`、`size_bytes`、`md5`、`fs_id`，并复用 `build_version_fields -> put_remote_object -> sync_outbox`，保证业务表和 outbox 同一事务写入。
+- 更新 `client/README.md`，记录人工修复 CLI 的 dry-run、显式确认、可写动作边界和不自动删除/覆盖/重传约束。
+- 新增 `client/tests/test_baidu_reconcile_repair.py`，覆盖全部核心候选动作映射、dry-run 不写库、不写额外 outbox，以及 confirmed 模式写版本字段并入队 outbox。
+- 扩展 `client/tests/test_baidu_reconcile_cli.py`，覆盖 `repair-remote-objects` 默认 dry-run、`--apply` 缺少确认时报错脱敏、显式确认后写入版本和 outbox，且输出不泄露 Device Token、百度 token、用户密码、SQLite 路径或远端真实路径。
+- 已验证客户端定向测试 `tests/test_baidu_reconcile_repair.py tests/test_baidu_reconcile_cli.py` 通过，10 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-reconcile-repair` 通过，77 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交完成 P0 阶段 4 远端对象校对与人工修复入口，新增默认 dry-run 的 `repair-remote-objects` CLI 和受控 `remote_objects` 版本化修复写入路径；只有显式确认后才会把可证明的本地账本修复写入 SQLite 并进入 `sync_outbox`，需要删除、覆盖、重传、下载读取内容或完整 UI 的情况继续留到人工处理或后续 P2 校对 UI。
+
+后续待办：
+
+- 下一个开发阶段为 P1 阶段 5 备份任务主 UI 与任务模型；下一轮开始前必须在当前工作项写明“本次开发阶段：P1 阶段 5 备份任务主 UI 与任务模型”。
+- P2 阶段 11 再实现完整来源映射和校对 UI，把本轮 CLI 候选动作接入可视化人工确认流程。
+- 若后续需要对 `baidu_only` 对象进行导入或对不一致对象执行重传/下载/删除，必须另行实现受控动作，并继续保持显式确认、版本记录和 `sync_outbox` 同步。
 
 ### 辅助 JSON 远端 md5 口径修复与真实校对复验
 

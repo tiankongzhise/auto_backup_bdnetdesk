@@ -60,7 +60,7 @@ class FakeBaiduNetdiskClient:
         assert start == 0
         return BaiduFileListResult(
             errno=0,
-            items=(BaiduFileItem(fs_id=101, path=REMOTE_PATH, server_filename="archive.7z", isdir=False, size=10, md5="b" * 32),),
+            items=(BaiduFileItem(fs_id=202, path=REMOTE_PATH, server_filename="archive.7z", isdir=False, size=12, md5="c" * 32),),
         )
 
 
@@ -88,9 +88,9 @@ def test_reconcile_cli_outputs_redacted_report(tmp_path, capsys, monkeypatch) ->
 
     output = capsys.readouterr().out
 
-    assert "status_consistent: 1" in output
+    assert "status_remote_size_mismatch: 1" in output
     assert "finding_1_remote_path_sha256:" in output
-    assert "finding_1_size: 10->10" in output
+    assert "finding_1_size: 10->12" in output
     assert "远端对象校对完成: read-only report" in output
     assert "secret-device-token" not in output
     assert "secret-access-token" not in output
@@ -99,6 +99,124 @@ def test_reconcile_cli_outputs_redacted_report(tmp_path, capsys, monkeypatch) ->
     assert "sensitive-state.sqlite3" not in output
     assert REMOTE_PATH not in output
     assert "job-secret/archives" not in output
+
+
+def test_repair_cli_defaults_to_dry_run_without_writing(tmp_path, capsys, monkeypatch) -> None:
+    db_path = tmp_path / "sensitive-state.sqlite3"
+    store = SQLiteClientStore(db_path)
+    store.migrate()
+    _insert_remote_object(store, remote_path=REMOTE_PATH)
+    _install_common_fakes(tmp_path, monkeypatch)
+
+    assert (
+        main(
+            [
+                "--sqlite-path",
+                str(db_path),
+                "--password-env",
+                "BAIDU_AUTH_PASSWORD",
+                "repair-remote-objects",
+                "--job-id",
+                "job-secret",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    with store.connect() as conn:
+        remote = conn.execute("SELECT size_bytes, md5, fs_id, data_version FROM remote_objects").fetchone()
+        outbox_count = conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0]
+
+    assert "dry_run: true" in output
+    assert "candidate_1_action: accept_baidu_metadata" in output
+    assert "selected_count: 1" in output
+    assert "applied_count: 0" in output
+    assert remote["size_bytes"] == 10
+    assert remote["md5"] == "b" * 32
+    assert remote["fs_id"] == 101
+    assert remote["data_version"] == 1
+    assert outbox_count == 1
+    assert "secret-device-token" not in output
+    assert "secret-access-token" not in output
+    assert "runtime-password-secret" not in output
+    assert str(db_path) not in output
+    assert REMOTE_PATH not in output
+
+
+def test_repair_cli_requires_confirmation_before_apply(tmp_path, capsys, monkeypatch) -> None:
+    db_path = tmp_path / "sensitive-state.sqlite3"
+    store = SQLiteClientStore(db_path)
+    store.migrate()
+    _insert_remote_object(store, remote_path=REMOTE_PATH)
+    _install_common_fakes(tmp_path, monkeypatch)
+
+    assert (
+        main(
+            [
+                "--sqlite-path",
+                str(db_path),
+                "--password-env",
+                "BAIDU_AUTH_PASSWORD",
+                "repair-remote-objects",
+                "--job-id",
+                "job-secret",
+                "--apply",
+            ]
+        )
+        == 1
+    )
+    output = capsys.readouterr().out
+
+    assert "repair confirmation is required" in output
+    assert str(db_path) not in output
+    assert "runtime-password-secret" not in output
+
+
+def test_repair_cli_confirmed_apply_writes_version_and_outbox(tmp_path, capsys, monkeypatch) -> None:
+    db_path = tmp_path / "sensitive-state.sqlite3"
+    store = SQLiteClientStore(db_path)
+    store.migrate()
+    _insert_remote_object(store, remote_path=REMOTE_PATH)
+    _install_common_fakes(tmp_path, monkeypatch)
+
+    assert (
+        main(
+            [
+                "--sqlite-path",
+                str(db_path),
+                "--password-env",
+                "BAIDU_AUTH_PASSWORD",
+                "repair-remote-objects",
+                "--job-id",
+                "job-secret",
+                "--apply",
+                "--confirm",
+                "APPLY_REMOTE_REPAIR",
+            ]
+        )
+        == 0
+    )
+
+    output = capsys.readouterr().out
+    with store.connect() as conn:
+        remote = conn.execute("SELECT size_bytes, md5, fs_id, data_version, updated_by_device_id, revision_id FROM remote_objects").fetchone()
+        outbox = conn.execute("SELECT revision_id, status, payload_json FROM sync_outbox ORDER BY created_at, rowid").fetchall()
+
+    assert "dry_run: false" in output
+    assert "applied_count: 1" in output
+    assert "applied_1_remote_object_id_sha256:" in output
+    assert remote["size_bytes"] == 12
+    assert remote["md5"] == "c" * 32
+    assert remote["fs_id"] == 202
+    assert remote["data_version"] == 2
+    assert remote["updated_by_device_id"] == "device-secret"
+    assert len(outbox) == 2
+    assert outbox[-1]["revision_id"] == remote["revision_id"]
+    assert outbox[-1]["status"] == "pending"
+    assert '"size_bytes":12' in outbox[-1]["payload_json"]
+    assert str(db_path) not in output
+    assert REMOTE_PATH not in output
 
 
 def test_reconcile_cli_scope_errors_are_safe(tmp_path, capsys, monkeypatch) -> None:
