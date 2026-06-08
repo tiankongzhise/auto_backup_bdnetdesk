@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -263,6 +264,38 @@ def test_resumable_upload_empty_block_list_uploads_no_parts(tmp_path) -> None:
 
     assert part["status"] == "confirmed"
     assert part["attempt_count"] == 0
+
+
+def test_resumable_upload_records_baidu_md5_for_metadata_objects(tmp_path) -> None:
+    archive = tmp_path / "archive.7z"
+    archive.write_bytes(b"payload")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+
+    result = BaiduResumableUploader(store=store, baidu=FakeBaiduClient(), updated_by_device_id="device-1").upload(
+        ResumableArchiveInput(
+            local_path=archive,
+            job_id="job-1",
+            device_id="device-1",
+            account_id="account-1",
+            job_created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        )
+    )
+
+    with store.connect() as conn:
+        rows = {
+            row["object_type"]: row
+            for row in conn.execute(
+                "SELECT object_type, md5, sha256 FROM remote_objects WHERE object_type IN ('archive_meta', 'job_index')",
+            ).fetchall()
+        }
+
+    assert rows["archive_meta"]["md5"] == result.meta_created.md5
+    assert rows["job_index"]["md5"] == result.job_index_created.md5
+    assert rows["archive_meta"]["sha256"] == result.archive_meta.sha256
+    assert rows["job_index"]["sha256"] == result.job_index.sha256
+    assert rows["archive_meta"]["md5"] != hashlib.md5(result.archive_meta.bytes).hexdigest()
+    assert rows["job_index"]["md5"] != hashlib.md5(result.job_index.bytes).hexdigest()
 
 
 def test_resumable_upload_completed_session_returns_local_state_without_reupload(tmp_path) -> None:

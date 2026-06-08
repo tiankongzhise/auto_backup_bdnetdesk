@@ -10,6 +10,8 @@
 
 ## 当前工作项
 
+- 插入 P0 真实 keep-remote 校对联调阻塞修复：2026-06-08 真实 `integration_cli run-resumable --keep-remote -> reconcile_cli remote-objects -> cleanup-resumable` 已验证上传、同步和清理链路可用，但发现 `.meta.json` 与 `job.index.json` 在本地 `remote_objects.md5` 中记录的是本地字节 MD5，而百度 `list/listall` 返回的是远端对象 md5，导致两个辅助 JSON 对象被误判为 `remote_meta_mismatch`。
+- 本轮计划修改范围：只修改客户端上传账本写入和对应单元测试，让 archive、`.meta.json`、`job.index.json` 三类 `remote_objects.md5` 统一保存百度 create/list 可对齐的远端 md5；本地内容完整性继续由 `sha256` 字段保存。不修改 SQLite schema、Go 云端服务、PostgreSQL 迁移或百度删除/下载接口。
 - 已完成 P0 远端对象校对 worker 第一阶段：客户端本地只读校对模块和脱敏 CLI 报告，读取本地 `remote_objects`/`upload_sessions` 并调用百度 `list/listall` 生成差异清单。
 - 本轮实现继续保持只读边界：不自动删除、覆盖、重传或写入校对结果；不修改 Go 服务端、不新增 PostgreSQL 迁移、不新增百度下载接口。
 - 校对状态已覆盖 `consistent`、`db_exists_remote_missing`、`remote_meta_missing`、`remote_meta_mismatch`、`remote_size_mismatch`、`fs_id_changed`、`baidu_only` 和 `remote_unreadable`。
@@ -21,6 +23,7 @@
 - CLI 测试必须覆盖 scope 参数互斥、脱敏输出、安全错误摘要，并确认不泄露 Device Token、百度 token、用户密码、SQLite 路径、本地路径、payload 明文或远端真实路径。
 - 递归 `listall` 校对必须按产品规格默认每分钟不超过 8 次，并通过可注入 sleeper/rate limiter 测试。
 - 客户端测试、`compileall` 和仓库根目录 `git diff --check` 必须通过；真实验证若使用 `integration_cli run-resumable --keep-remote` 保留远端对象，校对后必须再用 `cleanup-resumable` 清理。
+- 本次 md5 口径修复完成后，必须重新执行真实 `integration_cli run-resumable --keep-remote -> reconcile_cli remote-objects -> cleanup-resumable`；验收结果应为本批 `local_object_count=3`、`remote_object_count=3`、`status_consistent=3`、`status_remote_meta_mismatch=0`，且清理 `cleanup_delete_errno=0`。
 
 ## 开发排期
 
@@ -53,6 +56,16 @@
 
 ## 排期变更记录
 
+### 2026-06-08：辅助 JSON 远端 md5 口径误报修复
+
+变更原因：真实 keep-remote 校对联调发现 archive 本体一致，但 `.meta.json` 与 `job.index.json` 被报告为 `remote_meta_mismatch`；核对代码后确认本地账本对辅助 JSON 保存的是本地字节 MD5，而校对比较的是百度 `list/listall` 返回的远端对象 md5，属于口径不一致导致的误报。
+
+影响阶段：仍属于 P0 远端对象校对与上传底座联调阻塞修复，不改变既定 P0/P1 顺序；修复后回到人工确认/修复入口设计。
+
+验收标准：上传账本写入单元测试覆盖辅助 JSON 使用百度 create 返回 md5，同时保留本地 `sha256` 内容校验；客户端定向/全量测试、`compileall` 和 `git diff --check` 通过；真实 keep-remote 校对本批 3 个远端对象全部 `consistent`，随后用 `cleanup-resumable` 清理且删除 errno 为 0。
+
+回到主排期条件：本次修复提交并完成真实清理后，继续 P0 远端对象校对与人工修复入口设计。
+
 ### 2026-06-07：进度审计与排期治理约束
 
 变更原因：用户要求审计项目进度，确定离完整完成开发计划和发布还差多少，核对项目进度文件与实际进度差异，并要求后续开发遵循排期。
@@ -64,6 +77,26 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### 辅助 JSON 远端 md5 口径修复与真实校对复验
+
+- 已执行真实 `integration_cli run-resumable --keep-remote` 初次校对联调，确认上传 archive、`.meta.json`、`job.index.json` 成功，Cloud Sync 推送 `sync_selected=10`、`sync_sent=10`、`sync_synced=10`、`sync_conflicts=0`、`sync_rejected=0`、`sync_retryable=0`，云端摘要校验 `cloud_summary_verified=10`，并在校对后用 `cleanup-resumable` 清理 3 个远端对象且 `cleanup_delete_errno=0`。
+- 初次校对发现 archive 本体 `consistent`，但 `.meta.json` 与 `job.index.json` 因 `remote_objects.md5` 记录口径与百度 `list/listall` 返回口径不一致被误判为 `remote_meta_mismatch`；两个辅助 JSON 对象 size 和 fs_id 均一致。
+- 修复 `BaiduResumableUploader._write_remote_objects(...)`，对 archive、`.meta.json`、`job.index.json` 三类对象统一把 `remote_objects.md5` 记录为百度 create 返回的远端 md5；若百度未返回 md5，辅助 JSON 才回退本地字节 MD5。本地内容完整性继续保留在 `sha256` 字段，不新增 SQLite schema。
+- 新增 `test_resumable_upload_records_baidu_md5_for_metadata_objects`，覆盖辅助 JSON 账本记录百度远端 md5，同时保留本地稳定 JSON SHA256。
+- 已验证客户端定向测试 `tests/test_baidu_resumable_upload.py tests/test_baidu_reconcile.py` 通过，11 个测试通过。
+- 已验证客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-all-md5` 通过，70 个测试通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+- 已重新执行真实 `integration_cli run-resumable --keep-remote -> reconcile_cli remote-objects -> cleanup-resumable`：本批 `local_object_count=3`、`remote_object_count=3`、`status_consistent=3`、`status_remote_meta_mismatch=0`，Cloud Sync 仍为 `sync_synced=10` 且无 conflict/rejected/retryable，清理 3 个远端对象 `cleanup_delete_errno=0`。
+
+提交摘要：本次提交修复辅助 JSON 远端 md5 记录口径，使 `.meta.json` 和 `job.index.json` 的本地 `remote_objects.md5` 与百度 `list/listall` 可比较字段一致，消除真实 keep-remote 校对中的误报；真实上传、同步、只读校对和远端清理链路已复验通过。
+
+后续待办：
+
+- 回到 P0 远端对象校对与人工修复入口设计，把只读报告中的建议动作映射到用户可确认的修复流程。
+- 后续若需要校对辅助 JSON 内容语义，应新增受控下载/读取或在 `.meta.json` 中保存可比较内容哈希，不得继续混用百度远端 md5 和本地字节 MD5。
+- 继续保持真实联调输出脱敏，并在每次 keep-remote 联调后立即执行 `cleanup-resumable`。
 
 ### 远端对象校对 worker 与脱敏 CLI
 

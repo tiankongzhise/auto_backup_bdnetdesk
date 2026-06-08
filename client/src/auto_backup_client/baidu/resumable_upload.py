@@ -282,9 +282,11 @@ class BaiduResumableUploader:
             archive_fs_id=created.fs_id,
             meta_path=remote_meta_path,
             meta_document=archive_meta,
+            meta_md5=meta_created.md5,
             meta_fs_id=meta_created.fs_id,
             job_index_path=remote_job_index_path,
             job_index=job_index,
+            job_index_md5=job_index_created.md5,
             job_index_fs_id=job_index_created.fs_id,
         )
         return ResumableUploadResult(
@@ -534,9 +536,11 @@ class BaiduResumableUploader:
         archive_fs_id: int,
         meta_path: str,
         meta_document: StableJsonDocument,
+        meta_md5: str,
         meta_fs_id: int,
         job_index_path: str,
         job_index: StableJsonDocument,
+        job_index_md5: str,
         job_index_fs_id: int,
     ) -> None:
         with self._store.transaction() as conn:
@@ -561,7 +565,7 @@ class BaiduResumableUploader:
                     archive_sha256=archive_sha256,
                     remote_path=meta_path,
                     size_bytes=len(meta_document.bytes),
-                    md5=hashlib.md5(meta_document.bytes).hexdigest(),
+                    md5=meta_md5 or hashlib.md5(meta_document.bytes).hexdigest(),
                     sha256=meta_document.sha256,
                     fs_id=meta_fs_id,
                 ),
@@ -573,7 +577,7 @@ class BaiduResumableUploader:
                     archive_sha256="",
                     remote_path=job_index_path,
                     size_bytes=len(job_index.bytes),
-                    md5=hashlib.md5(job_index.bytes).hexdigest(),
+                    md5=job_index_md5 or hashlib.md5(job_index.bytes).hexdigest(),
                     sha256=job_index.sha256,
                     fs_id=job_index_fs_id,
                 ),
