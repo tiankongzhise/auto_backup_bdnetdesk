@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar
 
-from PySide6.QtCore import QMimeData, Qt, Signal, Slot
+from PySide6.QtCore import QMimeData, QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -49,6 +51,7 @@ from auto_backup_client.backup_jobs import (
     BackupSourceType,
     status_label,
 )
+from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineError, BackupPipelineOptions, BackupPipelineResult
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.source_mapping import SourceMappingQuery, SourceMappingReport, path_digest, short_digest
@@ -56,6 +59,9 @@ from auto_backup_client.source_cleanup import CLEANUP_CONFIRM_TEXT, PERMANENT_DE
 from auto_backup_client.restore_flow import BaiduArchiveDownloader, RestoreService
 from auto_backup_client.sqlite_store import SQLiteClientStore
 from auto_backup_client.ui.baidu_settings import BaiduSettingsPage, BaiduSettingsPageConfig
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -74,12 +80,55 @@ class PendingSource:
     source_type: BackupSourceType
 
 
+@dataclass(frozen=True)
+class BackupTaskPageConfig:
+    cloud_api_base_url: str = ""
+    device_token: str = ""
+    device_id: str = ""
+    cache_root: str = ""
+    sync_batch_size: int = 100
+    max_sync_batches: int = 20
+
+
+class TaskSignals(QObject, Generic[T]):
+    succeeded = Signal(object)
+    failed = Signal(str)
+    finished = Signal()
+
+
+class TaskWorker(QRunnable, Generic[T]):
+    def __init__(self, task: Callable[[], T]) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self._task = task
+        self.signals: TaskSignals[T] = TaskSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.signals.succeeded.emit(self._task())
+        except Exception as exc:
+            self.signals.failed.emit(_safe_ui_error(exc))
+        finally:
+            self.signals.finished.emit()
+
+
 class BackupTaskPage(QWidget):
     status_changed = Signal(str)
+    backup_finished = Signal(str)
 
-    def __init__(self, manager: BackupJobManager, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        manager: BackupJobManager,
+        config: BackupTaskPageConfig | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._manager = manager
+        self._config = config or BackupTaskPageConfig(device_id=manager.device_id)
+        self._thread_pool = QThreadPool.globalInstance()
+        self._workers: list[TaskWorker[object]] = []
+        self._running_job_id = ""
         self._pending_sources: list[PendingSource] = []
         self._jobs: list[BackupJobWithSources] = []
         self.setAcceptDrops(True)
@@ -157,15 +206,29 @@ class BackupTaskPage(QWidget):
         group = QGroupBox("任务列表")
         layout = QVBoxLayout(group)
 
+        run_form = QFormLayout()
+        self.archive_password_input = QLineEdit()
+        self.archive_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.archive_password_input.setPlaceholderText("运行时输入，不保存")
+        run_form.addRow("归档密码", self.archive_password_input)
+        self.authorization_password_input = QLineEdit()
+        self.authorization_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.authorization_password_input.setPlaceholderText("留空则复用归档密码")
+        run_form.addRow("授权密码", self.authorization_password_input)
+        self.cache_budget_checkbox = QCheckBox("执行前检查 40GiB 缓存预算")
+        self.cache_budget_checkbox.setChecked(True)
+        run_form.addRow("", self.cache_budget_checkbox)
+        layout.addLayout(run_form)
+
         toolbar = QHBoxLayout()
         self.refresh_jobs_button = QPushButton("刷新")
         self.refresh_jobs_button.clicked.connect(self.refresh_jobs)
         self.start_button = QPushButton("开始")
-        self.start_button.clicked.connect(lambda: self.transition_selected_job("running"))
+        self.start_button.clicked.connect(self.start_selected_job)
         self.pause_button = QPushButton("暂停")
         self.pause_button.clicked.connect(lambda: self.transition_selected_job("paused"))
         self.resume_button = QPushButton("继续")
-        self.resume_button.clicked.connect(lambda: self.transition_selected_job("running"))
+        self.resume_button.clicked.connect(self.start_selected_job)
         self.cancel_button = QPushButton("取消")
         self.cancel_button.clicked.connect(lambda: self.transition_selected_job("canceled"))
         toolbar.addWidget(self.refresh_jobs_button)
@@ -271,7 +334,110 @@ class BackupTaskPage(QWidget):
         self._refresh_job_buttons()
 
     @Slot()
+    def start_selected_job(self) -> None:
+        job_id = self._selected_job_id()
+        if not job_id:
+            self._warn("请先选择一个任务。")
+            return
+        if self._running_job_id:
+            self._warn("已有备份任务正在执行。")
+            return
+        archive_password = self.archive_password_input.text()
+        authorization_password = self.authorization_password_input.text() or archive_password
+        if not archive_password:
+            self._warn("请输入归档密码。")
+            return
+        if not self._config.cloud_api_base_url or not self._config.device_token or not self._config.cache_root:
+            self._warn("缺少云端连接、设备凭据或缓存目录配置。")
+            return
+        enforce_cache_budget = self.cache_budget_checkbox.isChecked()
+        self.archive_password_input.clear()
+        self.authorization_password_input.clear()
+        self._running_job_id = job_id
+        self._refresh_job_buttons()
+        self.status_changed.emit("备份已开始：扫描、压缩、上传、同步和远端校对将在后台执行。")
+        worker: TaskWorker[BackupPipelineResult] = TaskWorker(
+            lambda: self._run_backup_pipeline(
+                job_id,
+                archive_password=archive_password,
+                authorization_password=authorization_password,
+                enforce_cache_budget=enforce_cache_budget,
+            )
+        )
+        worker.signals.succeeded.connect(self._handle_pipeline_succeeded)
+        worker.signals.failed.connect(self._handle_pipeline_failed)
+        worker.signals.finished.connect(lambda: self._pipeline_worker_finished(worker))
+        self._workers.append(worker)  # keep QRunnable and signal objects alive.
+        self._thread_pool.start(worker)
+
+    def _run_backup_pipeline(
+        self,
+        backup_job_id: str,
+        *,
+        archive_password: str,
+        authorization_password: str,
+        enforce_cache_budget: bool,
+    ) -> BackupPipelineResult:
+        with BaiduCloudClient(self._config.cloud_api_base_url, self._config.device_token, timeout=30.0) as cloud:
+            workflow = BaiduAuthWorkflow(cloud)
+            account_id = _selected_account_id_for_ui(workflow)
+            decrypted = workflow.decrypt_password_token(account_id, authorization_password=authorization_password)
+            actual_account_id = decrypted.encrypted.account_id or account_id
+            with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
+                return BackupPipeline(
+                    store=self._manager.store,
+                    device_id=self._config.device_id or self._manager.device_id,
+                    baidu_client=baidu,
+                    cloud_client=cloud,
+                ).run_job(
+                    backup_job_id,
+                    BackupPipelineOptions(
+                        cache_root=self._config.cache_root,
+                        password=archive_password,
+                        account_id=actual_account_id,
+                        run_upload=True,
+                        sync_outbox=True,
+                        reconcile_remote=True,
+                        mark_completed=True,
+                        sync_batch_size=self._config.sync_batch_size,
+                        max_sync_batches=self._config.max_sync_batches,
+                        enforce_cache_budget=enforce_cache_budget,
+                    ),
+                )
+
+    @Slot(object)
+    def _handle_pipeline_succeeded(self, result: object) -> None:
+        if not isinstance(result, BackupPipelineResult):
+            self.status_changed.emit("备份完成，但返回结果无法识别。")
+            return
+        self.refresh_jobs()
+        self._select_job(result.backup_job_id)
+        status = "已完成" if result.completed else f"停在阶段 {result.final_stage}"
+        uploaded_parts = len(result.upload.uploaded_partseqs) if result.upload is not None else 0
+        self.status_changed.emit(
+            f"备份{status}：文件 {result.scan.file_count}，归档 {result.archive.archive_seq}，上传分片 {uploaded_parts}。"
+        )
+        self.backup_finished.emit(result.backup_job_id)
+
+    @Slot(str)
+    def _handle_pipeline_failed(self, message: str) -> None:
+        selected_job_id = self._running_job_id
+        self.refresh_jobs()
+        if selected_job_id:
+            self._select_job(selected_job_id)
+        self._warn(f"备份失败：{message}")
+
+    def _pipeline_worker_finished(self, worker: TaskWorker[object]) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+        self._running_job_id = ""
+        self._refresh_job_buttons()
+
+    @Slot()
     def transition_selected_job(self, status: str) -> None:
+        if self._running_job_id:
+            self._warn("备份执行中，暂不支持从 UI 暂停或取消后台任务。")
+            return
         job_id = self._selected_job_id()
         if not job_id:
             self._warn("请先选择一个任务。")
@@ -314,10 +480,11 @@ class BackupTaskPage(QWidget):
         row = self.jobs_table.currentRow()
         selected = 0 <= row < len(self._jobs)
         status = self._jobs[row].job.status if selected else ""
-        self.start_button.setEnabled(selected and status in {"queued", "failed_retryable"})
-        self.pause_button.setEnabled(selected and status == "running")
-        self.resume_button.setEnabled(selected and status == "paused")
-        self.cancel_button.setEnabled(selected and status in {"queued", "running", "paused", "failed_retryable"})
+        running = bool(self._running_job_id)
+        self.start_button.setEnabled(not running and selected and status in {"queued", "running", "failed_retryable"})
+        self.pause_button.setEnabled(not running and selected and status == "running")
+        self.resume_button.setEnabled(not running and selected and status == "paused")
+        self.cancel_button.setEnabled(not running and selected and status in {"queued", "running", "paused", "failed_retryable"})
 
     def _warn(self, message: str) -> None:
         self.status_changed.emit(message)
@@ -969,7 +1136,15 @@ class MainWindow(QMainWindow):
         self._config = config
         self._store = SQLiteClientStore(config.sqlite_path)
         self._store.migrate()
-        self._backup_page = BackupTaskPage(BackupJobManager(self._store, device_id=config.device_id or "current-device"))
+        self._backup_page = BackupTaskPage(
+            BackupJobManager(self._store, device_id=config.device_id or "current-device"),
+            BackupTaskPageConfig(
+                cloud_api_base_url=config.cloud_api_base_url,
+                device_token=config.device_token,
+                device_id=config.device_id or "current-device",
+                cache_root=config.cache_root,
+            ),
+        )
         self._baidu_page = BaiduSettingsPage(
             BaiduSettingsPageConfig(
                 cloud_api_base_url=config.cloud_api_base_url,
@@ -1024,6 +1199,7 @@ class MainWindow(QMainWindow):
 
         self.status_label = QLabel("准备就绪")
         self._backup_page.status_changed.connect(self.status_label.setText)
+        self._backup_page.backup_finished.connect(self._refresh_after_backup_finished)
         self._source_mapping_page.status_changed.connect(self.status_label.setText)
         self._reconcile_page.status_changed.connect(self.status_label.setText)
         self._cleanup_page.status_changed.connect(self.status_label.setText)
@@ -1051,6 +1227,15 @@ class MainWindow(QMainWindow):
     def _set_current_page(self, row: int) -> None:
         if row >= 0:
             self.stack.setCurrentIndex(row)
+
+    @Slot(str)
+    def _refresh_after_backup_finished(self, backup_job_id: str) -> None:
+        self._source_mapping_page.job_id_input.setText(backup_job_id)
+        self._source_mapping_page.refresh_mapping()
+        self._cleanup_page.job_id_input.setText(backup_job_id)
+        self._cleanup_page.refresh_candidates()
+        self._restore_page.job_id_input.setText(backup_job_id)
+        self._restore_page.refresh_candidates()
 
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         self._baidu_page.close()
@@ -1105,10 +1290,18 @@ def _selected_account_id_for_ui(workflow: BaiduAuthWorkflow) -> str:
 
 
 def _safe_ui_error(exc: Exception) -> str:
-    text = str(exc)
+    if isinstance(exc, BackupPipelineError):
+        text = str(exc)
+    elif isinstance(exc, ValueError):
+        text = str(exc)
+    else:
+        text = type(exc).__name__
     if len(text) > 180:
         text = text[:177] + "..."
-    return text.replace("\n", " ").replace("\r", " ")
+    sanitized = text.replace("\n", " ").replace("\r", " ")
+    if "\\" in sanitized or ":/" in sanitized:
+        return type(exc).__name__
+    return sanitized
 
 
 def _candidate_remote_path(candidate) -> str:  # type: ignore[no-untyped-def]

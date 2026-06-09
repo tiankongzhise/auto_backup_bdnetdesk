@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -15,7 +16,7 @@ from auto_backup_client.dedupe_index import ContentDedupeIndexer
 from auto_backup_client.scan_fingerprints import BackupScanner
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields
 from auto_backup_client.ui import main_window
-from auto_backup_client.ui.main_window import BackupTaskPage, RemoteReconcilePage, RestorePage, SourceCleanupPage, SourceMappingPage
+from auto_backup_client.ui.main_window import BackupTaskPage, BackupTaskPageConfig, RemoteReconcilePage, RestorePage, SourceCleanupPage, SourceMappingPage
 from test_backup_pipeline import FakeBaiduForPipeline, FakeCloudForPipeline
 
 
@@ -70,6 +71,73 @@ def test_backup_task_page_transitions_selected_job(tmp_path, monkeypatch) -> Non
         assert job["status"] == "canceled"
         assert job["data_version"] == 5
         assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 5
+
+
+def test_backup_task_page_start_runs_real_pipeline_without_sensitive_status_leak(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    source = tmp_path / "secret-folder" / "source.txt"
+    source.parent.mkdir()
+    source.write_text("payload", encoding="utf-8")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    fake_cloud = _FakePipelineCloudClient()
+    fake_baidu_clients: list[_FakePipelineBaiduClient] = []
+    monkeypatch.setattr(main_window, "BaiduCloudClient", lambda *args, **kwargs: fake_cloud)
+    monkeypatch.setattr(main_window, "BaiduAuthWorkflow", _FakePipelineWorkflow)
+
+    def fake_baidu_factory(*args, **kwargs):  # type: ignore[no-untyped-def]
+        client = _FakePipelineBaiduClient(*args, **kwargs)
+        fake_baidu_clients.append(client)
+        return client
+
+    monkeypatch.setattr(main_window, "BaiduNetdiskClient", fake_baidu_factory)
+    page = BackupTaskPage(
+        BackupJobManager(store, device_id="device-1"),
+        BackupTaskPageConfig(
+            cloud_api_base_url="https://backup.baichengedu.com",
+            device_token="secret-device-token",
+            device_id="device-1",
+            cache_root=str(tmp_path / "cache"),
+        ),
+    )
+    page._thread_pool = _InlineThreadPool()  # type: ignore[assignment]
+    status_messages: list[str] = []
+    page.status_changed.connect(status_messages.append)
+    finished_jobs: list[str] = []
+    page.backup_finished.connect(finished_jobs.append)
+
+    page.add_sources([str(source)])
+    page.job_name_input.setText("ui real backup")
+    page.create_job()
+    job_id = page.jobs_table.item(0, 0).data(main_window.Qt.ItemDataRole.UserRole)
+    page.jobs_table.selectRow(0)
+    page.archive_password_input.setText("Test123456789")
+    page.authorization_password_input.setText("runtime-secret")
+    page.cache_budget_checkbox.setChecked(False)
+    page.start_selected_job()
+
+    with store.connect() as conn:
+        job = conn.execute("SELECT status, sync_status FROM backup_jobs WHERE backup_job_id = ?", (job_id,)).fetchone()
+        archives = conn.execute("SELECT COUNT(*) FROM archives WHERE job_id = ?", (job_id,)).fetchone()[0]
+        uploads = conn.execute("SELECT COUNT(*) FROM upload_sessions WHERE job_id = ?", (job_id,)).fetchone()[0]
+        remotes = conn.execute("SELECT COUNT(*) FROM remote_objects WHERE job_id = ?", (job_id,)).fetchone()[0]
+    assert job["status"] == "completed"
+    assert job["sync_status"] == "synced"
+    assert archives == 1
+    assert uploads == 1
+    assert remotes == 3
+    assert fake_cloud.synced_event_ids
+    assert fake_baidu_clients[0].uploaded_partseqs
+    assert page.archive_password_input.text() == ""
+    assert page.authorization_password_input.text() == ""
+    assert finished_jobs == [job_id]
+    assert page.jobs_table.item(0, 1).text() == "已完成"
+    combined_status = "\n".join(status_messages)
+    assert str(source) not in combined_status
+    assert str(tmp_path) not in combined_status
+    assert "runtime-secret" not in combined_status
+    assert "Test123456789" not in combined_status
 
 
 def test_source_mapping_page_renders_rows_without_local_path_leak(tmp_path, monkeypatch) -> None:
@@ -395,6 +463,48 @@ class _FakeDownloadBaiduNetdiskClient:
         target = Path(target_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.archive_path, target)
+
+
+class _InlineThreadPool:
+    def start(self, worker) -> None:  # type: ignore[no-untyped-def]
+        worker.run()
+
+
+class _FakePipelineCloudClient(FakeCloudForPipeline):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
+
+
+class _FakePipelineWorkflow:
+    def __init__(self, cloud) -> None:  # type: ignore[no-untyped-def]
+        self.cloud = cloud
+
+    def load_accounts(self):
+        return [SimpleNamespace(account_id="account-1", selected=True)]
+
+    def decrypt_password_token(self, account_id: str, *, authorization_password: str):
+        assert account_id == "account-1"
+        assert authorization_password == "runtime-secret"
+        return SimpleNamespace(
+            encrypted=SimpleNamespace(account_id="account-1"),
+            token=SimpleNamespace(access_token="secret-access-token"),
+        )
+
+
+class _FakePipelineBaiduClient(FakeBaiduForPipeline):
+    def __init__(self, access_token: str = "", *, timeout: float = 120.0) -> None:
+        del timeout
+        super().__init__()
+        assert access_token == "secret-access-token"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
 
 
 def _insert_remote_object(store: SQLiteClientStore, *, remote_path: str) -> None:

@@ -38,7 +38,7 @@
 
 ## PySide6 主窗口
 
-主窗口提供备份任务、百度设置、来源映射、远端校对、原始数据清理和恢复入口。备份任务页支持选择/拖拽来源、创建任务、开始、暂停、继续和取消；端到端执行仍由 `backup_pipeline_cli` 和后续任务编排入口承载。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页可按 job/关键字筛选候选，选择手动目录或原路径，运行时输入归档密码后执行 7-Zip 解压恢复；本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
+主窗口提供备份任务、百度设置、来源映射、远端校对、原始数据清理和恢复入口。备份任务页支持选择/拖拽来源、创建任务和真实开始备份；点击“开始”会要求运行时输入归档密码和授权密码，然后在后台调用 `BackupPipeline` 执行扫描、去重、7-Zip 加密归档、百度上传、Cloud Sync、远端校对和 completed final sync。归档密码和授权密码只保留在本次内存调用中，启动后会清空输入框，不写入 SQLite、日志或 UI 状态。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页可按 job/关键字筛选候选，选择手动目录或原路径，运行时输入归档密码后执行 7-Zip 解压恢复；本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
 
 ```powershell
 cd client
@@ -49,7 +49,7 @@ $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.ui.main_window
 ```
 
-`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。来源映射和远端校对 UI 不把本地 SQLite 路径、Device Token、百度 token、用户密码或 wrapping key 输出到界面日志。
+`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。备份执行摘要只展示文件数、归档序号、上传分片数和阶段结果，不输出本地 SQLite 路径、缓存路径、远端真实路径、Device Token、百度 token、用户密码或 wrapping key。来源映射和远端校对 UI 同样不把这些敏感内容输出到界面日志。
 
 ## 发布构建
 

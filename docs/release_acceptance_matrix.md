@@ -57,7 +57,7 @@ PyInstaller 官方文档获取记录：
 | R03 | 迁移定位 | 开发机/打包包 | 启动后初始化新 SQLite | 源码运行读取 `client/migrations/sqlite`；打包运行读取 bundle 内 `migrations/sqlite` | 本轮自动化验收源码与 `_MEIPASS` 分支；打包 exe 启动待干净机验收 |
 | R04 | 首次启动 | 干净 Windows | 双击 exe | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题 | 待执行 |
 | R05 | 百度授权 | 干净 Windows | 设备码/扫码授权 | 只在百度官方页面输入百度账号；本机保存 DPAPI Device Token/KDF 材料；不落仓库路径 | 待执行 |
-| R06 | 备份 | 干净 Windows | 选择小文件与跨分片文件执行真实备份 | 完成扫描、去重、7-Zip 加密、百度上传、outbox 同步、远端校对和 completed final sync | 待执行 |
+| R06 | 备份 | 干净 Windows | 主 UI 选择小文件与跨分片文件，输入运行时归档密码/授权密码后点击开始 | 完成扫描、去重、7-Zip 加密、百度上传、outbox 同步、远端校对和 completed final sync；UI 不保存或显示密码/token/完整路径 | 开发机自动化已覆盖主 UI 调用 BackupPipeline 并写入 archive/upload/remote/completed；干净机真实百度待执行 |
 | R07 | 校对 | 干净 Windows | 来源映射和远端校对页查看同一 job | 展示来源/远端关系和 consistent 状态；不显示 Device Token、百度 token、密码或完整敏感路径 | 开发机自动化已覆盖来源映射脱敏与远端校对 UI 修复写入；干净机待执行 |
 | R08 | 清理 | 干净 Windows | 对已完成 job 执行回收站清理 | 清理前复查通过后移入回收站，写入清理记录并同步 outbox；永久删除默认隐藏在高级选项，清理前必须选中候选 | 开发机自动化已覆盖候选门槛、身份复查、同步 payload 脱敏和 UI 高级删除/选择门槛；干净机待执行 |
 | R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 恢复 | 7-Zip 解密、manifest 校验、SHA256 复验通过；远端 archive 可经百度 dlink 拉取；冲突默认保留两者 | 开发机自动化已覆盖本地恢复、UI 远端拉取恢复、SHA256 复验和路径脱敏；干净机待执行 |
@@ -75,6 +75,13 @@ PyInstaller 官方文档获取记录：
 - 云同步真实性审计不得只看本地 `sync_outbox` 状态；必须保留真实 Cloud Sync API 写入和云端 summary 回读匹配证据，确认不是虚假同步。
 
 ## P3-14 全量审计补测记录
+
+2026-06-09 修复主 UI 真实备份闭环缺口，开发机自动化结果：
+
+- 备份任务页“开始”按钮改为后台调用 `BackupPipeline`，使用当前设备凭据和当前选中百度账号，执行扫描、去重、7-Zip 归档、百度上传、Cloud Sync、远端校对和 completed final sync。
+- 备份页新增运行时归档密码和授权密码输入；授权密码留空时复用归档密码；启动任务后立即清空输入框，状态栏只展示文件数、归档序号、上传分片数和阶段结果。
+- 自动化测试使用 fake Cloud/Baidu 客户端验证 UI 开始按钮会把 job 跑到 `completed`，并写入 `archives`、`upload_sessions`、`remote_objects`，同时状态消息不包含本地完整路径或密码。
+- 干净 Windows 仍需用真实百度账号执行 R04-R14，确认真实远端文件保留、来源映射、远端校对、回收站清理和恢复闭环。
 
 2026-06-08 发布交付审计中补齐 UI 远端恢复拉取闭环和清理 UI 安全门槛，开发机自动化结果：
 
