@@ -30,6 +30,8 @@ class RestoreCandidate:
     job_name: str
     job_status: str
     device_id: str
+    source_type: str
+    source_display_name: str
     display_name: str
     original_path: str
     relative_path: str
@@ -354,6 +356,8 @@ class RestoreService:
                     j.job_name,
                     j.status AS job_status,
                     j.device_id,
+                    bs.source_type,
+                    bs.display_name AS source_display_name,
                     cr.content_reference_id,
                     cr.file_item_id,
                     cr.local_path,
@@ -379,6 +383,7 @@ class RestoreService:
                     ro.status AS remote_archive_status
                 FROM content_references cr
                 JOIN backup_jobs j ON j.backup_job_id = cr.backup_job_id
+                JOIN backup_sources bs ON bs.backup_source_id = cr.backup_source_id
                 LEFT JOIN archives a ON a.archive_id = cr.archive_id
                 LEFT JOIN remote_objects ro
                     ON ro.archive_id = cr.archive_id
@@ -443,6 +448,8 @@ class RestoreService:
                     j.job_name,
                     j.status AS job_status,
                     j.device_id,
+                    bs.source_type,
+                    bs.display_name AS source_display_name,
                     cr.content_reference_id,
                     cr.file_item_id,
                     cr.local_path,
@@ -469,6 +476,7 @@ class RestoreService:
                 FROM archive_members am
                 JOIN content_references cr ON cr.content_reference_id = am.content_reference_id
                 JOIN backup_jobs j ON j.backup_job_id = cr.backup_job_id
+                JOIN backup_sources bs ON bs.backup_source_id = cr.backup_source_id
                 JOIN archives a ON a.archive_id = am.archive_id
                 LEFT JOIN remote_objects ro
                     ON ro.archive_id = am.archive_id
@@ -624,6 +632,8 @@ def _candidate_from_row(row: Mapping[str, object]) -> RestoreCandidate:
         job_name=str(row["job_name"]),
         job_status=str(row["job_status"]),
         device_id=str(row["device_id"]),
+        source_type=str(row["source_type"] or ""),
+        source_display_name=str(row["source_display_name"] or ""),
         display_name=str(row["display_name"]),
         original_path=str(row["local_path"]),
         relative_path=str(row["relative_path"]),
@@ -699,7 +709,10 @@ def _target_path(candidate: RestoreCandidate, *, target_mode: RestoreTargetMode,
     root = Path(target_root or "").expanduser()
     if not str(root).strip():
         raise RestoreFlowError("target_root is required for manual_path restore")
-    relative = _safe_relative_path(candidate.relative_path or candidate.display_name)
+    relative_value = candidate.relative_path or candidate.display_name
+    if candidate.source_type == "directory":
+        relative_value = "/".join(part for part in (candidate.source_display_name, relative_value) if part)
+    relative = _safe_relative_path(relative_value)
     return root / relative
 
 

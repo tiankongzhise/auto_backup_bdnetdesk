@@ -369,9 +369,23 @@ func (s *PostgresStore) CheckSchema(ctx context.Context) (SchemaReadiness, error
 		"baidu_account_device_bindings": {
 			"account_id",
 			"device_id",
+			"token_expires_at",
+			"encryption_method",
+			"encrypted_token_json",
+			"private_key_hint",
+			"token_version",
+			"last_verified_at",
+			"last_verify_status",
 		},
 		"baidu_token_refresh_leases": {
 			"account_id",
+			"lease_id",
+			"holder_device_id",
+			"expires_at",
+		},
+		"baidu_device_token_refresh_leases": {
+			"account_id",
+			"device_id",
 			"lease_id",
 			"holder_device_id",
 			"expires_at",
@@ -531,13 +545,12 @@ func (s *PostgresStore) CompleteBaiduAuthSession(ctx context.Context, session Ba
 	}
 
 	var existingID string
-	var existingVersion int64
 	err = tx.QueryRow(ctx, `
-SELECT account_id, token_version
+SELECT account_id
 FROM baidu_accounts
 WHERE baidu_uid = $1
 FOR UPDATE
-`, account.BaiduUID).Scan(&existingID, &existingVersion)
+`, account.BaiduUID).Scan(&existingID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		_, err = tx.Exec(ctx, `
 INSERT INTO baidu_accounts (
@@ -576,43 +589,60 @@ INSERT INTO baidu_accounts (
 		return BaiduAuthSession{}, BaiduAccount{}, err
 	} else {
 		account.AccountID = existingID
-		account.TokenVersion = existingVersion + 1
 		_, err = tx.Exec(ctx, `
 UPDATE baidu_accounts
 SET
     baidu_uk = $2,
     display_name = $3,
     scope = $4,
-    token_expires_at = $5,
-    encryption_method = $6,
-    encrypted_token_json = $7::jsonb,
-    private_key_hint = $8,
-    token_version = token_version + 1,
-    last_verified_at = $9,
-    last_verify_status = $10,
     updated_at = now()
 WHERE account_id = $1
 `, account.AccountID,
 			account.BaiduUK,
 			account.DisplayName,
 			account.Scope,
-			account.TokenExpiresAt,
-			account.EncryptionMethod,
-			string(account.EncryptedToken),
-			account.PrivateKeyHint,
-			account.LastVerifiedAt,
-			account.LastVerifyStatus,
 		)
 		if err != nil {
 			return BaiduAuthSession{}, BaiduAccount{}, err
 		}
 	}
 
-	if _, err := tx.Exec(ctx, `
-INSERT INTO baidu_account_device_bindings (account_id, device_id, selected_at)
-VALUES ($1, $2, now())
-ON CONFLICT (account_id, device_id) DO UPDATE SET selected_at = now()
-`, account.AccountID, deviceID); err != nil {
+	if err := tx.QueryRow(ctx, `
+INSERT INTO baidu_account_device_bindings (
+    account_id,
+    device_id,
+    selected_at,
+    token_expires_at,
+    encryption_method,
+    encrypted_token_json,
+    private_key_hint,
+    token_version,
+    last_verified_at,
+    last_verify_status,
+    updated_at
+) VALUES (
+    $1, $2, now(), $3, $4, $5::jsonb, $6, 1, $7, $8, now()
+)
+ON CONFLICT (account_id, device_id) DO UPDATE SET
+    selected_at = now(),
+    token_expires_at = EXCLUDED.token_expires_at,
+    encryption_method = EXCLUDED.encryption_method,
+    encrypted_token_json = EXCLUDED.encrypted_token_json,
+    private_key_hint = EXCLUDED.private_key_hint,
+    token_version = baidu_account_device_bindings.token_version + 1,
+    last_verified_at = EXCLUDED.last_verified_at,
+    last_verify_status = EXCLUDED.last_verify_status,
+    updated_at = now()
+RETURNING token_version
+`, account.AccountID,
+		deviceID,
+		account.TokenExpiresAt,
+		account.EncryptionMethod,
+		string(account.EncryptedToken),
+		account.PrivateKeyHint,
+		account.LastVerifiedAt,
+		account.LastVerifyStatus,
+	).Scan(&account.TokenVersion); err != nil {
 		return BaiduAuthSession{}, BaiduAccount{}, err
 	}
 
@@ -647,26 +677,24 @@ RETURNING completed_at
 func (s *PostgresStore) ListBaiduAccounts(ctx context.Context, deviceID string) ([]BaiduAccount, error) {
 	rows, err := s.pool.Query(ctx, `
 SELECT
-    account_id,
-    baidu_uid,
-    baidu_uk,
-    display_name,
-    scope,
-    token_expires_at,
-    encryption_method,
-    encrypted_token_json,
-    private_key_hint,
-    token_version,
-    last_verified_at,
-    last_verify_status,
-    EXISTS (
-        SELECT 1
-        FROM baidu_account_device_bindings b
-        WHERE b.account_id = baidu_accounts.account_id
-          AND b.device_id = $1
-    ) AS selected
-FROM baidu_accounts
-ORDER BY selected DESC, updated_at DESC
+    a.account_id,
+    a.baidu_uid,
+    a.baidu_uk,
+    a.display_name,
+    a.scope,
+    COALESCE(b.token_expires_at, 'epoch'::timestamptz) AS token_expires_at,
+    COALESCE(b.encryption_method, '') AS encryption_method,
+    COALESCE(b.encrypted_token_json, '{}'::jsonb) AS encrypted_token_json,
+    COALESCE(b.private_key_hint, '') AS private_key_hint,
+    COALESCE(b.token_version, 0) AS token_version,
+    b.last_verified_at,
+    COALESCE(b.last_verify_status, 'unknown') AS last_verify_status,
+    b.account_id IS NOT NULL AS selected
+FROM baidu_accounts a
+LEFT JOIN baidu_account_device_bindings b
+    ON b.account_id = a.account_id
+   AND b.device_id = $1
+ORDER BY selected DESC, COALESCE(b.updated_at, a.updated_at) DESC
 `, deviceID)
 	if err != nil {
 		return nil, err
@@ -693,7 +721,7 @@ func (s *PostgresStore) SelectBaiduAccount(ctx context.Context, accountID string
 		_ = tx.Rollback(ctx)
 	}()
 
-	account, ok, err := queryBaiduAccountTx(ctx, tx, accountID, deviceID)
+	_, ok, err := queryBaiduAccountTx(ctx, tx, accountID, deviceID)
 	if err != nil || !ok {
 		return BaiduAccount{}, ok, err
 	}
@@ -707,18 +735,21 @@ ON CONFLICT (account_id, device_id) DO UPDATE SET selected_at = now()
 	if err := tx.Commit(ctx); err != nil {
 		return BaiduAccount{}, false, err
 	}
-	account.Selected = true
-	return account, true, nil
+	selected, ok, err := queryBaiduAccount(ctx, s.pool, accountID, deviceID)
+	if err != nil || !ok {
+		return BaiduAccount{}, ok, err
+	}
+	return selected, true, nil
 }
 
 func (s *PostgresStore) GetBaiduAccount(ctx context.Context, accountID string, deviceID string) (BaiduAccount, bool, error) {
-	account, ok, err := queryBaiduAccount(ctx, s.pool, accountID, deviceID)
+	account, ok, err := queryBaiduAuthorizedAccount(ctx, s.pool, accountID, deviceID)
 	return account, ok, err
 }
 
 func (s *PostgresStore) UpdateBaiduAccountToken(ctx context.Context, accountID string, deviceID string, expectedVersion int64, update BaiduAccount) (BaiduAccount, bool, error) {
 	row := s.pool.QueryRow(ctx, `
-UPDATE baidu_accounts
+UPDATE baidu_account_device_bindings b
 SET
     token_expires_at = $3,
     encryption_method = $4,
@@ -728,27 +759,26 @@ SET
     last_verified_at = $7,
     last_verify_status = $8,
     updated_at = now()
-WHERE account_id = $1
-  AND token_version = $2
+FROM baidu_accounts a
+WHERE b.account_id = $1
+  AND b.device_id = $9
+  AND b.account_id = a.account_id
+  AND b.token_version = $2
+  AND b.encrypted_token_json IS NOT NULL
 RETURNING
-    account_id,
-    baidu_uid,
-    baidu_uk,
-    display_name,
-    scope,
-    token_expires_at,
-    encryption_method,
-    encrypted_token_json,
-    private_key_hint,
-    token_version,
-    last_verified_at,
-    last_verify_status,
-    EXISTS (
-        SELECT 1
-        FROM baidu_account_device_bindings b
-        WHERE b.account_id = baidu_accounts.account_id
-          AND b.device_id = $9
-    ) AS selected
+    a.account_id,
+    a.baidu_uid,
+    a.baidu_uk,
+    a.display_name,
+    a.scope,
+    b.token_expires_at,
+    b.encryption_method,
+    b.encrypted_token_json,
+    b.private_key_hint,
+    b.token_version,
+    b.last_verified_at,
+    b.last_verify_status,
+    true AS selected
 `, accountID,
 		expectedVersion,
 		update.TokenExpiresAt,
@@ -763,7 +793,7 @@ RETURNING
 	if err != nil || ok {
 		return account, ok, err
 	}
-	current, currentOK, currentErr := queryBaiduAccount(ctx, s.pool, accountID, deviceID)
+	current, currentOK, currentErr := queryBaiduAuthorizedAccount(ctx, s.pool, accountID, deviceID)
 	if currentErr != nil || !currentOK {
 		return BaiduAccount{}, false, currentErr
 	}
@@ -782,17 +812,18 @@ func (s *PostgresStore) AcquireBaiduRefreshLease(ctx context.Context, accountID 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "baidu_lease:"+accountID); err != nil {
 		return BaiduRefreshLease{}, false, err
 	}
-	if _, ok, err := queryBaiduAccountTx(ctx, tx, accountID, deviceID); err != nil || !ok {
+	if _, ok, err := queryBaiduAuthorizedAccountTx(ctx, tx, accountID, deviceID); err != nil || !ok {
 		return BaiduRefreshLease{}, false, err
 	}
 
 	var existing BaiduRefreshLease
 	err = tx.QueryRow(ctx, `
 SELECT account_id, lease_id, holder_device_id, expires_at
-FROM baidu_token_refresh_leases
+FROM baidu_device_token_refresh_leases
 WHERE account_id = $1
+  AND device_id = $2
 FOR UPDATE
-`, accountID).Scan(&existing.AccountID, &existing.LeaseID, &existing.HolderDeviceID, &existing.ExpiresAt)
+`, accountID, deviceID).Scan(&existing.AccountID, &existing.LeaseID, &existing.HolderDeviceID, &existing.ExpiresAt)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return BaiduRefreshLease{}, false, err
 	}
@@ -806,21 +837,22 @@ FOR UPDATE
 
 	var lease BaiduRefreshLease
 	err = tx.QueryRow(ctx, `
-INSERT INTO baidu_token_refresh_leases (
+INSERT INTO baidu_device_token_refresh_leases (
     account_id,
+    device_id,
     lease_id,
     holder_device_id,
     expires_at
 ) VALUES (
-    $1, $2, $3, now() + make_interval(secs => $4)
+    $1, $2, $3, $4, now() + make_interval(secs => $5)
 )
-ON CONFLICT (account_id) DO UPDATE SET
+ON CONFLICT (account_id, device_id) DO UPDATE SET
     lease_id = EXCLUDED.lease_id,
     holder_device_id = EXCLUDED.holder_device_id,
     expires_at = EXCLUDED.expires_at,
     updated_at = now()
 RETURNING account_id, lease_id, holder_device_id, expires_at
-`, accountID, leaseID, deviceID, durationSeconds).Scan(&lease.AccountID, &lease.LeaseID, &lease.HolderDeviceID, &lease.ExpiresAt)
+`, accountID, deviceID, leaseID, deviceID, durationSeconds).Scan(&lease.AccountID, &lease.LeaseID, &lease.HolderDeviceID, &lease.ExpiresAt)
 	if err != nil {
 		return BaiduRefreshLease{}, false, err
 	}
@@ -911,32 +943,61 @@ func scanBaiduAuthSession(row scanner) (BaiduAuthSession, bool, error) {
 func queryBaiduAccount(ctx context.Context, queryer queryRower, accountID string, deviceID string) (BaiduAccount, bool, error) {
 	row := queryer.QueryRow(ctx, `
 SELECT
-    account_id,
-    baidu_uid,
-    baidu_uk,
-    display_name,
-    scope,
-    token_expires_at,
-    encryption_method,
-    encrypted_token_json,
-    private_key_hint,
-    token_version,
-    last_verified_at,
-    last_verify_status,
-    EXISTS (
-        SELECT 1
-        FROM baidu_account_device_bindings b
-        WHERE b.account_id = baidu_accounts.account_id
-          AND b.device_id = $2
-    ) AS selected
-FROM baidu_accounts
-WHERE account_id = $1
+    a.account_id,
+    a.baidu_uid,
+    a.baidu_uk,
+    a.display_name,
+    a.scope,
+    COALESCE(b.token_expires_at, 'epoch'::timestamptz) AS token_expires_at,
+    COALESCE(b.encryption_method, '') AS encryption_method,
+    COALESCE(b.encrypted_token_json, '{}'::jsonb) AS encrypted_token_json,
+    COALESCE(b.private_key_hint, '') AS private_key_hint,
+    COALESCE(b.token_version, 0) AS token_version,
+    b.last_verified_at,
+    COALESCE(b.last_verify_status, 'unknown') AS last_verify_status,
+    b.account_id IS NOT NULL AS selected
+FROM baidu_accounts a
+LEFT JOIN baidu_account_device_bindings b
+    ON b.account_id = a.account_id
+   AND b.device_id = $2
+WHERE a.account_id = $1
 `, accountID, deviceID)
 	return scanBaiduAccount(row)
 }
 
 func queryBaiduAccountTx(ctx context.Context, tx pgx.Tx, accountID string, deviceID string) (BaiduAccount, bool, error) {
 	return queryBaiduAccount(ctx, tx, accountID, deviceID)
+}
+
+func queryBaiduAuthorizedAccount(ctx context.Context, queryer queryRower, accountID string, deviceID string) (BaiduAccount, bool, error) {
+	row := queryer.QueryRow(ctx, `
+SELECT
+    a.account_id,
+    a.baidu_uid,
+    a.baidu_uk,
+    a.display_name,
+    a.scope,
+    b.token_expires_at,
+    b.encryption_method,
+    b.encrypted_token_json,
+    b.private_key_hint,
+    b.token_version,
+    b.last_verified_at,
+    b.last_verify_status,
+    true AS selected
+FROM baidu_accounts a
+JOIN baidu_account_device_bindings b
+    ON b.account_id = a.account_id
+   AND b.device_id = $2
+WHERE a.account_id = $1
+  AND b.encrypted_token_json IS NOT NULL
+  AND b.token_version > 0
+`, accountID, deviceID)
+	return scanBaiduAccount(row)
+}
+
+func queryBaiduAuthorizedAccountTx(ctx context.Context, tx pgx.Tx, accountID string, deviceID string) (BaiduAccount, bool, error) {
+	return queryBaiduAuthorizedAccount(ctx, tx, accountID, deviceID)
 }
 
 func scanBaiduAccount(row scanner) (BaiduAccount, bool, error) {

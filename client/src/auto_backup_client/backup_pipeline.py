@@ -60,8 +60,10 @@ class BackupPipelineResult:
     scan: JobScanResult
     content_index: object
     archive: ArchivePackageResult
+    archives: tuple[ArchivePackageResult, ...] = ()
     cloud_candidates: CloudCandidateResult | None = None
     upload: ResumableUploadResult | None = None
+    uploads: tuple[ResumableUploadResult, ...] = ()
     sync: SyncWorkerResult | None = None
     reconcile: RemoteReconcileReport | None = None
     cache_usage: CacheUsage | None = None
@@ -124,23 +126,35 @@ class BackupPipeline:
                 )
 
             stage = "archive"
-            archive = ArchivePackager(
+            packager = ArchivePackager(
                 self.store,
                 device_id=self.device_id,
                 seven_zip_path=self.seven_zip_path,
                 artifact_manager=artifact_manager,
-            ).package_job(
-                cleaned_job_id,
-                cache_root=options.cache_root,
-                password=options.password,
-                archive_seq=options.archive_seq,
-                now=options.now,
             )
+            job_with_sources = manager.get_job_with_sources(cleaned_job_id)
+            archives: list[ArchivePackageResult] = []
+            for source in job_with_sources.sources:
+                archives.append(
+                    packager.package_job(
+                        cleaned_job_id,
+                        cache_root=options.cache_root,
+                        password=options.password,
+                        archive_seq=int(source.source_seq),
+                        backup_source_id=source.backup_source_id,
+                        now=options.now,
+                    )
+                )
+            if not archives:
+                raise BackupPipelineError("backup job has no sources to archive")
+            archive = archives[0]
 
-            upload = None
+            uploads: list[ResumableUploadResult] = []
             if options.run_upload:
                 stage = "upload"
-                upload = self._upload_archive(cleaned_job_id, archive, options, manager.get_job_with_sources(cleaned_job_id))
+                for archive_item in archives:
+                    uploads.append(self._upload_archive(cleaned_job_id, archive_item, options, job_with_sources))
+            upload = uploads[0] if uploads else None
 
             sync = None
             if options.sync_outbox:
@@ -162,15 +176,16 @@ class BackupPipeline:
                     rate_limiter=self.rate_limiter,
                 ).reconcile(RemoteReconcileScope(job_id=cleaned_job_id, recursive=True))
 
-            completed = _can_mark_completed(options, upload=upload, sync=sync, reconcile=reconcile)
+            completed = _can_mark_completed(options, uploads=tuple(uploads), sync=sync, reconcile=reconcile)
             if completed:
                 stage = "complete"
                 manager.transition_job(cleaned_job_id, "completed", now=options.now)
-                _mark_archive_remote_confirmed(
-                    self.store,
-                    archive_path=archive.archive_path,
-                    now=options.now,
-                )
+                for archive_item in archives:
+                    _mark_archive_remote_confirmed(
+                        self.store,
+                        archive_path=archive_item.archive_path,
+                        now=options.now,
+                    )
                 if options.sync_outbox:
                     stage = "final_sync"
                     final_sync = _run_sync_until_idle(
@@ -202,7 +217,9 @@ class BackupPipeline:
                 content_index=content_index,
                 cloud_candidates=cloud_candidates,
                 archive=archive,
+                archives=tuple(archives),
                 upload=upload,
+                uploads=tuple(uploads),
                 sync=sync,
                 reconcile=reconcile,
                 cache_usage=cache_usage,
@@ -370,11 +387,13 @@ def _merge_sync_results(left: SyncWorkerResult, right: SyncWorkerResult) -> Sync
 def _can_mark_completed(
     options: BackupPipelineOptions,
     *,
-    upload: ResumableUploadResult | None,
+    uploads: tuple[ResumableUploadResult, ...],
     sync: SyncWorkerResult | None,
     reconcile: RemoteReconcileReport | None,
 ) -> bool:
-    if not options.mark_completed or upload is None or reconcile is None or reconcile.has_differences:
+    if not options.mark_completed or reconcile is None or reconcile.has_differences:
+        return False
+    if options.run_upload and not uploads:
         return False
     if sync is not None and (sync.conflicts or sync.rejected or sync.retryable):
         return False

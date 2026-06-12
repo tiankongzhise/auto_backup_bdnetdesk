@@ -250,6 +250,16 @@ func TestBaiduAccountSelectionAndRefreshLease(t *testing.T) {
 		t.Fatalf("expected second device selected account, got %#v", selected)
 	}
 
+	secondTokenRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+accountID+"/token", secondToken, "")
+	if secondTokenRec.Code != http.StatusNotFound {
+		t.Fatalf("expected selected second device without authorization to have no token, got %d: %s", secondTokenRec.Code, secondTokenRec.Body.String())
+	}
+
+	secondLeaseWithoutAuth := authedJSON(t, handler, http.MethodPost, "/v1/baidu/accounts/"+accountID+"/refresh-lease", secondToken, `{"lease_id":"lease-second","duration_seconds":300}`)
+	if secondLeaseWithoutAuth.Code != http.StatusNotFound {
+		t.Fatalf("expected selected second device without authorization to have no refresh lease, got %d: %s", secondLeaseWithoutAuth.Code, secondLeaseWithoutAuth.Body.String())
+	}
+
 	leaseRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/accounts/"+accountID+"/refresh-lease", firstToken, `{"lease_id":"lease-first","duration_seconds":300}`)
 	if leaseRec.Code != http.StatusOK {
 		t.Fatalf("expected first lease 200, got %d: %s", leaseRec.Code, leaseRec.Body.String())
@@ -259,15 +269,95 @@ func TestBaiduAccountSelectionAndRefreshLease(t *testing.T) {
 	if !firstLease.Acquired || firstLease.LeaseID != "lease-first" {
 		t.Fatalf("expected acquired first lease, got %#v", firstLease)
 	}
+}
 
-	conflictRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/accounts/"+accountID+"/refresh-lease", secondToken, `{"lease_id":"lease-second","duration_seconds":300}`)
-	if conflictRec.Code != http.StatusConflict {
-		t.Fatalf("expected second lease conflict, got %d: %s", conflictRec.Code, conflictRec.Body.String())
+func TestBaiduSameUIDAuthorizationIsDeviceScoped(t *testing.T) {
+	store := newMemoryStore()
+	handler := NewServer(
+		store,
+		slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)),
+		WithBaiduOAuthConfig(testBaiduOAuthConfig()),
+		WithBaiduOAuthClient(newFakeBaiduOAuthClient()),
+	)
+	firstToken := registerDevice(t, handler).DeviceToken
+	secondToken := registerDevice(t, handler).DeviceToken
+
+	firstAccountID := createPasswordBaiduAccountWithKey(t, handler, firstToken, bytes.Repeat([]byte{3}, 32))
+	firstTokenRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+firstAccountID+"/token", firstToken, "")
+	if firstTokenRec.Code != http.StatusOK {
+		t.Fatalf("expected first device token 200, got %d: %s", firstTokenRec.Code, firstTokenRec.Body.String())
 	}
-	var conflictLease BaiduRefreshLeaseResponse
-	decodeResponse(t, conflictRec, &conflictLease)
-	if conflictLease.Acquired || conflictLease.LeaseID != "lease-first" {
-		t.Fatalf("expected existing lease in conflict response, got %#v", conflictLease)
+	var firstBefore BaiduEncryptedToken
+	decodeResponse(t, firstTokenRec, &firstBefore)
+	if firstBefore.TokenVersion != 1 {
+		t.Fatalf("expected first device token version 1, got %#v", firstBefore)
+	}
+
+	secondAccountID := createPasswordBaiduAccountWithKey(t, handler, secondToken, bytes.Repeat([]byte{4}, 32))
+	if secondAccountID != firstAccountID {
+		t.Fatalf("expected same baidu UID to reuse account identity, first=%s second=%s", firstAccountID, secondAccountID)
+	}
+	secondTokenRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+firstAccountID+"/token", secondToken, "")
+	if secondTokenRec.Code != http.StatusOK {
+		t.Fatalf("expected second device token 200, got %d: %s", secondTokenRec.Code, secondTokenRec.Body.String())
+	}
+	var secondBefore BaiduEncryptedToken
+	decodeResponse(t, secondTokenRec, &secondBefore)
+	if secondBefore.TokenVersion != 1 {
+		t.Fatalf("expected second device token version 1, got %#v", secondBefore)
+	}
+	if bytes.Equal(firstBefore.EncryptedToken, secondBefore.EncryptedToken) {
+		t.Fatalf("expected device-specific encrypted token envelopes to differ")
+	}
+
+	firstAfterRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+firstAccountID+"/token", firstToken, "")
+	if firstAfterRec.Code != http.StatusOK {
+		t.Fatalf("expected first device token after second auth 200, got %d: %s", firstAfterRec.Code, firstAfterRec.Body.String())
+	}
+	var firstAfter BaiduEncryptedToken
+	decodeResponse(t, firstAfterRec, &firstAfter)
+	if firstAfter.TokenVersion != 1 || !bytes.Equal(firstBefore.EncryptedToken, firstAfter.EncryptedToken) {
+		t.Fatalf("expected first device token to remain unchanged, before=%#v after=%#v", firstBefore, firstAfter)
+	}
+
+	update := UpdateBaiduTokenRequest{
+		ExpectedTokenVersion: 1,
+		TokenExpiresAt:       time.Now().UTC().Add(2 * time.Hour),
+		EncryptionMethod:     BaiduEncryptionPassword,
+		EncryptedToken:       json.RawMessage(`{"version":1,"encryption_method":"password_argon2id_aes256gcm_v1","ciphertext":"second-updated"}`),
+		LastVerifyStatus:     "valid",
+	}
+	payload, err := json.Marshal(update)
+	if err != nil {
+		t.Fatalf("marshal update: %v", err)
+	}
+	secondUpdate := authedJSON(t, handler, http.MethodPut, "/v1/baidu/accounts/"+firstAccountID+"/token", secondToken, string(payload))
+	if secondUpdate.Code != http.StatusOK {
+		t.Fatalf("expected second token update 200, got %d: %s", secondUpdate.Code, secondUpdate.Body.String())
+	}
+	var secondAfter BaiduEncryptedToken
+	decodeResponse(t, secondUpdate, &secondAfter)
+	if secondAfter.TokenVersion != 2 {
+		t.Fatalf("expected second token version 2, got %#v", secondAfter)
+	}
+
+	firstFinalRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+firstAccountID+"/token", firstToken, "")
+	if firstFinalRec.Code != http.StatusOK {
+		t.Fatalf("expected first token final 200, got %d: %s", firstFinalRec.Code, firstFinalRec.Body.String())
+	}
+	var firstFinal BaiduEncryptedToken
+	decodeResponse(t, firstFinalRec, &firstFinal)
+	if firstFinal.TokenVersion != 1 || !bytes.Equal(firstBefore.EncryptedToken, firstFinal.EncryptedToken) {
+		t.Fatalf("expected second device update not to affect first device, before=%#v final=%#v", firstBefore, firstFinal)
+	}
+
+	firstLeaseRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/accounts/"+firstAccountID+"/refresh-lease", firstToken, `{"lease_id":"lease-first","duration_seconds":300}`)
+	if firstLeaseRec.Code != http.StatusOK {
+		t.Fatalf("expected first device refresh lease 200, got %d: %s", firstLeaseRec.Code, firstLeaseRec.Body.String())
+	}
+	secondLeaseRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/accounts/"+firstAccountID+"/refresh-lease", secondToken, `{"lease_id":"lease-second","duration_seconds":300}`)
+	if secondLeaseRec.Code != http.StatusOK {
+		t.Fatalf("expected second device refresh lease 200, got %d: %s", secondLeaseRec.Code, secondLeaseRec.Body.String())
 	}
 }
 
@@ -307,6 +397,12 @@ func TestBaiduTokenUpdateVersionConflict(t *testing.T) {
 func createPasswordBaiduAccount(t *testing.T, handler http.Handler, token string) string {
 	t.Helper()
 
+	return createPasswordBaiduAccountWithKey(t, handler, token, bytes.Repeat([]byte{3}, 32))
+}
+
+func createPasswordBaiduAccountWithKey(t *testing.T, handler http.Handler, token string, wrappingKey []byte) string {
+	t.Helper()
+
 	createRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/auth/sessions", token, `{"flow":"device_code","encryption_method":"password_argon2id_aes256gcm_v1"}`)
 	if createRec.Code != http.StatusCreated {
 		t.Fatalf("create session failed: %d %s", createRec.Code, createRec.Body.String())
@@ -314,8 +410,8 @@ func createPasswordBaiduAccount(t *testing.T, handler http.Handler, token string
 	var session BaiduAuthSessionResponse
 	decodeResponse(t, createRec, &session)
 
-	wrappingKey := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))
-	completeRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/auth/sessions/"+session.SessionID+"/complete", token, `{"wrapping_key_base64":"`+wrappingKey+`"}`)
+	wrappingKeyText := base64.RawURLEncoding.EncodeToString(wrappingKey)
+	completeRec := authedJSON(t, handler, http.MethodPost, "/v1/baidu/auth/sessions/"+session.SessionID+"/complete", token, `{"wrapping_key_base64":"`+wrappingKeyText+`"}`)
 	if completeRec.Code != http.StatusOK {
 		t.Fatalf("complete session failed: %d %s", completeRec.Code, completeRec.Body.String())
 	}

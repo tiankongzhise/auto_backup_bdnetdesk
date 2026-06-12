@@ -89,8 +89,13 @@ class BaiduSettingsPage(QWidget):
     def __init__(self, config: BaiduSettingsPageConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
-        self._cloud_client = BaiduCloudClient(config.cloud_api_base_url, config.device_token, timeout=15.0)
-        self._workflow = BaiduAuthWorkflow(self._cloud_client)
+        self._cloud_client = BaiduCloudClient(
+            config.cloud_api_base_url,
+            config.device_token,
+            timeout=15.0,
+            device_id=config.device_id,
+        )
+        self._workflow = BaiduAuthWorkflow(self._cloud_client, device_id=config.device_id)
         self._api_lock = threading.Lock()
         self._thread_pool = QThreadPool.globalInstance()
         self._workers: list[Worker[object]] = []

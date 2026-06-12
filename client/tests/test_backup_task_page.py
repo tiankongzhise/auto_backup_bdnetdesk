@@ -16,7 +16,7 @@ from auto_backup_client.dedupe_index import ContentDedupeIndexer
 from auto_backup_client.scan_fingerprints import BackupScanner
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields
 from auto_backup_client.ui import main_window
-from auto_backup_client.ui.main_window import BackupTaskPage, BackupTaskPageConfig, RemoteReconcilePage, RestorePage, SourceCleanupPage, SourceMappingPage
+from auto_backup_client.ui.main_window import BackupTaskPage, BackupTaskPageConfig, CloudSyncPage, RemoteReconcilePage, RestorePage, SourceCleanupPage, SourceMappingPage
 from test_backup_pipeline import FakeBaiduForPipeline, FakeCloudForPipeline
 
 
@@ -114,6 +114,8 @@ def test_backup_task_page_start_runs_real_pipeline_without_sensitive_status_leak
     page.jobs_table.selectRow(0)
     page.archive_password_input.setText("Test123456789")
     page.authorization_password_input.setText("runtime-secret")
+    custom_cache = tmp_path / "custom-cache"
+    page.cache_root_input.setText(str(custom_cache))
     page.cache_budget_checkbox.setChecked(False)
     page.start_selected_job()
 
@@ -131,6 +133,7 @@ def test_backup_task_page_start_runs_real_pipeline_without_sensitive_status_leak
     assert fake_baidu_clients[0].uploaded_partseqs
     assert page.archive_password_input.text() == ""
     assert page.authorization_password_input.text() == ""
+    assert page._config.cache_root == str(custom_cache)
     assert finished_jobs == [job_id]
     assert page.jobs_table.item(0, 1).text() == "已完成"
     combined_status = "\n".join(status_messages)
@@ -187,7 +190,11 @@ def test_remote_reconcile_page_applies_confirmed_safe_repair(tmp_path, monkeypat
     page.run_reconcile()
 
     assert page.findings_table.rowCount() == 1
+    assert page.findings_table.wordWrap() is True
+    assert "remote_objects/upload_sessions" in page.summary_label.text()
+    assert "list/listall" in page.summary_label.text()
     assert page.findings_table.item(0, 0).text() == "remote_size_mismatch"
+    assert page.findings_table.item(0, 2).toolTip() == page.findings_table.item(0, 2).text()
     page.confirm_input.setText("APPLY_REMOTE_REPAIR")
     page.apply_selected_repairs()
 
@@ -357,6 +364,72 @@ def test_source_cleanup_page_hides_permanent_delete_and_requires_selection(tmp_p
     assert store.list_source_cleanup_records(created.job.backup_job_id) == []
 
 
+def test_source_cleanup_page_shows_exact_confirmation_phrase(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    source = tmp_path / "secret-folder" / "cleanup-me.txt"
+    source.parent.mkdir()
+    source.write_text("payload", encoding="utf-8")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    created = BackupJobManager(store, device_id="device-1").create_job([str(source)], job_name="cleanup ui")
+    BackupPipeline(
+        store=store,
+        device_id="device-1",
+        baidu_client=FakeBaiduForPipeline(),
+        cloud_client=FakeCloudForPipeline(),
+    ).run_job(
+        created.job.backup_job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password="Test123456789",
+            account_id="account-1",
+            run_upload=True,
+            sync_outbox=True,
+            reconcile_remote=True,
+            now="2026-06-08T21:42:00Z",
+        ),
+    )
+    page = SourceCleanupPage(store, device_id="device-1")
+    status_messages: list[str] = []
+    page.status_changed.connect(status_messages.append)
+    page.job_id_input.setText(created.job.backup_job_id)
+    page.refresh_candidates()
+
+    page.candidates_table.selectRow(0)
+    page.confirm_input.setText("CLEANUO_SOURCES")
+    page.apply_cleanup(dry_run=False)
+
+    assert status_messages[-1] == "确认短语应为 CLEANUP_SOURCES"
+    assert store.list_source_cleanup_records(created.job.backup_job_id) == []
+
+
+def test_cloud_sync_page_renders_local_and_cloud_summary(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main_window, "BaiduCloudClient", _FakeCloudSummaryClient)
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    created = BackupJobManager(store, device_id="device-1").create_job([str(source)], job_name="sync ui")
+
+    page = CloudSyncPage(
+        store,
+        cloud_api_base_url="https://backup.baichengedu.com",
+        device_token="secret-device-token",
+        device_id="device-1",
+    )
+
+    assert "sync_outbox" in page.summary_label.text()
+    assert page.status_table.rowCount() >= 1
+    page.entity_id_input.setText(created.job.entity_id)
+    page.query_cloud_summary()
+
+    assert "entity_type" in _table_text(page.cloud_summary_table)
+    assert "backup_jobs" in _table_text(page.cloud_summary_table)
+
+
 def _table_text(table) -> str:  # type: ignore[no-untyped-def]
     values: list[str] = []
     for row in range(table.rowCount()):
@@ -379,7 +452,8 @@ class _FakeCloudClient:
 
 
 class _FakeWorkflow:
-    def __init__(self, cloud) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, cloud, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        del args, kwargs
         self.cloud = cloud
 
     def decrypt_password_token(self, account_id: str, *, authorization_password: str):
@@ -479,7 +553,8 @@ class _FakePipelineCloudClient(FakeCloudForPipeline):
 
 
 class _FakePipelineWorkflow:
-    def __init__(self, cloud) -> None:  # type: ignore[no-untyped-def]
+    def __init__(self, cloud, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        del args, kwargs
         self.cloud = cloud
 
     def load_accounts(self):
@@ -505,6 +580,31 @@ class _FakePipelineBaiduClient(FakeBaiduForPipeline):
 
     def __exit__(self, *_exc: object) -> None:
         pass
+
+
+class _FakeCloudSummaryClient:
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        del args, kwargs
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
+
+    def get_entity_summary(self, entity_id: str):
+        return SimpleNamespace(
+            entity_id=entity_id,
+            entity_type="backup_jobs",
+            data_version=1,
+            revision_id="rev_" + "a" * 12,
+            canonical_record_sha256="b" * 64,
+            updated_by_device_id="device-1",
+            deleted_at=None,
+            recent_revisions=(
+                SimpleNamespace(apply_status="synced", data_version=1, revision_id="rev_" + "c" * 12),
+            ),
+        )
 
 
 def _insert_remote_object(store: SQLiteClientStore, *, remote_path: str) -> None:

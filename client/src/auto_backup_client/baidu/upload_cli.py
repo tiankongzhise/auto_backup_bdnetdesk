@@ -97,7 +97,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _quota(args: argparse.Namespace) -> int:
     password = _read_authorization_password(args.password_env)
     credentials, source = _resolve_credentials(args)
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
     with BaiduNetdiskClient(decrypted.token.access_token, timeout=30.0) as baidu:
         quota = baidu.get_quota()
@@ -114,7 +114,7 @@ def _quota(args: argparse.Namespace) -> int:
 def _uinfo(args: argparse.Namespace) -> int:
     password = _read_authorization_password(args.password_env)
     credentials, source = _resolve_credentials(args)
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
     with BaiduNetdiskClient(decrypted.token.access_token, timeout=30.0) as baidu:
         info = baidu.get_user_info(device_id=credentials.device_id or "auto_backup_bdnetdesk")
@@ -143,7 +143,7 @@ def _upload_file(args: argparse.Namespace) -> int:
         archive_sha256=archive_sha256,
         suffix=".7z",
     )
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
     with BaiduNetdiskClient(decrypted.token.access_token, timeout=90.0) as baidu:
         if args.check_quota:
@@ -181,7 +181,7 @@ def _upload_resumable(args: argparse.Namespace) -> int:
     job_id = args.job_id.strip() or f"upload-resumable-{uuid.uuid4().hex[:12]}"
     device_id = args.device_id.strip() or credentials.device_id or "unknown-device"
 
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
     with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
         if args.check_quota:
@@ -240,7 +240,7 @@ def _real_batch(args: argparse.Namespace) -> int:
         small_file.write_bytes(b"auto-backup real upload small file\n" + os.urandom(1024))
         multipart_file.write_bytes((b"A" * (4 * 1024 * 1024)) + b"tail-" + os.urandom(1024))
 
-        with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+        with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
             decrypted = _decrypt_selected_token(cloud, args.account_id, password)
         with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
             quota = baidu.get_quota()

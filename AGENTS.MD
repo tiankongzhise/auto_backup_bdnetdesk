@@ -422,3 +422,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：按权限流程提升后运行同一命令，真实 `https://backup.baichengedu.com` 探针通过：`/v1/readyz` ready，首次 `POST /v1/sync/revisions` 返回 `synced`，`GET /v1/reconcile/entities/{entity_id}` 回读 `revision_id`、`data_version`、`canonical_record_sha256` 匹配，重复提交同一 revision 返回 `duplicate`。
 
 后续约束：真实云同步审计不得只看本地 `sync_outbox` 状态；必须用云端 summary 回读匹配和重复提交 `duplicate` 证明不是虚假同步。若沙箱内出现 `device_credential_store_error`，不得误判为云服务不可用；应使用提升权限或运行时 `CLOUD_API_DEVICE_TOKEN` 重跑同一审计命令。
+
+### 2026-06-12：Go 测试默认构建缓存受沙箱权限限制
+
+问题：在 `cloud-api/` 下直接执行 `go test ./...` 时，Go 默认访问 `%LOCALAPPDATA%\go-build`，当前沙箱返回 `Access is denied`，导致测试在 setup 阶段失败。
+
+原因：当前工作区写权限不覆盖用户级 Go 构建缓存目录；失败发生在 Go 编译缓存写入阶段，不是项目代码测试断言失败。
+
+解决方案：将 `GOCACHE` 和 `GOMODCACHE` 显式指向仓库内 `.cache/go-build` 和 `.cache/go-mod` 后，`cloud-api/` 下 `go test ./...` 可在沙箱内通过。
+
+后续约束：后续 Go 测试优先设置 `$env:GOCACHE='<repo>\.cache\go-build'; $env:GOMODCACHE='<repo>\.cache\go-mod'`，不得把用户级 Go 缓存权限错误误判为项目代码失败；`.cache/` 不得提交。

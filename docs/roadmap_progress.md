@@ -11,20 +11,21 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 主 UI 真实备份闭环修复，挂靠打包发布与最终验收，不改变主排期。
-- 本轮已修复用户在主 UI 点击“开始”后只触发任务状态切换、不执行扫描/压缩/上传/同步/校对的问题。
-- 本轮已让备份任务页通过后台 worker 调用既有 `BackupPipeline`，运行时输入归档密码和授权密码，不保存密码，不在 UI 状态中展示 Device Token、百度 token、wrapping key、本地完整路径或远端完整路径。
+- 本轮插队工作：P3 阶段 14 授权隔离、备份粒度、恢复结构与校对可视化修复，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划修复用户反馈的 8 个阻塞问题：同一百度账号跨设备授权互相覆盖、创建任务缺少缓存位置 UI、文件夹恢复结构丢失、单任务全部内容打成一个压缩包、清理确认词提示不清晰、云端数据库 UI 不可见、远端校对长提示不可读、远端校对口径与百度实际结果容易混淆。
 - 本轮完成后回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
 
 ## 本次验收标准
 
-- 主 UI 备份任务页点击“开始”必须真实执行 `BackupPipeline`，默认完成扫描、去重、7-Zip 归档、百度上传、Cloud Sync、远端校对和 completed final sync，而不是只把状态切到 `running`。
-- UI 执行真实备份时必须要求运行时输入归档密码；授权密码可单独输入，留空时复用归档密码；密码不得写入 SQLite、日志、状态栏、文档或提交内容。
-- UI 必须使用当前设备凭据和当前选中百度账号；如无选中账号，应给出不含敏感信息的错误提示。
-- 备份执行必须在后台线程运行，不阻塞 Qt 主线程；执行期间按钮状态应避免重复启动同一任务。
-- 自动化测试必须覆盖主 UI 开始按钮会调用 `BackupPipeline` 并写入 archive/upload/remote/completed 记录，同时保持 UI 文案不泄露本地完整路径或密码。
-- 更新 `client/README.md`、`docs/release_acceptance_matrix.md` 和本进度文件，说明 P3-14 UI 真实备份闭环修复状态。
-- 客户端定向测试、`compileall` 和 `git diff --check` 必须通过；真实百度 UI 人工验收仍作为干净 Windows R06-R14 后续项。
+- Go 云端百度授权必须按 `account_id + device_id` 保存密文 token，同一百度 UID 在不同设备重新授权不得覆盖其他设备授权；token 读取、刷新回写和刷新租约均以当前设备授权记录为准。
+- 客户端 KDF store 必须兼容设备级授权材料，并保留旧 account 级记录读取路径，避免旧本机授权材料直接失效。
+- 备份编排必须按“每个选择源”独立生成 archive；一个任务选择单文件和文件夹时至少生成两个 archive，`job.index.json` 汇总该 job 的全部 archive。
+- 恢复到手动路径时，文件夹来源必须保留根文件夹名和内部目录结构；文件来源仍恢复为目标目录下的文件名。
+- 备份任务页必须提供缓存目录输入和选择入口，开始任务时使用 UI 当前缓存目录并继续执行 40GiB 预算检查。
+- 原始数据清理实际执行时必须明确提示确认短语应为 `CLEANUP_SOURCES`；预演不强制确认词，永久删除仍要求 `PERMANENT_DELETE_SOURCES`。
+- 主 UI 必须新增云端同步/云端数据库可视化入口，展示本地 outbox/sync_status 汇总，并支持用真实 Cloud Sync summary 回读指定 entity。
+- 远端校对页长提示必须完整可读，并明确说明当前页校对的是本地 SQLite 上传账本与百度 `list/listall` 结果；云端 PostgreSQL 校验转到云端同步页。
+- 更新 `client/README.md`、`docs/user_guide.md`、`docs/release_acceptance_matrix.md` 和本进度文件；定向测试、全量客户端测试、Go 测试、`compileall` 和 `git diff --check` 必须通过，真实百度人工验收仍作为干净 Windows R04-R14 后续项。
 
 ## 开发排期
 
@@ -57,6 +58,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-12：P3-14 授权隔离、备份粒度、恢复结构与校对可视化修复
+
+变更原因：用户反馈 8 个发布候选阻塞问题，涉及同一百度账号跨设备授权互相覆盖、缓存位置无法在 UI 设置、文件夹恢复结构丢失、备份归档粒度过粗、清理确认词提示不清晰、云端数据库 UI 不可见、远端校对长提示不可读和校对口径不清。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于真实联调阻塞修复和用户明确插队需求。
+
+验收标准：云端授权按设备隔离；每个选择源独立归档上传；手动恢复文件夹保留根目录和内部结构；备份任务页可设置缓存目录；清理确认词提示明确；新增云端同步页；远端校对 UI 可读并标注 SQLite/Baidu 校对口径；客户端和 Go 自动化验证通过。
+
+回到主排期条件：本轮修复提交完成、roadmap/README/用户手册/发布矩阵更新、定向和全量测试通过后，下一开发小项回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-09：P3-14 主 UI 真实备份闭环修复
 
@@ -119,6 +130,36 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：授权隔离、备份粒度、恢复结构与校对可视化修复
+
+- P3 阶段 14 授权隔离、备份粒度、恢复结构与校对可视化修复完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- Go 云端新增 `003_baidu_device_auth.sql`，把百度账号身份与当前设备授权记录分离；密文 token、token_version、过期时间、验证状态和刷新租约改为按 `account_id + device_id` 操作，同一百度 UID 在不同设备重新授权不会覆盖其他设备授权。
+- 客户端 `BaiduCloudClient`、授权 workflow、KDF store 和真实 CLI 入口补齐 device_id 传递；KDF 材料按 `account_id + device_id` 保存，并保留旧 account 级记录回退读取，避免旧本机授权材料直接失效。
+- 备份编排改为按每个选择源独立归档上传；`ArchivePackager` 支持按 `backup_source_id/source_seq` 过滤 manifest，`BackupPipelineResult` 保留首包兼容字段并新增 `archives/uploads` 聚合字段。
+- `job.index.json` 改为 job 级汇总索引，多来源上传后包含同一 job 下全部 archive；更新 job index 前使用百度 filemanager/delete 删除旧 index 后再以 `rtype=0` 重传，维持项目既有同名冲突策略。
+- 跨来源重复内容的 manifest 和 `archive_members` 补充 `referenced_archive_id`/`referenced_archive_remote_path`，恢复时可通过本地 payload archive 补拉被引用内容，避免只恢复成平铺单文件。
+- 恢复候选补充来源类型和来源根名称；手动恢复文件夹来源时目标路径保留根文件夹名和内部目录结构，文件来源仍恢复到目标目录下的文件名。
+- 备份任务页新增缓存目录输入与选择按钮，开始任务使用 UI 当前缓存目录并同步给恢复页；完成提示改为展示归档数量和上传分片总数。
+- 原始数据清理页修复确认词体验，实际执行输入错误时提示“确认短语应为 CLEANUP_SOURCES”，预演继续不强制确认词，永久删除仍要求 `PERMANENT_DELETE_SOURCES`。
+- 主 UI 新增“云端同步”页，展示本地 `sync_outbox`、业务表 `sync_status`、最近失败/冲突，并支持按 entity_id 调用真实 `GET /v1/reconcile/entities/{entity_id}` 回读云端摘要，默认不展示完整 payload。
+- 远端校对页表格启用换行、可调列宽和完整 tooltip，摘要明确当前页校对的是本地 SQLite `remote_objects/upload_sessions` 与百度 `list/listall` 结果；云端 PostgreSQL 校验在“云端同步”页进行。
+- 将 Go 测试默认构建缓存受沙箱权限限制的问题沉淀到 `AGENTS.MD`；后续 Go 测试可通过仓库内 `GOCACHE/GOMODCACHE` 在沙箱内完成。
+- 已验证 Go：`cloud-api/` 下设置仓库内 `GOCACHE`/`GOMODCACHE` 后 `go test ./...` 通过。
+- 已验证 Python 定向测试：`tests/test_baidu_auth_workflow.py tests/test_baidu_cloud_api.py tests/test_archive_packager.py tests/test_backup_pipeline.py tests/test_backup_task_page.py tests/test_restore_flow.py tests/test_source_cleanup.py tests/test_baidu_kdf_store.py` 通过，48 个测试通过。
+- 已执行客户端全量 pytest 至 146/150 通过；失败点为本轮新增 `device_id` 构造参数后旧 fake client 不兼容，随后已修复 `tests/test_baidu_reconcile_cli.py` 和 `tests/test_real_backup_pipeline_test_cli.py` fake 构造器，并进一步修复多来源 `job.index.json` 汇总更新逻辑。因本地提升审批器返回 429，修复后的全量 `uv run pytest` 未能再次执行；沙箱内 `uv run` 仍命中既有 `.venv\Scripts\python.exe` 进程创建限制。
+- 已验证 `python -m compileall client/src client/tests` 通过，`git diff --check` 通过。
+- 本轮未执行真实两设备百度授权、真实百度多来源上传、真实远端校对和真实恢复人工验收；这些仍归入干净 Windows R04-R14 发布候选验收矩阵。
+
+提交摘要：本次提交完成 P3 阶段 14 用户插队修复，重构云端百度授权为设备级绑定，客户端 KDF 改为设备级兼容存储，备份流水线按选择源独立打包上传并生成 job 级汇总索引，恢复保留文件夹结构，同时补齐缓存目录 UI、清理确认词中文提示、云端同步页和远端校对可视化口径说明。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 干净 Windows 必须真实验证两台设备或两个临时 Device Token 授权同一百度账号，确认旧设备 token 不被新设备覆盖，且两个设备各自能解密和上传。
+- 干净 Windows 必须真实创建含单文件和文件夹的 job，确认生成多个 archive、`job.index.json` 汇总多个 archives，恢复文件夹到手动目录时保留根目录和内部结构。
+- 干净 Windows 必须复核远端校对口径与百度网盘实际目录一致，并在“云端同步”页对刚完成实体回读云端 summary。
+- 待提升审批恢复后，需要补跑客户端全量 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>/.cache/pytest-basetemp-fixes` 和 `uv run python -m compileall src tests`，确认修复后的全量自动化结果。
 
 ### P3 阶段 14 打包发布与最终验收：主 UI 真实备份闭环修复
 

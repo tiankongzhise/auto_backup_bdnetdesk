@@ -7,21 +7,22 @@ import (
 )
 
 type memoryStore struct {
-	mu                 sync.Mutex
-	devices            map[string]Device
-	tokenHashes        map[string]string
-	entities           map[string]memoryEntity
-	revisions          map[string]memoryRevision
-	eventIDs           map[string]string
-	contents           map[string]ContentObject
-	archives           map[string]ArchiveObject
-	baiduSessions      map[string]BaiduAuthSession
-	baiduSessionStates map[string]string
-	baiduAccounts      map[string]BaiduAccount
-	baiduAccountByUID  map[string]string
-	baiduBindings      map[string]map[string]bool
-	baiduLeases        map[string]BaiduRefreshLease
-	err                error
+	mu                  sync.Mutex
+	devices             map[string]Device
+	tokenHashes         map[string]string
+	entities            map[string]memoryEntity
+	revisions           map[string]memoryRevision
+	eventIDs            map[string]string
+	contents            map[string]ContentObject
+	archives            map[string]ArchiveObject
+	baiduSessions       map[string]BaiduAuthSession
+	baiduSessionStates  map[string]string
+	baiduAccounts       map[string]BaiduAccount
+	baiduAccountByUID   map[string]string
+	baiduAuthorizations map[string]map[string]BaiduAccount
+	baiduBindings       map[string]map[string]bool
+	baiduLeases         map[string]BaiduRefreshLease
+	err                 error
 }
 
 type memoryEntity struct {
@@ -46,19 +47,20 @@ type memoryRevision struct {
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		devices:            map[string]Device{},
-		tokenHashes:        map[string]string{},
-		entities:           map[string]memoryEntity{},
-		revisions:          map[string]memoryRevision{},
-		eventIDs:           map[string]string{},
-		contents:           map[string]ContentObject{},
-		archives:           map[string]ArchiveObject{},
-		baiduSessions:      map[string]BaiduAuthSession{},
-		baiduSessionStates: map[string]string{},
-		baiduAccounts:      map[string]BaiduAccount{},
-		baiduAccountByUID:  map[string]string{},
-		baiduBindings:      map[string]map[string]bool{},
-		baiduLeases:        map[string]BaiduRefreshLease{},
+		devices:             map[string]Device{},
+		tokenHashes:         map[string]string{},
+		entities:            map[string]memoryEntity{},
+		revisions:           map[string]memoryRevision{},
+		eventIDs:            map[string]string{},
+		contents:            map[string]ContentObject{},
+		archives:            map[string]ArchiveObject{},
+		baiduSessions:       map[string]BaiduAuthSession{},
+		baiduSessionStates:  map[string]string{},
+		baiduAccounts:       map[string]BaiduAccount{},
+		baiduAccountByUID:   map[string]string{},
+		baiduAuthorizations: map[string]map[string]BaiduAccount{},
+		baiduBindings:       map[string]map[string]bool{},
+		baiduLeases:         map[string]BaiduRefreshLease{},
 	}
 }
 
@@ -360,16 +362,35 @@ func (s *memoryStore) CompleteBaiduAuthSession(_ context.Context, session BaiduA
 	if ok {
 		existing := s.baiduAccounts[existingAccountID]
 		account.AccountID = existing.AccountID
-		account.TokenVersion = existing.TokenVersion + 1
 	} else {
 		s.baiduAccountByUID[account.BaiduUID] = account.AccountID
 	}
-	account.Selected = true
-	s.baiduAccounts[account.AccountID] = account
+
+	baseAccount := account
+	baseAccount.TokenExpiresAt = time.Time{}
+	baseAccount.EncryptionMethod = ""
+	baseAccount.EncryptedToken = nil
+	baseAccount.PrivateKeyHint = ""
+	baseAccount.TokenVersion = 0
+	baseAccount.LastVerifiedAt = nil
+	baseAccount.LastVerifyStatus = "unknown"
+	baseAccount.Selected = false
+	s.baiduAccounts[account.AccountID] = baseAccount
+
 	if s.baiduBindings[account.AccountID] == nil {
 		s.baiduBindings[account.AccountID] = map[string]bool{}
 	}
 	s.baiduBindings[account.AccountID][deviceID] = true
+	if s.baiduAuthorizations[account.AccountID] == nil {
+		s.baiduAuthorizations[account.AccountID] = map[string]BaiduAccount{}
+	}
+	if existingAuth, ok := s.baiduAuthorizations[account.AccountID][deviceID]; ok {
+		account.TokenVersion = existingAuth.TokenVersion + 1
+	} else {
+		account.TokenVersion = 1
+	}
+	account.Selected = true
+	s.baiduAuthorizations[account.AccountID][deviceID] = account
 
 	now := time.Now().UTC()
 	session.Status = BaiduAuthStatusCompleted
@@ -390,8 +411,8 @@ func (s *memoryStore) ListBaiduAccounts(_ context.Context, deviceID string) ([]B
 	}
 	accounts := make([]BaiduAccount, 0, len(s.baiduAccounts))
 	for _, account := range s.baiduAccounts {
-		account.Selected = s.baiduBindings[account.AccountID][deviceID]
-		accounts = append(accounts, account)
+		deviceAccount, _ := s.baiduAccountForDeviceLocked(account.AccountID, deviceID, false)
+		accounts = append(accounts, deviceAccount)
 	}
 	return accounts, nil
 }
@@ -403,16 +424,15 @@ func (s *memoryStore) SelectBaiduAccount(_ context.Context, accountID string, de
 	if s.err != nil {
 		return BaiduAccount{}, false, s.err
 	}
-	account, ok := s.baiduAccounts[accountID]
-	if !ok {
+	if _, ok := s.baiduAccounts[accountID]; !ok {
 		return BaiduAccount{}, false, nil
 	}
 	if s.baiduBindings[accountID] == nil {
 		s.baiduBindings[accountID] = map[string]bool{}
 	}
 	s.baiduBindings[accountID][deviceID] = true
-	account.Selected = true
-	return account, true, nil
+	selected, _ := s.baiduAccountForDeviceLocked(accountID, deviceID, false)
+	return selected, true, nil
 }
 
 func (s *memoryStore) GetBaiduAccount(_ context.Context, accountID string, deviceID string) (BaiduAccount, bool, error) {
@@ -422,12 +442,8 @@ func (s *memoryStore) GetBaiduAccount(_ context.Context, accountID string, devic
 	if s.err != nil {
 		return BaiduAccount{}, false, s.err
 	}
-	account, ok := s.baiduAccounts[accountID]
-	if !ok {
-		return BaiduAccount{}, false, nil
-	}
-	account.Selected = s.baiduBindings[accountID][deviceID]
-	return account, true, nil
+	account, ok := s.baiduAccountForDeviceLocked(accountID, deviceID, true)
+	return account, ok, nil
 }
 
 func (s *memoryStore) UpdateBaiduAccountToken(_ context.Context, accountID string, deviceID string, expectedVersion int64, update BaiduAccount) (BaiduAccount, bool, error) {
@@ -437,12 +453,11 @@ func (s *memoryStore) UpdateBaiduAccountToken(_ context.Context, accountID strin
 	if s.err != nil {
 		return BaiduAccount{}, false, s.err
 	}
-	current, ok := s.baiduAccounts[accountID]
+	current, ok := s.baiduAccountForDeviceLocked(accountID, deviceID, true)
 	if !ok {
 		return BaiduAccount{}, false, nil
 	}
 	if current.TokenVersion != expectedVersion {
-		current.Selected = s.baiduBindings[accountID][deviceID]
 		return current, false, nil
 	}
 	update.AccountID = current.AccountID
@@ -452,7 +467,7 @@ func (s *memoryStore) UpdateBaiduAccountToken(_ context.Context, accountID strin
 	update.Scope = current.Scope
 	update.TokenVersion = current.TokenVersion + 1
 	update.Selected = s.baiduBindings[accountID][deviceID]
-	s.baiduAccounts[accountID] = update
+	s.baiduAuthorizations[accountID][deviceID] = update
 	return update, true, nil
 }
 
@@ -463,11 +478,12 @@ func (s *memoryStore) AcquireBaiduRefreshLease(_ context.Context, accountID stri
 	if s.err != nil {
 		return BaiduRefreshLease{}, false, s.err
 	}
-	if _, ok := s.baiduAccounts[accountID]; !ok {
+	if _, ok := s.baiduAccountForDeviceLocked(accountID, deviceID, true); !ok {
 		return BaiduRefreshLease{}, false, nil
 	}
 	now := time.Now().UTC()
-	if existing, ok := s.baiduLeases[accountID]; ok && now.Before(existing.ExpiresAt) && existing.HolderDeviceID != deviceID {
+	leaseKey := baiduLeaseKey(accountID, deviceID)
+	if existing, ok := s.baiduLeases[leaseKey]; ok && now.Before(existing.ExpiresAt) && existing.HolderDeviceID != deviceID {
 		return existing, false, nil
 	}
 	lease := BaiduRefreshLease{
@@ -476,6 +492,35 @@ func (s *memoryStore) AcquireBaiduRefreshLease(_ context.Context, accountID stri
 		HolderDeviceID: deviceID,
 		ExpiresAt:      now.Add(time.Duration(durationSeconds) * time.Second),
 	}
-	s.baiduLeases[accountID] = lease
+	s.baiduLeases[leaseKey] = lease
 	return lease, true, nil
+}
+
+func (s *memoryStore) baiduAccountForDeviceLocked(accountID string, deviceID string, requireAuthorization bool) (BaiduAccount, bool) {
+	account, ok := s.baiduAccounts[accountID]
+	if !ok {
+		return BaiduAccount{}, false
+	}
+	if deviceAccounts := s.baiduAuthorizations[accountID]; deviceAccounts != nil {
+		if authorized, ok := deviceAccounts[deviceID]; ok && authorized.TokenVersion > 0 && len(authorized.EncryptedToken) > 0 {
+			authorized.Selected = s.baiduBindings[accountID][deviceID]
+			return authorized, true
+		}
+	}
+	if requireAuthorization {
+		return BaiduAccount{}, false
+	}
+	account.Selected = s.baiduBindings[accountID][deviceID]
+	account.TokenExpiresAt = time.Time{}
+	account.EncryptionMethod = ""
+	account.EncryptedToken = nil
+	account.PrivateKeyHint = ""
+	account.TokenVersion = 0
+	account.LastVerifiedAt = nil
+	account.LastVerifyStatus = "unknown"
+	return account, true
+}
+
+func baiduLeaseKey(accountID string, deviceID string) string {
+	return accountID + "\x00" + deviceID
 }

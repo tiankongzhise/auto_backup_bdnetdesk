@@ -97,7 +97,7 @@ def _run(args: argparse.Namespace) -> int:
     device_id = credentials.device_id or "environment"
     job_id = args.job_id.strip() or _create_job(store, device_id=device_id, job_name=args.job_name, sources=source_paths)
 
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
         account_id = decrypted.encrypted.account_id
         with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
@@ -128,6 +128,7 @@ def _run(args: argparse.Namespace) -> int:
             verified = _verify_cloud_summaries(cloud, remaining_before_final, final_sync, limit=args.verify_limit)
             completed_summary_verified = _verify_completed_job_summary(cloud, store, job_id)
             conflict = _probe_same_path_conflict(baidu, result.upload.remote_archive_path, result.archive.archive_path, args.part_size_mib * 1024 * 1024) if result.upload and not args.skip_conflict_probe else ConflictProbeResult(attempted=False, detected=False)
+            expected_remote_object_count = _expected_remote_object_count(result)
             cleanup = _cleanup_remote_objects(store, baidu, job_id=job_id, keep_remote=args.keep_remote)
             _validate_real_result(
                 result=result,
@@ -135,6 +136,7 @@ def _run(args: argparse.Namespace) -> int:
                 completed_summary_verified=completed_summary_verified,
                 conflict=conflict,
                 cleanup=cleanup,
+                expected_remote_object_count=expected_remote_object_count,
                 keep_remote=args.keep_remote,
                 skip_conflict_probe=args.skip_conflict_probe,
             )
@@ -154,6 +156,7 @@ def _run(args: argparse.Namespace) -> int:
         _print(f"cloud_candidates_checked: {result.cloud_candidates.checked_content_count}")
         _print(f"cloud_duplicate_candidates: {result.cloud_candidates.cloud_duplicate_candidate_count}")
         _print(f"cloud_missing: {result.cloud_candidates.missing_count}")
+    _print(f"archive_count: {len(result.archives)}")
     _print(f"archive_id: {result.archive.archive_id}")
     _print(f"archive_sha256: {result.archive.archive_sha256}")
     _print(f"archive_size: {result.archive.archive_size}")
@@ -166,6 +169,8 @@ def _run(args: argparse.Namespace) -> int:
         _print(f"cache_cleanup_dry_run: {str(result.cache_cleanup.dry_run).lower()}")
     _print(f"manifest_sha256: {result.archive.manifest_sha256}")
     if result.upload is not None:
+        _print(f"upload_count: {len(result.uploads)}")
+        _print(f"uploaded_part_total_count: {sum(len(upload.uploaded_partseqs) for upload in result.uploads)}")
         _print(f"upload_session_id: {result.upload.upload_session_id}")
         _print(f"uploaded_part_count: {len(result.upload.uploaded_partseqs)}")
         _print(f"archive_fs_id: {result.upload.created.fs_id}")
@@ -331,15 +336,16 @@ def _validate_real_result(
     completed_summary_verified: bool,
     conflict: ConflictProbeResult,
     cleanup: CleanupResult,
+    expected_remote_object_count: int,
     keep_remote: bool,
     skip_conflict_probe: bool,
 ) -> None:
     if not getattr(result, "completed", False):
         raise ValueError("real pipeline did not complete")
-    upload = getattr(result, "upload", None)
-    if upload is None:
+    uploads = tuple(getattr(result, "uploads", ()) or ())
+    if not uploads:
         raise ValueError("real pipeline upload is missing")
-    if len(upload.uploaded_partseqs) < 2:
+    if sum(len(upload.uploaded_partseqs) for upload in uploads) < 2:
         raise ValueError("real pipeline multipart upload did not cross part boundary")
     sync = getattr(result, "sync", None)
     if sync is None or sync.conflicts or sync.rejected or sync.retryable:
@@ -347,7 +353,7 @@ def _validate_real_result(
     reconcile = getattr(result, "reconcile", None)
     if reconcile is None or reconcile.has_differences:
         raise ValueError("real pipeline reconcile reported differences")
-    if reconcile.status_counts.get("consistent", 0) != 3:
+    if reconcile.status_counts.get("consistent", 0) != expected_remote_object_count:
         raise ValueError("real pipeline reconcile did not confirm all remote objects")
     if final_sync.conflicts or final_sync.rejected or final_sync.retryable:
         raise ValueError("real pipeline final sync reported failures")
@@ -355,10 +361,15 @@ def _validate_real_result(
         raise ValueError("completed job cloud summary mismatch")
     if not skip_conflict_probe and not conflict.detected:
         raise ValueError("same-path conflict probe did not detect conflict")
-    if cleanup.object_count != 3:
+    if cleanup.object_count != expected_remote_object_count:
         raise ValueError("remote cleanup did not find expected objects")
     if not keep_remote and cleanup.delete_errno != 0:
         raise ValueError("remote cleanup did not delete expected objects")
+
+
+def _expected_remote_object_count(result: object) -> int:
+    uploads = tuple(getattr(result, "uploads", ()) or ())
+    return len(uploads) * 2 + (1 if uploads else 0)
 
 
 def _probe_same_path_conflict(baidu: BaiduNetdiskClient, remote_path: str, archive_path: Path, part_size: int) -> ConflictProbeResult:

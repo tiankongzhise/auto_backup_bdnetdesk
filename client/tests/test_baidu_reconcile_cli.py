@@ -29,9 +29,11 @@ class FakeToken:
 
 
 class FakeCloudClient:
-    def __init__(self, base_url: str, device_token: str, *, timeout: float = 20.0) -> None:
+    def __init__(self, base_url: str, device_token: str, *, timeout: float = 20.0, device_id: str = "") -> None:
         del base_url, timeout
         self.device_token = device_token
+        self.device_id = device_id
+        assert device_id == "device-secret"
 
     def __enter__(self):
         return self

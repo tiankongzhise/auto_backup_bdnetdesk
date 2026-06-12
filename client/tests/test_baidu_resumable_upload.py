@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from auto_backup_client.baidu.upload import (
     DEFAULT_PART_SIZE,
     BaiduNetdiskError,
     CreateFileResult,
+    FileManagerResult,
     LocateUploadResult,
     PrecreateResult,
     UploadPartResult,
@@ -29,6 +31,8 @@ class FakeBaiduClient:
         self.precreate_uploadids: list[str] = []
         self.uploaded_partseqs: list[int] = []
         self.complete_upload_paths: list[str] = []
+        self.deleted_paths: list[str] = []
+        self.uploaded_documents: dict[str, bytes] = {}
 
     def precreate(self, **kwargs):
         uploadid = kwargs.get("uploadid", "")
@@ -63,8 +67,9 @@ class FakeBaiduClient:
         )
 
     def upload_file_complete(self, *, local_path, remote_path: str, part_size: int, rtype: int):
-        del local_path, part_size, rtype
+        del part_size, rtype
         self.complete_upload_paths.append(remote_path)
+        self.uploaded_documents[remote_path] = local_path.read_bytes()
         return SimpleNamespace(
             created=CreateFileResult(
                 fs_id=200 + len(self.complete_upload_paths),
@@ -73,6 +78,13 @@ class FakeBaiduClient:
                 server_filename=remote_path.rsplit("/", 1)[-1],
             )
         )
+
+    def delete_files(self, remote_paths, *, async_mode: int = 0):
+        assert async_mode == 0
+        for path in remote_paths:
+            self.deleted_paths.append(path)
+            self.uploaded_documents.pop(path, None)
+        return FileManagerResult(errno=0, info=tuple())
 
 
 class FailAfterPrecreateBaiduClient(FakeBaiduClient):
@@ -296,6 +308,44 @@ def test_resumable_upload_records_baidu_md5_for_metadata_objects(tmp_path) -> No
     assert rows["job_index"]["sha256"] == result.job_index.sha256
     assert rows["archive_meta"]["md5"] != hashlib.md5(result.archive_meta.bytes).hexdigest()
     assert rows["job_index"]["md5"] != hashlib.md5(result.job_index.bytes).hexdigest()
+
+
+def test_resumable_upload_job_index_summarizes_all_archives(tmp_path) -> None:
+    first_archive = tmp_path / "first.7z"
+    second_archive = tmp_path / "second.7z"
+    first_archive.write_bytes(b"first payload")
+    second_archive.write_bytes(b"second payload")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    baidu = FakeBaiduClient()
+    uploader = BaiduResumableUploader(store=store, baidu=baidu, updated_by_device_id="device-1")
+
+    first = uploader.upload(
+        ResumableArchiveInput(
+            local_path=first_archive,
+            job_id="job-1",
+            device_id="device-1",
+            account_id="account-1",
+            archive_seq=1,
+            job_created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        )
+    )
+    second = uploader.upload(
+        ResumableArchiveInput(
+            local_path=second_archive,
+            job_id="job-1",
+            device_id="device-1",
+            account_id="account-1",
+            archive_seq=2,
+            job_created_at=datetime(2026, 6, 6, tzinfo=timezone.utc),
+        )
+    )
+
+    assert baidu.deleted_paths == [first.remote_job_index_path]
+    index_data = json.loads(baidu.uploaded_documents[second.remote_job_index_path].decode("utf-8"))
+    assert [item["archive_id"] for item in index_data["archives"]] == [first.archive_id, second.archive_id]
+    assert [item["archive_seq"] for item in index_data["archives"]] == [1, 2]
+    assert second.job_index.data == index_data
 
 
 def test_resumable_upload_completed_session_returns_local_state_without_reupload(tmp_path) -> None:

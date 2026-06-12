@@ -149,6 +149,8 @@ class ArchivePackager:
         cache_root: str | Path,
         password: str,
         archive_seq: int = 1,
+        backup_source_id: str = "",
+        source_seq: int | None = None,
         now: str | None = None,
     ) -> ArchivePackageResult:
         cleaned_job_id = backup_job_id.strip()
@@ -161,15 +163,18 @@ class ArchivePackager:
 
         actual_now = now or utc_now_iso()
         context = _load_job_manifest_context(self.store, cleaned_job_id)
+        context = _filter_manifest_context(context, backup_source_id=backup_source_id, source_seq=source_seq)
         manifest_id = _manifest_id(cleaned_job_id, archive_seq)
         archive_id = _archive_id(cleaned_job_id, archive_seq, manifest_id)
         archive_type = _archive_type(context.file_references)
+        external_references = _payload_archive_references(self.store, cleaned_job_id)
         manifest_data = _build_manifest_data(
             context,
             device_id=self.device_id,
             manifest_id=manifest_id,
             archive_id=archive_id,
             created_at=actual_now,
+            external_references=external_references,
         )
         _reject_secret_keys(manifest_data)
         manifest_text = stable_json_dumps(manifest_data)
@@ -276,6 +281,7 @@ class ArchivePackager:
             result,
             context=context,
             payload_members=payload_members,
+            external_references=external_references,
             now=actual_now,
         )
         return result
@@ -319,6 +325,7 @@ class ArchivePackager:
         *,
         context: "_ManifestContext",
         payload_members: Mapping[str, str],
+        external_references: Mapping[str, Mapping[str, str]],
         now: str,
     ) -> None:
         with self.store.transaction() as conn:
@@ -392,6 +399,7 @@ class ArchivePackager:
                 member_path = payload_members.get(content_id, "")
                 if not member_path and str(ref["reference_role"]) == "local_duplicate":
                     member_path = _payload_member_path(content_id)
+                external = external_references.get(content_id, {})
                 if str(ref["reference_role"]) in {"local_duplicate", "cloud_duplicate_candidate"}:
                     self.store.put_archive_member(
                         conn,
@@ -405,8 +413,8 @@ class ArchivePackager:
                             content_id=content_id,
                             file_sha256=str(ref["file_sha256"]),
                             size_bytes=int(ref["size_bytes"]),
-                            referenced_archive_id=str(ref.get("archive_id") or ""),
-                            referenced_archive_remote_path="",
+                            referenced_archive_id=str(external.get("archive_id", "")),
+                            referenced_archive_remote_path=str(external.get("remote_path", "")),
                             created_at=now,
                         ),
                     )
@@ -533,6 +541,67 @@ def _load_job_manifest_context(store: SQLiteClientStore, backup_job_id: str) -> 
     )
 
 
+def _filter_manifest_context(
+    context: _ManifestContext,
+    *,
+    backup_source_id: str = "",
+    source_seq: int | None = None,
+) -> _ManifestContext:
+    cleaned_source_id = backup_source_id.strip()
+    if not cleaned_source_id and source_seq is None:
+        return context
+    if cleaned_source_id:
+        sources = tuple(source for source in context.sources if str(source["backup_source_id"]) == cleaned_source_id)
+    else:
+        sources = tuple(source for source in context.sources if int(source["source_seq"]) == int(source_seq or 0))
+    if len(sources) != 1:
+        raise ArchivePackagingError("backup source not found for archive packaging")
+    selected_source_id = str(sources[0]["backup_source_id"])
+    file_references = tuple(ref for ref in context.file_references if str(ref["backup_source_id"]) == selected_source_id)
+    folders = tuple(folder for folder in context.folders if str(folder["backup_source_id"]) == selected_source_id)
+    if not file_references and not folders:
+        raise ArchivePackagingError("backup source has no indexed files or folders to package")
+    return _ManifestContext(
+        job=context.job,
+        sources=sources,
+        file_references=file_references,
+        folders=folders,
+    )
+
+
+def _payload_archive_references(store: SQLiteClientStore, backup_job_id: str) -> dict[str, dict[str, str]]:
+    with store.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                am.content_id,
+                am.archive_id,
+                am.member_path,
+                ro.remote_path
+            FROM archive_members am
+            LEFT JOIN remote_objects ro
+                ON ro.archive_id = am.archive_id
+               AND ro.object_type = 'archive'
+            WHERE am.job_id = ?
+              AND am.member_type = 'payload'
+            ORDER BY am.created_at DESC, am.archive_member_id
+            """,
+            (backup_job_id,),
+        ).fetchall()
+    references: dict[str, dict[str, str]] = {}
+    for row in rows:
+        content_id = str(row["content_id"])
+        references.setdefault(
+            content_id,
+            {
+                "archive_id": str(row["archive_id"] or ""),
+                "member_path": str(row["member_path"] or ""),
+                "remote_path": str(row["remote_path"] or ""),
+            },
+        )
+    return references
+
+
 def _build_manifest_data(
     context: _ManifestContext,
     *,
@@ -540,7 +609,9 @@ def _build_manifest_data(
     manifest_id: str,
     archive_id: str,
     created_at: str,
+    external_references: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
+    external_references = external_references or {}
     items: list[dict[str, Any]] = []
     for folder in context.folders:
         items.append(
@@ -565,6 +636,7 @@ def _build_manifest_data(
         content_id = str(ref["content_id"])
         is_payload = _is_payload_reference(ref)
         member_path = _payload_member_path(content_id) if is_payload or str(ref["reference_role"]) == "local_duplicate" else ""
+        external = external_references.get(content_id, {})
         items.append(
             {
                 "item_id": str(ref["file_item_id"]),
@@ -590,8 +662,8 @@ def _build_manifest_data(
                 "duplicate_of_content_id": content_id if not is_payload else "",
                 "archive_id": archive_id,
                 "archive_member_path": member_path,
-                "referenced_archive_id": str(ref.get("archive_id") or "") if not is_payload else "",
-                "referenced_archive_remote_path": "",
+                "referenced_archive_id": str(external.get("archive_id", "")) if not is_payload else "",
+                "referenced_archive_remote_path": str(external.get("remote_path", "")) if not is_payload else "",
             }
         )
     return {

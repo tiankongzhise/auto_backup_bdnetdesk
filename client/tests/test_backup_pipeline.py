@@ -13,6 +13,7 @@ from auto_backup_client.baidu.upload import (
     BaiduNetdiskError,
     BaiduQuota,
     CreateFileResult,
+    FileManagerResult,
     LocateUploadResult,
     PrecreateResult,
     UploadPartResult,
@@ -73,6 +74,13 @@ class FakeBaiduForPipeline:
         self.created_sizes[remote_path] = int(local_path.stat().st_size)
         return SimpleNamespace(created=result)
 
+    def delete_files(self, remote_paths, *, async_mode: int = 0):
+        assert async_mode == 0
+        for path in remote_paths:
+            self.created_files.pop(path, None)
+            self.created_sizes.pop(path, None)
+        return FileManagerResult(errno=0, info=tuple())
+
     def list_all(self, *, remote_path: str, start: int = 0, limit: int = 1000, recursion: bool = True, web: bool = False):
         del remote_path, start, limit, recursion, web
         return BaiduFileListResult(
@@ -132,9 +140,12 @@ def test_pipeline_runs_local_scan_dedupe_and_archive_without_marking_completed(t
     assert result.final_stage == "archive"
     assert result.completed is False
     assert result.scan.file_count == 2
-    assert result.archive.archive_type == "mixed"
-    assert result.archive.payload_member_count == 1
+    assert len(result.archives) == 2
+    assert [archive.archive_type for archive in result.archives] == ["payload", "manifest_only"]
+    assert sum(archive.payload_member_count for archive in result.archives) == 1
+    assert sum(archive.reference_member_count for archive in result.archives) == 1
     assert result.upload is None
+    assert result.uploads == ()
     assert result.sync is None
     assert result.reconcile is None
 
@@ -142,6 +153,35 @@ def test_pipeline_runs_local_scan_dedupe_and_archive_without_marking_completed(t
     assert job is not None
     assert job["status"] == "running"
     assert store.list_archives(job_id)[0]["remote_path"] == ""
+
+
+def test_pipeline_packages_each_selected_source_as_separate_archive(tmp_path) -> None:
+    first = tmp_path / "first.txt"
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    nested = folder / "nested" / "image.jpg"
+    nested.parent.mkdir()
+    first.write_text("one", encoding="utf-8")
+    nested.write_text("two", encoding="utf-8")
+    store, job_id = _job(store_path=tmp_path / "backup_state.sqlite3", sources=[first, folder])
+
+    result = BackupPipeline(store=store, device_id="device-1").run_job(
+        job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password=TEST_ARCHIVE_PASSWORD,
+            mark_completed=False,
+            now="2026-06-08T09:05:00Z",
+        ),
+    )
+
+    archives = store.list_archives(job_id)
+    references = store.list_content_references(job_id)
+
+    assert len(result.archives) == 2
+    assert [archive.archive_seq for archive in result.archives] == [1, 2]
+    assert len(archives) == 2
+    assert {row["archive_id"] for row in references} == {archive.archive_id for archive in result.archives}
 
 
 def test_pipeline_uploads_syncs_reconciles_and_marks_job_completed(tmp_path) -> None:
@@ -309,7 +349,7 @@ def _job(*, store_path, sources) -> tuple[SQLiteClientStore, str]:
     store = SQLiteClientStore(store_path)
     store.migrate()
     created = BackupJobManager(store, device_id="device-1").create_job(
-        [BackupSourceInput(str(source), "file") for source in sources],
+        [BackupSourceInput(str(source), "directory" if source.is_dir() else "file") for source in sources],
         now="2026-06-08T09:00:00Z",
     )
     return store, created.job.backup_job_id

@@ -57,7 +57,7 @@ from auto_backup_client.settings import ClientSettings
 from auto_backup_client.source_mapping import SourceMappingQuery, SourceMappingReport, path_digest, short_digest
 from auto_backup_client.source_cleanup import CLEANUP_CONFIRM_TEXT, PERMANENT_DELETE_CONFIRM_TEXT, SourceCleanupService
 from auto_backup_client.restore_flow import BaiduArchiveDownloader, RestoreService
-from auto_backup_client.sqlite_store import SQLiteClientStore
+from auto_backup_client.sqlite_store import SYNC_ENTITY_TABLES, SQLiteClientStore
 from auto_backup_client.ui.baidu_settings import BaiduSettingsPage, BaiduSettingsPageConfig
 
 
@@ -116,6 +116,7 @@ class TaskWorker(QRunnable, Generic[T]):
 class BackupTaskPage(QWidget):
     status_changed = Signal(str)
     backup_finished = Signal(str)
+    cache_root_changed = Signal(str)
 
     def __init__(
         self,
@@ -215,6 +216,14 @@ class BackupTaskPage(QWidget):
         self.authorization_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.authorization_password_input.setPlaceholderText("留空则复用归档密码")
         run_form.addRow("授权密码", self.authorization_password_input)
+        self.cache_root_input = QLineEdit(self._config.cache_root)
+        self.cache_root_input.setPlaceholderText("留空使用启动配置中的缓存目录")
+        self.choose_cache_root_button = QPushButton("选择")
+        self.choose_cache_root_button.clicked.connect(self.choose_cache_root)
+        cache_row = QHBoxLayout()
+        cache_row.addWidget(self.cache_root_input, stretch=1)
+        cache_row.addWidget(self.choose_cache_root_button)
+        run_form.addRow("缓存目录", cache_row)
         self.cache_budget_checkbox = QCheckBox("执行前检查 40GiB 缓存预算")
         self.cache_budget_checkbox.setChecked(True)
         run_form.addRow("", self.cache_budget_checkbox)
@@ -248,6 +257,12 @@ class BackupTaskPage(QWidget):
         self.jobs_table.itemSelectionChanged.connect(self._refresh_job_buttons)
         layout.addWidget(self.jobs_table)
         return group
+
+    @Slot()
+    def choose_cache_root(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择临时缓存目录")
+        if directory:
+            self.cache_root_input.setText(directory)
 
     @Slot()
     def choose_files(self) -> None:
@@ -347,9 +362,19 @@ class BackupTaskPage(QWidget):
         if not archive_password:
             self._warn("请输入归档密码。")
             return
-        if not self._config.cloud_api_base_url or not self._config.device_token or not self._config.cache_root:
+        cache_root = self.cache_root_input.text().strip() or self._config.cache_root
+        if not self._config.cloud_api_base_url or not self._config.device_token or not cache_root:
             self._warn("缺少云端连接、设备凭据或缓存目录配置。")
             return
+        self._config = BackupTaskPageConfig(
+            cloud_api_base_url=self._config.cloud_api_base_url,
+            device_token=self._config.device_token,
+            device_id=self._config.device_id,
+            cache_root=cache_root,
+            sync_batch_size=self._config.sync_batch_size,
+            max_sync_batches=self._config.max_sync_batches,
+        )
+        self.cache_root_changed.emit(cache_root)
         enforce_cache_budget = self.cache_budget_checkbox.isChecked()
         self.archive_password_input.clear()
         self.authorization_password_input.clear()
@@ -378,8 +403,13 @@ class BackupTaskPage(QWidget):
         authorization_password: str,
         enforce_cache_budget: bool,
     ) -> BackupPipelineResult:
-        with BaiduCloudClient(self._config.cloud_api_base_url, self._config.device_token, timeout=30.0) as cloud:
-            workflow = BaiduAuthWorkflow(cloud)
+        with BaiduCloudClient(
+            self._config.cloud_api_base_url,
+            self._config.device_token,
+            timeout=30.0,
+            device_id=self._config.device_id or self._manager.device_id,
+        ) as cloud:
+            workflow = BaiduAuthWorkflow(cloud, device_id=self._config.device_id or self._manager.device_id)
             account_id = _selected_account_id_for_ui(workflow)
             decrypted = workflow.decrypt_password_token(account_id, authorization_password=authorization_password)
             actual_account_id = decrypted.encrypted.account_id or account_id
@@ -414,8 +444,10 @@ class BackupTaskPage(QWidget):
         self._select_job(result.backup_job_id)
         status = "已完成" if result.completed else f"停在阶段 {result.final_stage}"
         uploaded_parts = len(result.upload.uploaded_partseqs) if result.upload is not None else 0
+        uploaded_parts = sum(len(upload.uploaded_partseqs) for upload in result.uploads) if result.uploads else uploaded_parts
+        archive_count = len(result.archives) if result.archives else 1
         self.status_changed.emit(
-            f"备份{status}：文件 {result.scan.file_count}，归档 {result.archive.archive_seq}，上传分片 {uploaded_parts}。"
+            f"备份{status}：文件 {result.scan.file_count}，归档 {archive_count}，上传分片 {uploaded_parts}。"
         )
         self.backup_finished.emit(result.backup_job_id)
 
@@ -677,14 +709,17 @@ class RemoteReconcilePage(QWidget):
         layout.addLayout(toolbar)
 
         self.summary_label = QLabel("尚未校对")
+        self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
         self.findings_table = QTableWidget(0, 8)
         self.findings_table.setHorizontalHeaderLabels(["状态", "对象", "建议", "动作", "选择", "写入", "远端路径", "本地对象"])
         self.findings_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.findings_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.findings_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.findings_table.verticalHeader().setVisible(False)
+        self.findings_table.setWordWrap(True)
+        self.findings_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.findings_table.horizontalHeader().setStretchLastSection(True)
+        self.findings_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.findings_table, stretch=1)
 
     @Slot()
@@ -694,8 +729,8 @@ class RemoteReconcilePage(QWidget):
             password = self.password_input.text()
             if not password:
                 raise ValueError("authorization password is required")
-            with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0) as cloud:
-                workflow = BaiduAuthWorkflow(cloud)
+            with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0, device_id=self._device_id) as cloud:
+                workflow = BaiduAuthWorkflow(cloud, device_id=self._device_id)
                 account_id = self.account_id_input.text().strip() or _selected_account_id_for_ui(workflow)
                 decrypted = workflow.decrypt_password_token(account_id, authorization_password=password)
             with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
@@ -743,6 +778,7 @@ class RemoteReconcilePage(QWidget):
         report = plan.report
         counts = ", ".join(f"{key}={value}" for key, value in sorted(report.status_counts.items()) if value)
         self.summary_label.setText(
+            f"对象：本地 SQLite remote_objects/upload_sessions 对比百度网盘 list/listall 返回结果；云端 PostgreSQL 在云端同步页回读。"
             f"范围 {report.scope.scope_type} / 本地 {report.local_object_count} / 百度 {report.remote_object_count} / findings {len(report.findings)} / {counts or '无差异'}"
         )
         self.findings_table.setRowCount(len(plan.candidates))
@@ -758,7 +794,149 @@ class RemoteReconcilePage(QWidget):
                 short_digest(candidate.local_remote_object_id),
             ]
             for col, value in enumerate(values):
-                self.findings_table.setItem(row_index, col, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.findings_table.setItem(row_index, col, item)
+        self.findings_table.resizeRowsToContents()
+
+    def _warn(self, message: str) -> None:
+        self.status_changed.emit(message)
+        QMessageBox.warning(self, "提示", message)
+
+
+class CloudSyncPage(QWidget):
+    status_changed = Signal(str)
+
+    def __init__(
+        self,
+        store: SQLiteClientStore,
+        *,
+        cloud_api_base_url: str,
+        device_token: str,
+        device_id: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._store = store
+        self._cloud_api_base_url = cloud_api_base_url
+        self._device_token = device_token
+        self._device_id = device_id or "current-device"
+        self._build_ui()
+        self.refresh_local_status()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("云端同步")
+        title.setObjectName("pageTitle")
+        layout.addWidget(title)
+
+        toolbar = QHBoxLayout()
+        self.entity_id_input = QLineEdit()
+        self.entity_id_input.setPlaceholderText("输入 entity_id 回读云端摘要")
+        self.refresh_button = QPushButton("刷新本地状态")
+        self.refresh_button.clicked.connect(self.refresh_local_status)
+        self.query_button = QPushButton("查询云端摘要")
+        self.query_button.clicked.connect(self.query_cloud_summary)
+        toolbar.addWidget(self.entity_id_input, stretch=1)
+        toolbar.addWidget(self.refresh_button)
+        toolbar.addWidget(self.query_button)
+        layout.addLayout(toolbar)
+
+        self.summary_label = QLabel("尚未刷新")
+        self.summary_label.setWordWrap(True)
+        layout.addWidget(self.summary_label)
+
+        self.status_table = QTableWidget(0, 3)
+        self.status_table.setHorizontalHeaderLabels(["表", "同步状态", "数量"])
+        self.status_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.status_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.status_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.status_table, stretch=1)
+
+        self.recent_table = QTableWidget(0, 5)
+        self.recent_table.setHorizontalHeaderLabels(["状态", "类型", "实体", "版本", "错误"])
+        self.recent_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.recent_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.recent_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.recent_table.setWordWrap(True)
+        self.recent_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.recent_table, stretch=1)
+
+        self.cloud_summary_table = QTableWidget(0, 2)
+        self.cloud_summary_table.setHorizontalHeaderLabels(["字段", "值"])
+        self.cloud_summary_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.cloud_summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.cloud_summary_table, stretch=1)
+
+    @Slot()
+    def refresh_local_status(self) -> None:
+        try:
+            outbox_counts, business_counts, recent = _cloud_sync_local_status(self._store)
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        pending = outbox_counts.get("pending", 0) + outbox_counts.get("retryable", 0) + outbox_counts.get("syncing", 0)
+        self.summary_label.setText(
+            f"sync_outbox 总数 {sum(outbox_counts.values())}，待同步/重试 {pending}，冲突 {outbox_counts.get('sync_conflict', 0)}，失败 {outbox_counts.get('failed_terminal', 0)}。"
+        )
+        rows = [("sync_outbox", status, count) for status, count in sorted(outbox_counts.items())]
+        rows.extend((table, status, count) for table, status, count in business_counts)
+        self.status_table.setRowCount(len(rows))
+        for row_index, (table, status, count) in enumerate(rows):
+            for col, value in enumerate((table, status, str(count))):
+                self.status_table.setItem(row_index, col, QTableWidgetItem(value))
+        self.recent_table.setRowCount(len(recent))
+        for row_index, item in enumerate(recent):
+            values = [
+                str(item["status"]),
+                str(item["entity_type"]),
+                short_digest(str(item["entity_id"])),
+                short_digest(str(item["revision_id"])),
+                str(item["last_error"] or ""),
+            ]
+            for col, value in enumerate(values):
+                table_item = QTableWidgetItem(value)
+                table_item.setToolTip(str(item["last_error"] or value))
+                self.recent_table.setItem(row_index, col, table_item)
+        self.status_changed.emit("云端同步本地状态已刷新。")
+
+    @Slot()
+    def query_cloud_summary(self) -> None:
+        entity_id = self.entity_id_input.text().strip()
+        if not entity_id:
+            self._warn("请输入 entity_id。")
+            return
+        try:
+            with BaiduCloudClient(
+                self._cloud_api_base_url,
+                self._device_token,
+                timeout=30.0,
+                device_id=self._device_id,
+            ) as cloud:
+                summary = cloud.get_entity_summary(entity_id)
+        except Exception as exc:
+            self._warn(_safe_ui_error(exc))
+            return
+        rows = [
+            ("entity_id", summary.entity_id),
+            ("entity_type", summary.entity_type),
+            ("data_version", str(summary.data_version)),
+            ("revision_id", short_digest(summary.revision_id)),
+            ("canonical_hash", short_digest(summary.canonical_record_sha256)),
+            ("updated_by_device_id", short_digest(summary.updated_by_device_id)),
+            ("deleted_at", summary.deleted_at.isoformat() if summary.deleted_at else ""),
+            ("recent_revisions", str(len(summary.recent_revisions))),
+        ]
+        for index, revision in enumerate(summary.recent_revisions[:5], start=1):
+            rows.append((f"recent_{index}", f"{revision.apply_status} v{revision.data_version} {short_digest(revision.revision_id)}"))
+        self.cloud_summary_table.setRowCount(len(rows))
+        for row_index, (key, value) in enumerate(rows):
+            self.cloud_summary_table.setItem(row_index, 0, QTableWidgetItem(key))
+            self.cloud_summary_table.setItem(row_index, 1, QTableWidgetItem(value))
+        self.status_changed.emit("云端 summary 已回读。")
 
     def _warn(self, message: str) -> None:
         self.status_changed.emit(message)
@@ -773,6 +951,14 @@ class SourceCleanupPage(QWidget):
         self._service = SourceCleanupService(store, device_id=device_id or "current-device")
         self._candidates = []
         self._build_ui()
+        self.refresh_candidates()
+
+    def set_cache_root(self, cache_root: str) -> None:
+        cleaned = cache_root.strip()
+        if not cleaned or cleaned == self._cache_root:
+            return
+        self._cache_root = cleaned
+        self._service = RestoreService(self._store, device_id=self._device_id, cache_root=cleaned)
         self.refresh_candidates()
 
     def _build_ui(self) -> None:
@@ -815,8 +1001,10 @@ class SourceCleanupPage(QWidget):
         self.operator_input = QLineEdit("local-user")
         self.confirm_input = QLineEdit()
         self.confirm_input.setPlaceholderText(CLEANUP_CONFIRM_TEXT)
+        self.confirm_input.setToolTip(f"执行清理需要输入：{CLEANUP_CONFIRM_TEXT}")
         self.permanent_confirm_input = QLineEdit()
         self.permanent_confirm_input.setPlaceholderText(PERMANENT_DELETE_CONFIRM_TEXT)
+        self.permanent_confirm_input.setToolTip(f"永久删除还需要输入：{PERMANENT_DELETE_CONFIRM_TEXT}")
         form.addRow("方式", self.method_combo)
         form.addRow("高级", self.advanced_cleanup_checkbox)
         form.addRow("隔离目录", quarantine_row)
@@ -920,7 +1108,7 @@ class SourceCleanupPage(QWidget):
                 dry_run=dry_run,
             )
         except Exception as exc:
-            self._warn(_safe_ui_error(exc))
+            self._warn(_cleanup_ui_error(exc))
             return
         if dry_run:
             self.status_changed.emit(f"清理预演完成：将处理 {result.requested_count} 条。")
@@ -1088,8 +1276,8 @@ class RestorePage(QWidget):
                 authorization_password = self.authorization_password_input.text()
                 if not authorization_password:
                     raise ValueError("authorization password is required for remote archive download")
-                with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0) as cloud:
-                    workflow = BaiduAuthWorkflow(cloud)
+                with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0, device_id=self._device_id) as cloud:
+                    workflow = BaiduAuthWorkflow(cloud, device_id=self._device_id)
                     account_id = self.account_id_input.text().strip() or _selected_account_id_for_ui(workflow)
                     decrypted = workflow.decrypt_password_token(account_id, authorization_password=authorization_password)
                 with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
@@ -1154,6 +1342,12 @@ class MainWindow(QMainWindow):
             )
         )
         self._source_mapping_page = SourceMappingPage(self._store)
+        self._cloud_sync_page = CloudSyncPage(
+            self._store,
+            cloud_api_base_url=config.cloud_api_base_url,
+            device_token=config.device_token,
+            device_id=config.device_id,
+        )
         self._reconcile_page = RemoteReconcilePage(
             self._store,
             cloud_api_base_url=config.cloud_api_base_url,
@@ -1182,6 +1376,7 @@ class MainWindow(QMainWindow):
         self.nav.addItem(QListWidgetItem("备份任务"))
         self.nav.addItem(QListWidgetItem("百度设置"))
         self.nav.addItem(QListWidgetItem("来源映射"))
+        self.nav.addItem(QListWidgetItem("云端同步"))
         self.nav.addItem(QListWidgetItem("远端校对"))
         self.nav.addItem(QListWidgetItem("原始数据清理"))
         self.nav.addItem(QListWidgetItem("恢复"))
@@ -1192,6 +1387,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._backup_page)
         self.stack.addWidget(self._baidu_page)
         self.stack.addWidget(self._source_mapping_page)
+        self.stack.addWidget(self._cloud_sync_page)
         self.stack.addWidget(self._reconcile_page)
         self.stack.addWidget(self._cleanup_page)
         self.stack.addWidget(self._restore_page)
@@ -1200,7 +1396,9 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("准备就绪")
         self._backup_page.status_changed.connect(self.status_label.setText)
         self._backup_page.backup_finished.connect(self._refresh_after_backup_finished)
+        self._backup_page.cache_root_changed.connect(self._restore_page.set_cache_root)
         self._source_mapping_page.status_changed.connect(self.status_label.setText)
+        self._cloud_sync_page.status_changed.connect(self.status_label.setText)
         self._reconcile_page.status_changed.connect(self.status_label.setText)
         self._cleanup_page.status_changed.connect(self.status_label.setText)
         self._restore_page.status_changed.connect(self.status_label.setText)
@@ -1232,6 +1430,7 @@ class MainWindow(QMainWindow):
     def _refresh_after_backup_finished(self, backup_job_id: str) -> None:
         self._source_mapping_page.job_id_input.setText(backup_job_id)
         self._source_mapping_page.refresh_mapping()
+        self._cloud_sync_page.refresh_local_status()
         self._cleanup_page.job_id_input.setText(backup_job_id)
         self._cleanup_page.refresh_candidates()
         self._restore_page.job_id_input.setText(backup_job_id)
@@ -1302,6 +1501,49 @@ def _safe_ui_error(exc: Exception) -> str:
     if "\\" in sanitized or ":/" in sanitized:
         return type(exc).__name__
     return sanitized
+
+
+def _cleanup_ui_error(exc: Exception) -> str:
+    text = str(exc)
+    if "cleanup confirmation phrase is required" in text:
+        return f"确认短语应为 {CLEANUP_CONFIRM_TEXT}"
+    if "permanent delete confirmation phrase is required" in text:
+        return f"永久删除确认短语应为 {PERMANENT_DELETE_CONFIRM_TEXT}"
+    return _safe_ui_error(exc)
+
+
+def _cloud_sync_local_status(store: SQLiteClientStore) -> tuple[dict[str, int], list[tuple[str, str, int]], list[dict[str, object]]]:
+    with store.connect() as conn:
+        outbox_rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM sync_outbox
+            GROUP BY status
+            ORDER BY status
+            """
+        ).fetchall()
+        outbox_counts = {str(row["status"]): int(row["count"]) for row in outbox_rows}
+        business_counts: list[tuple[str, str, int]] = []
+        for table in sorted(SYNC_ENTITY_TABLES.values()):
+            rows = conn.execute(
+                f"""
+                SELECT sync_status, COUNT(*) AS count
+                FROM {table}
+                GROUP BY sync_status
+                ORDER BY sync_status
+                """
+            ).fetchall()
+            business_counts.extend((table, str(row["sync_status"]), int(row["count"])) for row in rows)
+        recent = conn.execute(
+            """
+            SELECT status, entity_type, entity_id, revision_id, last_error, updated_at
+            FROM sync_outbox
+            WHERE status IN ('retryable', 'sync_conflict', 'failed_terminal')
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 20
+            """
+        ).fetchall()
+    return outbox_counts, business_counts, [dict(row) for row in recent]
 
 
 def _candidate_remote_path(candidate) -> str:  # type: ignore[no-untyped-def]

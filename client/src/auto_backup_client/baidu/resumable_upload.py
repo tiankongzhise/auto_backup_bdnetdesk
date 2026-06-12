@@ -221,13 +221,18 @@ class BaiduResumableUploader:
                 created_at=job_created_at,
             )
         )
-        job_index = build_job_index_document(
-            job_id=value.job_id,
-            device_id=value.device_id,
-            job_created_at=job_created_at,
-            root_dir=value.root_dir,
-            archives=(
-                JobIndexArchive(
+        try:
+            meta_created = self._upload_bytes_document(
+                document=archive_meta,
+                remote_path=remote_meta_path,
+                work_name=f"{archive_id}.meta.json",
+            )
+            job_index = self._build_job_index_document(
+                job_id=value.job_id,
+                device_id=value.device_id,
+                job_created_at=job_created_at,
+                root_dir=value.root_dir,
+                current=JobIndexArchive(
                     archive_id=archive_id,
                     archive_seq=value.archive_seq,
                     archive_sha256=archive_sha256,
@@ -238,14 +243,8 @@ class BaiduResumableUploader:
                     fs_id=created.fs_id,
                     meta_sha256=archive_meta.sha256,
                 ),
-            ),
-        )
-        try:
-            meta_created = self._upload_bytes_document(
-                document=archive_meta,
-                remote_path=remote_meta_path,
-                work_name=f"{archive_id}.meta.json",
             )
+            self._replace_existing_remote_document(remote_job_index_path)
             job_index_created = self._upload_bytes_document(
                 document=job_index,
                 remote_path=remote_job_index_path,
@@ -469,6 +468,57 @@ class BaiduResumableUploader:
                             deleted_at=utc_now_iso(),
                             last_accessed_at=utc_now_iso(),
                         )
+
+    def _replace_existing_remote_document(self, remote_path: str) -> None:
+        if self._store.get_remote_object_by_path(remote_path) is None:
+            return
+        result = self._baidu.delete_files((remote_path,), async_mode=0)
+        if result.errno != 0:
+            raise BaiduNetdiskError("baidu delete existing metadata failed", error_code=str(result.errno))
+
+    def _build_job_index_document(
+        self,
+        *,
+        job_id: str,
+        device_id: str,
+        job_created_at: datetime,
+        root_dir: str,
+        current: JobIndexArchive,
+    ) -> StableJsonDocument:
+        archives_by_id: dict[str, JobIndexArchive] = {}
+        for row in self._store.list_archives(job_id, limit=5000):
+            archive_id = str(row["archive_id"])
+            if archive_id == current.archive_id:
+                continue
+            remote = self._remote_paths_for_archive(job_id=job_id, archive_id=archive_id)
+            if not remote:
+                continue
+            archives_by_id[archive_id] = JobIndexArchive(
+                archive_id=archive_id,
+                archive_seq=int(row["archive_seq"] or 0),
+                archive_sha256=str(row["archive_sha256"] or ""),
+                archive_size=int(row["archive_size"] or 0),
+                archive_type=str(row["archive_type"] or ""),
+                remote_archive_path=str(remote.get("archive", {}).get("remote_path", "")),
+                remote_meta_path=str(remote.get("archive_meta", {}).get("remote_path", "")),
+                fs_id=int(remote.get("archive", {}).get("fs_id") or 0),
+                meta_sha256=str(remote.get("archive_meta", {}).get("sha256") or ""),
+            )
+        archives_by_id[current.archive_id] = current
+        return build_job_index_document(
+            job_id=job_id,
+            device_id=device_id,
+            job_created_at=job_created_at,
+            root_dir=root_dir,
+            archives=tuple(archives_by_id.values()),
+        )
+
+    def _remote_paths_for_archive(self, *, job_id: str, archive_id: str) -> dict[str, dict[str, Any]]:
+        return {
+            str(row.get("object_type", "")): row
+            for row in self._store.list_remote_objects_for_cleanup(job_id=job_id)
+            if str(row.get("archive_id", "")) == archive_id
+        }
 
     def _write_session_and_parts(self, session_payload: dict[str, Any], plan: FileBlockPlan) -> None:
         with self._store.transaction() as conn:

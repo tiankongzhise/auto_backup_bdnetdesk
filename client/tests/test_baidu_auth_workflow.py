@@ -51,6 +51,39 @@ def test_workflow_persists_kdf_material_and_restores_token_decryption_after_rest
     assert decrypted.kdf_record.salt == b"0123456789abcdef"
 
 
+def test_workflow_saves_kdf_material_per_device(tmp_path) -> None:
+    store_path = tmp_path / "baidu-kdf.json"
+    first_workflow = BaiduAuthWorkflow(
+        _FakeCloudForPasswordToken(),
+        kdf_store=PasswordKDFStore(store_path, allow_plaintext=True),
+        device_id="device-a",
+    )
+    second_workflow = BaiduAuthWorkflow(
+        _FakeCloudForPasswordToken(),
+        kdf_store=PasswordKDFStore(store_path, allow_plaintext=True),
+        device_id="device-b",
+    )
+
+    first = first_workflow.complete_password_session(
+        "session-a",
+        authorization_password="backup-password",
+        salt=b"aaaaaaaaaaaaaaaa",
+    )
+    second = second_workflow.complete_password_session(
+        "session-b",
+        authorization_password="backup-password",
+        salt=b"bbbbbbbbbbbbbbbb",
+    )
+
+    assert first.kdf_record.account_id == second.kdf_record.account_id == "bacc_1"
+    assert first.kdf_record.device_id == "device-a"
+    assert second.kdf_record.device_id == "device-b"
+
+    restarted_store = PasswordKDFStore(store_path, allow_plaintext=True)
+    assert restarted_store.require_record("bacc_1", device_id="device-a").salt == b"aaaaaaaaaaaaaaaa"
+    assert restarted_store.require_record("bacc_1", device_id="device-b").salt == b"bbbbbbbbbbbbbbbb"
+
+
 def test_session_status_label_uses_product_language() -> None:
     assert session_status_label("pending") == "等待用户授权"
     assert session_status_label("authorized") == "已收到百度回调，可完成加密入库"

@@ -34,6 +34,7 @@ class PasswordKDFRecord:
     time_cost: int
     memory_cost_kib: int
     parallelism: int
+    device_id: str = ""
     hash_len: int = 32
     encryption_method: str = BAIDU_ENCRYPTION_PASSWORD
     kdf: str = KDF_NAME
@@ -47,12 +48,14 @@ class PasswordKDFRecord:
         *,
         account_id: str,
         params: Argon2idParams,
+        device_id: str = "",
         token_version: int = 0,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> "PasswordKDFRecord":
         return cls(
             account_id=_clean_account_id(account_id),
+            device_id=_clean_optional_device_id(device_id),
             salt=params.salt,
             time_cost=params.time_cost,
             memory_cost_kib=params.memory_cost_kib,
@@ -66,6 +69,7 @@ class PasswordKDFRecord:
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> "PasswordKDFRecord":
         account_id = _clean_account_id(str(data.get("account_id", "")))
+        device_id = _clean_optional_device_id(str(data.get("device_id", "")))
         kdf = str(data.get("kdf", ""))
         encryption_method = str(data.get("encryption_method", ""))
         if kdf != KDF_NAME:
@@ -83,6 +87,7 @@ class PasswordKDFRecord:
         _validate_params(params)
         return cls(
             account_id=account_id,
+            device_id=device_id,
             salt=params.salt,
             time_cost=params.time_cost,
             memory_cost_kib=params.memory_cost_kib,
@@ -99,6 +104,7 @@ class PasswordKDFRecord:
         _validate_params(self.to_params())
         return {
             "account_id": self.account_id,
+            "device_id": self.device_id,
             "encryption_method": self.encryption_method,
             "kdf": self.kdf,
             "salt": _b64url_encode(self.salt),
@@ -136,25 +142,34 @@ class PasswordKDFStore:
         allow_plaintext = _truthy(source.get(ALLOW_PLAINTEXT_ENV, ""))
         return cls(path, allow_plaintext=allow_plaintext)
 
-    def get_record(self, account_id: str) -> PasswordKDFRecord | None:
+    def get_record(self, account_id: str, *, device_id: str = "") -> PasswordKDFRecord | None:
         records = self._load_records()
-        return records.get(_clean_account_id(account_id))
+        cleaned_account_id = _clean_account_id(account_id)
+        cleaned_device_id = _clean_optional_device_id(device_id)
+        if cleaned_device_id:
+            record = records.get(_record_key(cleaned_account_id, cleaned_device_id))
+            if record is not None:
+                return record
+        return records.get(_record_key(cleaned_account_id, ""))
 
-    def require_record(self, account_id: str) -> PasswordKDFRecord:
-        record = self.get_record(account_id)
+    def require_record(self, account_id: str, *, device_id: str = "") -> PasswordKDFRecord:
+        record = self.get_record(account_id, device_id=device_id)
         if record is None:
-            raise PasswordKDFStoreError(f"password KDF material is not saved for account {account_id}")
+            suffix = f" on device {device_id}" if device_id else ""
+            raise PasswordKDFStoreError(f"password KDF material is not saved for account {account_id}{suffix}")
         return record
 
-    def derive_wrapping_key(self, account_id: str, password: str) -> bytes:
-        return self.require_record(account_id).derive_wrapping_key(password)
+    def derive_wrapping_key(self, account_id: str, password: str, *, device_id: str = "") -> bytes:
+        return self.require_record(account_id, device_id=device_id).derive_wrapping_key(password)
 
     def save_record(self, record: PasswordKDFRecord) -> PasswordKDFRecord:
         records = self._load_records()
         now = datetime.now(timezone.utc)
-        existing = records.get(record.account_id)
+        key = _record_key(record.account_id, record.device_id)
+        existing = records.get(key)
         saved = PasswordKDFRecord(
             account_id=record.account_id,
+            device_id=record.device_id,
             salt=record.salt,
             time_cost=record.time_cost,
             memory_cost_kib=record.memory_cost_kib,
@@ -166,7 +181,7 @@ class PasswordKDFStore:
             created_at=record.created_at or (existing.created_at if existing else now),
             updated_at=now,
         )
-        records[saved.account_id] = saved
+        records[key] = saved
         self._save_records(records)
         return saved
 
@@ -174,6 +189,7 @@ class PasswordKDFStore:
         self,
         *,
         account_id: str,
+        device_id: str = "",
         salt: bytes,
         time_cost: int,
         memory_cost_kib: int,
@@ -184,6 +200,7 @@ class PasswordKDFStore:
         return self.save_record(
             PasswordKDFRecord(
                 account_id=_clean_account_id(account_id),
+                device_id=_clean_optional_device_id(device_id),
                 salt=salt,
                 time_cost=time_cost,
                 memory_cost_kib=memory_cost_kib,
@@ -204,7 +221,11 @@ class PasswordKDFStore:
             records = payload.get("records", {})
             if not isinstance(records, dict):
                 raise PasswordKDFStoreError("password KDF store records must be a JSON object")
-            return {account_id: PasswordKDFRecord.from_json(record) for account_id, record in records.items()}
+            loaded: dict[str, PasswordKDFRecord] = {}
+            for record in records.values():
+                parsed = PasswordKDFRecord.from_json(record)
+                loaded[_record_key(parsed.account_id, parsed.device_id)] = parsed
+            return loaded
         except PasswordKDFStoreError:
             raise
         except Exception as exc:
@@ -293,6 +314,18 @@ def _clean_account_id(account_id: str) -> str:
     if not cleaned:
         raise PasswordKDFStoreError("account_id is required for password KDF material")
     return cleaned
+
+
+def _clean_optional_device_id(device_id: str) -> str:
+    return device_id.strip()
+
+
+def _record_key(account_id: str, device_id: str) -> str:
+    cleaned_account_id = _clean_account_id(account_id)
+    cleaned_device_id = _clean_optional_device_id(device_id)
+    if not cleaned_device_id:
+        return cleaned_account_id
+    return f"{cleaned_account_id}::device::{cleaned_device_id}"
 
 
 def _b64url_encode(value: bytes) -> str:

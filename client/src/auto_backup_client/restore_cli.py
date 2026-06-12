@@ -123,14 +123,15 @@ def _build_restore_service(
     token = os.environ.get(args.device_token_env, "").strip()
     credentials, _source = resolve_or_register_device_credentials(cloud_api_base_url=base_url, provided_device_token=token)
     authorization_password = _read_authorization_password(args.authorization_password_env)
-    with BaiduCloudClient(base_url, credentials.device_token, timeout=30.0) as cloud:
-        workflow = BaiduAuthWorkflow(cloud)
+    device_id = args.device_id or credentials.device_id or "current-device"
+    with BaiduCloudClient(base_url, credentials.device_token, timeout=30.0, device_id=device_id) as cloud:
+        workflow = BaiduAuthWorkflow(cloud, device_id=device_id)
         account_id = args.account_id.strip() or _selected_account_id_for_cli(workflow)
         decrypted = workflow.decrypt_password_token(account_id, authorization_password=authorization_password)
     baidu = BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0)
     return RestoreService(
         store,
-        device_id=args.device_id or credentials.device_id or "current-device",
+        device_id=device_id,
         cache_root=cache_root,
         downloader=BaiduArchiveDownloader(baidu),
     ), baidu

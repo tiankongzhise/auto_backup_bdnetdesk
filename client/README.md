@@ -11,7 +11,7 @@
 - `src/auto_backup_client/baidu/auth_workflow.py`：百度授权 UI/CLI 复用的真实授权流程控制器。
 - `src/auto_backup_client/baidu/real_auth_cli.py`：真实云端 API 联调命令行入口。
 - `src/auto_backup_client/baidu/crypto.py`：百度密文 token envelope 的本地加解密。
-- `src/auto_backup_client/baidu/kdf_store.py`：password 模式 account 级 KDF 参数持久化，Windows 默认使用 DPAPI 保护。
+- `src/auto_backup_client/baidu/kdf_store.py`：password 模式 account+device 级 KDF 参数持久化，Windows 默认使用 DPAPI 保护，并兼容旧 account 级记录读取。
 - `src/auto_backup_client/baidu/refresh.py`：refresh token 租约、百度 token 刷新和云端版本回写流程。
 - `src/auto_backup_client/sqlite_store.py`：客户端 SQLite 迁移、事务和 `sync_outbox` 同事务写入基础设施。
 - `src/auto_backup_client/baidu/metadata.py`：百度远端 `.meta.json` 和 `job.index.json` 非敏感稳定 JSON 生成工具。
@@ -38,7 +38,7 @@
 
 ## PySide6 主窗口
 
-主窗口提供备份任务、百度设置、来源映射、远端校对、原始数据清理和恢复入口。备份任务页支持选择/拖拽来源、创建任务和真实开始备份；点击“开始”会要求运行时输入归档密码和授权密码，然后在后台调用 `BackupPipeline` 执行扫描、去重、7-Zip 加密归档、百度上传、Cloud Sync、远端校对和 completed final sync。归档密码和授权密码只保留在本次内存调用中，启动后会清空输入框，不写入 SQLite、日志或 UI 状态。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度列表接口生成差异报告，默认 dry-run；只有填写确认短语后才把可审计修复写入 `remote_objects` 和 `sync_outbox`。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页可按 job/关键字筛选候选，选择手动目录或原路径，运行时输入归档密码后执行 7-Zip 解压恢复；本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
+主窗口提供备份任务、百度设置、来源映射、远端校对、云端同步、原始数据清理和恢复入口。备份任务页支持选择/拖拽来源、设置本次缓存目录、创建任务和真实开始备份；点击“开始”会要求运行时输入归档密码和授权密码，然后在后台调用 `BackupPipeline` 执行扫描、去重、按每个选择源生成 7-Zip 加密归档、百度上传、Cloud Sync、远端校对和 completed final sync。归档密码和授权密码只保留在本次内存调用中，启动后会清空输入框，不写入 SQLite、日志或 UI 状态。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度 `list/listall` 生成差异报告，校对对象是本地 `remote_objects/upload_sessions` 与百度网盘实际结果；云端 PostgreSQL summary 回读在“云端同步”页完成。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页可按 job/关键字筛选候选，选择手动目录或原路径，运行时输入归档密码后执行 7-Zip 解压恢复；文件夹来源恢复到手动目录时会保留来源根文件夹和内部结构，本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
 
 ```powershell
 cd client
@@ -49,7 +49,7 @@ $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.ui.main_window
 ```
 
-`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。备份执行摘要只展示文件数、归档序号、上传分片数和阶段结果，不输出本地 SQLite 路径、缓存路径、远端真实路径、Device Token、百度 token、用户密码或 wrapping key。来源映射和远端校对 UI 同样不把这些敏感内容输出到界面日志。
+`backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。备份执行摘要只展示文件数、归档数量、上传分片总数和阶段结果，不输出本地 SQLite 路径、缓存路径、远端真实路径、Device Token、百度 token、用户密码或 wrapping key。来源映射、远端校对和云端同步 UI 同样不把这些敏感内容输出到界面日志。
 
 ## 发布构建
 
@@ -96,11 +96,11 @@ PyInstaller 官方依据已记录在 `docs/release_acceptance_matrix.md`。当�
 
 最终重复判断只使用完整 `sha256 + size_bytes`，并校验 `content_id = sha256("v1:file:" + size + ":" + file_sha256)`。同一内容的首个本地引用标记为 `needs_payload`，后续本地引用标记为 `local_duplicate`；如果云端 `GET /v1/contents/{content_id}` 返回的 `file_sha256` 和 `size_bytes` 与本地一致，引用才可标记为 `cloud_duplicate_candidate`。404、临时错误或 sha256/size 不一致都不能作为跳过 payload 的依据。
 
-本阶段不执行 7-Zip 归档、manifest 文件生成、archive_objects 归档索引、百度上传、缓存清理或恢复；后续 P1-8 到 P1-9 会把 `content_references` 接入 manifest/archive 和端到端编排。
+当前内容索引已经接入后续 manifest、archive、百度上传、缓存清理和恢复流程；本节保留的是内容级去重索引本身的职责边界。
 
 ## 7-Zip 加密归档与 manifest
 
-阶段 P1-8 已新增 `archives` 和 `archive_members` 表，以及 `ArchivePackager` 本地归档服务。服务会读取 `content_references`、`file_items` 和 `folder_items`，生成稳定 manifest JSON，并把需要 payload 的内容写入 archive 内部 `payload/{content_id}`；本地重复或云端候选引用不会重复写 payload，但会在 manifest 和 `archive_members` 中保留引用。没有新增 payload 的 job 也会生成 manifest-only archive。
+阶段 P1-8 已新增 `archives` 和 `archive_members` 表，以及 `ArchivePackager` 本地归档服务。服务会读取 `content_references`、`file_items` 和 `folder_items`，生成稳定 manifest JSON，并把需要 payload 的内容写入 archive 内部 `payload/{content_id}`；本地重复或云端候选引用不会重复写 payload，但会在 manifest 和 `archive_members` 中保留引用。P3-14 起，备份流水线按每个用户选择源独立生成 archive，跨来源重复内容通过 manifest/`archive_members` 引用已有 payload archive；没有新增 payload 的来源也会生成 manifest-only archive。
 
 7-Zip 可执行文件优先使用 `AUTO_BACKUP_7ZIP_PATH`，其次查找 PATH 中的 `7z`，再尝试 `C:\Program Files\7-Zip\7z.exe` 和 `C:\Program Files (x86)\7-Zip\7z.exe`。归档命令使用 7z 格式、LZMA2、密码参数和文件名加密参数；本机阶段测试使用真实 7-Zip 26.01 和密码 `Test123456789` 执行创建、`7z t` 标准验证、解出 `manifest/manifest.json` 并比对 manifest SHA256。
 
@@ -129,7 +129,7 @@ $env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
 uv run python -m auto_backup_client.backup_pipeline_cli --password-env BAIDU_AUTH_PASSWORD --source .\path\to\file --cache-root ..\var\cache --upload --sync-outbox --reconcile-remote
 ```
 
-真实模式会复用 `BaiduResumableUploader` 上传 archive、`.meta.json` 和 `job.index.json`，并把上传账本中的 `archive_id` 对齐到归档阶段生成的 `archives.archive_id`。`mark_completed=True` 时，编排器会在远端校对一致后写入 job `completed`，并追加一次 final sync，把完成状态 revision 推送到真实云端。P2-10 起，CLI 默认执行 40GiB 有效缓存预算检查；测试或排障时可显式传 `--skip-cache-budget-check`。CLI 输出只展示 job、计数、hash、fs_id、缓存等级和远端路径 hash；不得输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
+真实模式会复用 `BaiduResumableUploader` 逐个上传每个选择源 archive、对应 `.meta.json` 和 job 级 `job.index.json`，并把上传账本中的 `archive_id` 对齐到归档阶段生成的 `archives.archive_id`。`job.index.json` 是同一 job 的汇总索引，包含该 job 下所有 archive；更新时先删除旧 index 再以 `rtype=0` 重传。`mark_completed=True` 时，编排器会在远端校对一致后写入 job `completed`，并追加一次 final sync，把完成状态 revision 推送到真实云端。P2-10 起，CLI 默认执行 40GiB 有效缓存预算检查；测试或排障时可显式传 `--skip-cache-budget-check`。CLI 输出只展示 job、计数、hash、fs_id、缓存等级和远端路径 hash；不得输出 Device Token、百度 token、用户密码、wrapping key、本地来源路径、SQLite 路径、缓存路径或 manifest 明文。
 
 ## 缓存 Artifact 管理
 
@@ -175,7 +175,7 @@ $env:BAIDU_AUTH_PASSWORD='<runtime-only-authorization-password>'
 uv run python -m auto_backup_client.real_backup_pipeline_test_cli --password-env BAIDU_AUTH_PASSWORD
 ```
 
-`real_backup_pipeline_test_cli` 默认使用仓库内 `.cache/real-pipeline/` 的临时 SQLite、缓存和源文件目录，不污染常规 `var/data`；会生成小文件和跨 4 MiB 分片源文件，执行 `scan -> dedupe -> 7-Zip archive -> quota -> precreate/resume -> locateupload -> superfile2 -> create -> .meta.json -> job.index.json -> sync-outbox -> cloud-summary -> baidu listall reconcile -> completed -> final sync -> conflict probe -> filemanager/delete cleanup`。验收时要求跨分片 archive 上传分片数大于 1、远端 3 个对象全部 `consistent`、completed job 云端 summary 匹配、同路径 `rtype=0` 冲突探针命中、清理 `errno=0`。如加 `--keep-remote` 保留远端对象，必须用输出的 `job_id` 和本次临时 SQLite 另行清理。
+`real_backup_pipeline_test_cli` 默认使用仓库内 `.cache/real-pipeline/` 的临时 SQLite、缓存和源文件目录，不污染常规 `var/data`；会生成小文件和跨 4 MiB 分片源文件，执行 `scan -> dedupe -> per-source 7-Zip archives -> quota -> precreate/resume -> locateupload -> superfile2 -> create -> .meta.json -> job.index.json -> sync-outbox -> cloud-summary -> baidu listall reconcile -> completed -> final sync -> conflict probe -> filemanager/delete cleanup`。验收时要求至少生成 2 个 archive、上传分片总数跨过单分片边界、远端对象数为 `archive_count * 2 + 1` 且全部 `consistent`、completed job 云端 summary 匹配、同路径 `rtype=0` 冲突探针命中、清理 `errno=0`。如加 `--keep-remote` 保留远端对象，必须用输出的 `job_id` 和本次临时 SQLite 另行清理。
 
 ## 恢复流程
 
@@ -185,7 +185,7 @@ uv run python -m auto_backup_client.real_backup_pipeline_test_cli --password-env
 
 恢复执行会先校验 archive SHA256，再用真实 7-Zip 执行 `t` 和完整解压到 `{cache_root}/jobs/{job}/restore/` 临时目录，读取 `manifest/manifest.json` 并比对 manifest SHA256。恢复文件复制到目标后会重新计算 SHA256，与 manifest/content index 比对一致才写入 `restored`。密码错误、manifest 缺失、archive SHA256 不匹配、外部 payload archive 缺失或复制后 hash 不一致都会写入 failed 恢复记录，不会标记为恢复成功。
 
-目标支持 `manual_path` 和 `original_path`。手动路径会按 manifest 的 `relative_path` 放到用户指定目录下；原路径使用 manifest/local reference 记录的原始路径。冲突策略默认 `keep_both`，生成 `restored yyyyMMdd-HHmmss` 后缀文件名，不覆盖现有文件；`skip_existing` 可跳过已有文件。覆盖恢复仍留待后续需要回收站保护时单独实现。
+目标支持 `manual_path` 和 `original_path`。手动路径会按 manifest 的 `relative_path` 放到用户指定目录下；如果候选来自文件夹来源，会先保留来源根文件夹名，再恢复内部相对路径。原路径使用 manifest/local reference 记录的原始路径。冲突策略默认 `keep_both`，生成 `restored yyyyMMdd-HHmmss` 后缀文件名，不覆盖现有文件；`skip_existing` 可跳过已有文件。覆盖恢复仍留待后续需要回收站保护时单独实现。
 
 恢复 CLI 示例：
 

@@ -133,14 +133,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 
 ## 4. 首次启动后认识界面
 
-主窗口左侧是导航栏，当前包含 6 个页面：
+主窗口左侧是导航栏，当前包含 7 个页面：
 
 1. `备份任务`
 2. `百度设置`
 3. `来源映射`
 4. `远端校对`
-5. `原始数据清理`
-6. `恢复`
+5. `云端同步`
+6. `原始数据清理`
+7. `恢复`
 
 窗口底部状态栏会显示当前操作结果或错误提示。
 
@@ -150,8 +151,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 2. 回到 `备份任务`，创建备份任务。
 3. 备份完成后进入 `来源映射` 查看备份记录。
 4. 进入 `远端校对` 检查百度网盘远端对象。
-5. 需要腾空间时，再进入 `原始数据清理`。
-6. 需要找回文件时，进入 `恢复`。
+5. 进入 `云端同步` 查看本地同步队列和云端摘要回读。
+6. 需要腾空间时，再进入 `原始数据清理`。
+7. 需要找回文件时，进入 `恢复`。
 
 ## 5. 配置百度授权
 
@@ -289,7 +291,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 
 1. `归档密码`：用于加密本次 7-Zip 备份包，也是以后恢复文件时要输入的密码。
 2. `授权密码`：用于本机解密百度授权 token；如果和归档密码相同，可以留空，软件会复用归档密码。
-3. `执行前检查 40GiB 缓存预算`：普通用户建议保持勾选。
+3. `缓存目录`：用于本次扫描、临时 manifest、压缩包、上传临时文件和恢复临时文件；可以点击 `选择` 更换目录。
+4. `执行前检查 40GiB 缓存预算`：普通用户建议保持勾选。
 
 点击 `开始` 后，密码输入框会被清空。软件只在本次运行内存中使用这些密码，不会把密码写入数据库、日志或界面状态。
 
@@ -305,10 +308,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 4. 计算完整 MD5 和 SHA256。
 5. 判断是否已经有相同内容。
 6. 生成临时 manifest。
-7. 使用 7-Zip AES-256 生成加密 `.7z` 备份包。
+7. 按每个选择源分别使用 7-Zip AES-256 生成加密 `.7z` 备份包。
 8. 校验加密备份包。
 9. 删除临时明文 manifest。
-10. 上传 `.7z`、`.meta.json` 和 `job.index.json` 到百度网盘。
+10. 逐个上传 `.7z`、`.meta.json`，并上传汇总同一任务所有归档的 `job.index.json` 到百度网盘。
 11. 写入本地 SQLite 记录。
 12. 通过云端 API 同步索引。
 13. 调用百度列表接口校对远端对象。
@@ -320,12 +323,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 /apps/{appname}/backups/{yyyy}/{MM}/{dd}/{device_id}/{job_id}/
 ```
 
-备份包文件名中会包含 archive 序号和 SHA256，例如：
+每个你选择的文件或文件夹来源都会对应一个 archive。备份包文件名中会包含 archive 序号和 SHA256，例如：
 
 ```text
 000001-{archive_sha256}.7z
 000001-{archive_sha256}.meta.json
+000002-{archive_sha256}.7z
+000002-{archive_sha256}.meta.json
 ```
+
+同一任务目录下还会有一个 `job.index.json`，它汇总本任务下所有 archive，方便以后只下载需要恢复的那一部分。
 
 ## 8. 查看备份结果
 
@@ -351,7 +358,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 
 ### 8.2 使用远端校对页
 
-远端校对用于检查本地记录和百度网盘实际对象是否一致。
+远端校对用于检查本地 SQLite 上传账本和百度网盘实际对象是否一致。它对比的是本地 `remote_objects/upload_sessions` 与百度 `list/listall` 返回结果；云端 PostgreSQL 的同步摘要请到 `云端同步` 页面查看。
 
 操作步骤：
 
@@ -369,7 +376,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 
 差异状态可能包括远端缺失、大小不匹配、meta 缺失、fs_id 变化等。
 
-### 8.3 修复校对结果
+提示或原因文字较长时，可以调宽列、查看自动换行内容，或把鼠标悬停在单元格上查看完整提示。
+
+### 8.3 使用云端同步页
+
+云端同步页用于查看本地同步队列和云端数据库摘要。
+
+1. 点击左侧 `云端同步`。
+2. 查看 `sync_outbox` 待同步、重试、失败和冲突数量。
+3. 查看业务表 `sync_status` 汇总。
+4. 如果知道某条记录的 `entity_id`，输入后点击 `查询云端摘要`。
+5. 页面会回读云端 summary，展示 entity 类型、版本、revision、canonical hash、更新设备和最近 revision 摘要。
+
+页面默认不展示完整 payload，避免泄露本地路径或敏感字段。
+
+### 8.4 修复校对结果
 
 远端校对页默认只是检查，不会自动删除、覆盖或重传文件。
 
@@ -393,8 +414,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 2. 清理只能由你手动触发。
 3. 默认方式是移入 Windows 回收站。
 4. 永久删除是高级选项，默认隐藏。
-5. 清理前软件会复查源文件是否还是备份时的那个文件。
-6. 如果源文件大小、修改时间或 Windows 文件身份不一致，软件会禁止清理。
+5. 实际执行清理时确认短语必须输入 `CLEANUP_SOURCES`；如果输成 `CLEANUO_SOURCES` 等拼写，软件会提示正确短语。
+6. 清理前软件会复查源文件是否还是备份时的那个文件。
+7. 如果源文件大小、修改时间或 Windows 文件身份不一致，软件会禁止清理。
 
 建议你在第一次使用时，不要立刻清理原始文件。先完成一次恢复演练，确认能恢复后再清理。
 
@@ -501,6 +523,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 
 ```text
 D:\恢复测试\2026-06-08\
+```
+
+如果恢复候选来自文件来源，结果会放在目标目录下的文件名处；如果来自文件夹来源，软件会先保留原始根文件夹名，再恢复内部目录结构，例如：
+
+```text
+D:\恢复测试\2026-06-08\照片\子目录\文件.jpg
 ```
 
 确认文件无误后，再手动复制到正式位置。

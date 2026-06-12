@@ -76,7 +76,7 @@ def _run(args: argparse.Namespace) -> int:
     account_id = args.account_id.strip()
     try:
         if _needs_cloud_or_upload(args):
-            cloud_client = BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0)
+            cloud_client = BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=device_id)
             if args.upload:
                 decrypted = _decrypt_selected_token(cloud_client, account_id, password)
                 account_id = decrypted.encrypted.account_id
@@ -128,6 +128,7 @@ def _run(args: argparse.Namespace) -> int:
     _print(f"content_references: {result.content_index.reference_count}")
     _print(f"payload_sources: {result.content_index.payload_source_count}")
     _print(f"local_duplicates: {result.content_index.local_duplicate_count}")
+    _print(f"archive_count: {len(result.archives)}")
     _print(f"archive_id: {result.archive.archive_id}")
     _print(f"archive_sha256: {result.archive.archive_sha256}")
     _print(f"archive_type: {result.archive.archive_type}")
@@ -139,6 +140,8 @@ def _run(args: argparse.Namespace) -> int:
         _print(f"cloud_candidates_checked: {result.cloud_candidates.checked_content_count}")
         _print(f"cloud_duplicate_candidates: {result.cloud_candidates.cloud_duplicate_candidate_count}")
     if result.upload is not None:
+        _print(f"upload_count: {len(result.uploads)}")
+        _print(f"uploaded_part_total_count: {sum(len(upload.uploaded_partseqs) for upload in result.uploads)}")
         _print(f"upload_session_id: {result.upload.upload_session_id}")
         _print(f"remote_archive_path_sha256: {_sha256_text(result.upload.remote_archive_path)}")
         _print(f"remote_meta_path_sha256: {_sha256_text(result.upload.remote_meta_path)}")

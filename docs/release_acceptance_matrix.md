@@ -57,10 +57,10 @@ PyInstaller 官方文档获取记录：
 | R03 | 迁移定位 | 开发机/打包包 | 启动后初始化新 SQLite | 源码运行读取 `client/migrations/sqlite`；打包运行读取 bundle 内 `migrations/sqlite` | 本轮自动化验收源码与 `_MEIPASS` 分支；打包 exe 启动待干净机验收 |
 | R04 | 首次启动 | 干净 Windows | 双击 exe | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题 | 待执行 |
 | R05 | 百度授权 | 干净 Windows | 设备码/扫码授权 | 只在百度官方页面输入百度账号；本机保存 DPAPI Device Token/KDF 材料；不落仓库路径 | 待执行 |
-| R06 | 备份 | 干净 Windows | 主 UI 选择小文件与跨分片文件，输入运行时归档密码/授权密码后点击开始 | 完成扫描、去重、7-Zip 加密、百度上传、outbox 同步、远端校对和 completed final sync；UI 不保存或显示密码/token/完整路径 | 开发机自动化已覆盖主 UI 调用 BackupPipeline 并写入 archive/upload/remote/completed；干净机真实百度待执行 |
-| R07 | 校对 | 干净 Windows | 来源映射和远端校对页查看同一 job | 展示来源/远端关系和 consistent 状态；不显示 Device Token、百度 token、密码或完整敏感路径 | 开发机自动化已覆盖来源映射脱敏与远端校对 UI 修复写入；干净机待执行 |
+| R06 | 备份 | 干净 Windows | 主 UI 选择单文件和文件夹，输入运行时归档密码/授权密码、确认缓存目录后点击开始 | 完成扫描、去重、按每个选择源生成独立 7-Zip 加密归档、百度上传、outbox 同步、远端校对和 completed final sync；`job.index.json` 汇总本 job 全部 archive；UI 不保存或显示密码/token/完整路径 | 开发机自动化已覆盖主 UI 调用 BackupPipeline、多来源归档和 archive/upload/remote/completed 写入；干净机真实百度待执行 |
+| R07 | 校对 | 干净 Windows | 来源映射、远端校对和云端同步页查看同一 job | 展示来源/远端关系和 consistent 状态；远端校对明确本地 SQLite `remote_objects/upload_sessions` 对比百度 `list/listall`；云端同步页可回读 Cloud Sync summary；不显示 Device Token、百度 token、密码或完整敏感路径 | 开发机自动化已覆盖来源映射脱敏、远端校对 UI 修复写入、长提示可读和云端同步页摘要回读；干净机待执行 |
 | R08 | 清理 | 干净 Windows | 对已完成 job 执行回收站清理 | 清理前复查通过后移入回收站，写入清理记录并同步 outbox；永久删除默认隐藏在高级选项，清理前必须选中候选 | 开发机自动化已覆盖候选门槛、身份复查、同步 payload 脱敏和 UI 高级删除/选择门槛；干净机待执行 |
-| R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 恢复 | 7-Zip 解密、manifest 校验、SHA256 复验通过；远端 archive 可经百度 dlink 拉取；冲突默认保留两者 | 开发机自动化已覆盖本地恢复、UI 远端拉取恢复、SHA256 复验和路径脱敏；干净机待执行 |
+| R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 恢复文件和文件夹来源 | 7-Zip 解密、manifest 校验、SHA256 复验通过；手动恢复文件夹来源保留根文件夹和内部目录结构；远端 archive 可经百度 dlink 拉取；冲突默认保留两者 | 开发机自动化已覆盖本地恢复、UI 远端拉取恢复、文件夹结构恢复、SHA256 复验和路径脱敏；干净机待执行 |
 | R10 | 断网补偿 | 干净 Windows | 云端临时不可用时执行本地任务并恢复网络 | 本地 SQLite 落盘；云端恢复后 outbox 可补偿同步 | 待执行 |
 | R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动 | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等 | 待执行 |
 | R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据 | 程序目录可移除；用户数据、凭据和缓存清理边界清晰 | 待执行 |
@@ -75,6 +75,14 @@ PyInstaller 官方文档获取记录：
 - 云同步真实性审计不得只看本地 `sync_outbox` 状态；必须保留真实 Cloud Sync API 写入和云端 summary 回读匹配证据，确认不是虚假同步。
 
 ## P3-14 全量审计补测记录
+
+2026-06-12 修复授权隔离、备份粒度、恢复结构和校对可视化，开发机自动化/静态验证结果：
+
+- 云端百度授权改为按 `account_id + device_id` 保存密文 token 和刷新租约，同一百度 UID 在不同设备授权不会覆盖其他设备授权；客户端 KDF store 兼容 account+device 记录和旧 account 级记录。
+- 备份流水线按每个选择源独立归档上传，`job.index.json` 汇总本 job 全部 archive；跨来源重复内容在 manifest 和 `archive_members` 中保留引用。
+- 备份任务页新增缓存目录输入和选择按钮，完成提示展示归档数量与上传分片总数；恢复文件夹来源到手动目录时保留根文件夹和内部结构。
+- 原始数据清理 UI 对错误确认词提示 `确认短语应为 CLEANUP_SOURCES`；远端校对表格支持换行、tooltip 和明确 SQLite/Baidu 校对口径；新增云端同步页用于本地 outbox/sync_status 与 Cloud Sync summary 回读。
+- 已验证 Go `go test ./...` 通过；Python 定向 48 项通过；`python -m compileall client/src client/tests` 和 `git diff --check` 通过。修复后全量 `uv run pytest` 因本地提升审批器 429 未能再次执行，需在审批恢复或干净机验收时补跑。
 
 2026-06-09 修复主 UI 真实备份闭环缺口，开发机自动化结果：
 

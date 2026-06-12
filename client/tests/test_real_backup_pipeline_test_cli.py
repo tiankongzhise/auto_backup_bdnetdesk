@@ -13,9 +13,11 @@ from auto_backup_client.sqlite_store import SQLiteClientStore
 class FakeCloudClient:
     events_by_entity: dict[str, object] = {}
 
-    def __init__(self, base_url: str, device_token: str, *, timeout: float = 30.0) -> None:
+    def __init__(self, base_url: str, device_token: str, *, timeout: float = 30.0, device_id: str = "") -> None:
         del base_url, timeout
         self.device_token = device_token
+        self.device_id = device_id
+        assert device_id == "device-secret"
 
     def __enter__(self):
         return self
@@ -62,6 +64,7 @@ class FakeBaiduClient:
         self.created: dict[str, tuple[int, int, str]] = {}
         self.uploaded_partseqs: list[int] = []
         self.deleted_paths: tuple[str, ...] = tuple()
+        self.deleted_path_history: list[str] = []
         FakeBaiduClient.instances.append(self)
 
     def __enter__(self):
@@ -141,6 +144,9 @@ class FakeBaiduClient:
     def delete_files(self, remote_paths, *, async_mode: int = 0):
         assert async_mode == 0
         self.deleted_paths = tuple(remote_paths)
+        self.deleted_path_history.extend(remote_paths)
+        for path in remote_paths:
+            self.created.pop(path, None)
         return FileManagerResult(errno=0, info=tuple())
 
 
@@ -189,13 +195,15 @@ def test_real_pipeline_cli_runs_full_flow_and_redacts_sensitive_values(tmp_path,
     assert len(jobs) == 1
     assert jobs[0]["status"] == "completed"
     assert "completed: true" in output
-    assert "uploaded_part_count: 2" in output
-    assert "reconcile_consistent: 3" in output
+    assert "archive_count: 2" in output
+    assert "upload_count: 2" in output
+    assert "uploaded_part_total_count: 3" in output
+    assert "reconcile_consistent: 5" in output
     assert "completed_job_cloud_summary_verified: true" in output
     assert "conflict_probe_detected: true" in output
-    assert "cleanup_object_count: 3" in output
+    assert "cleanup_object_count: 5" in output
     assert "cleanup_delete_errno: 0" in output
-    assert len(baidu.deleted_paths) == 3
+    assert len(baidu.deleted_paths) == 5
     assert "secret-device-token" not in output
     assert "secret-access-token" not in output
     assert "runtime-password-secret" not in output

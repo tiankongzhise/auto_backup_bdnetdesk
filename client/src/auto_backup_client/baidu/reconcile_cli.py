@@ -151,7 +151,7 @@ def _run_reconcile_from_args(args: argparse.Namespace):
         page_limit=args.page_limit,
     )
 
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
     with BaiduNetdiskClient(decrypted.token.access_token, timeout=120.0) as baidu:
         report = RemoteObjectReconciler(

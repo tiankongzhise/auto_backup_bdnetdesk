@@ -13,6 +13,7 @@ import httpx
 
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow, generate_ephemeral_device_name
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError, register_device
+from auto_backup_client.baidu.models import DeviceRegistration
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 
 
@@ -47,26 +48,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "health":
         return _health(args.base_url)
     if args.command == "accounts":
-        return _accounts(args.base_url, _resolve_device_token(args))
+        token, device_id = _resolve_device(args)
+        return _accounts(args.base_url, token, device_id=device_id)
     if args.command == "select":
-        return _select(args.base_url, _resolve_device_token(args), args.account_id)
+        token, device_id = _resolve_device(args)
+        return _select(args.base_url, token, args.account_id, device_id=device_id)
     if args.command == "device-code":
         if args.register_ephemeral_device:
             token = _resolve_device_token(args, allow_empty=True, allow_store=False)
-            token = _register_ephemeral(args.base_url, args.device_name)
+            registration = _register_ephemeral(args.base_url, args.device_name)
+            token = registration.device_token
+            device_id = registration.device_id
         else:
-            token = _resolve_device_token(args)
+            token, device_id = _resolve_device(args)
         return _device_code(
             args.base_url,
             token,
+            device_id=device_id,
             password_env=args.password_env,
             poll_seconds=args.poll_seconds,
             timeout_seconds=args.timeout_seconds,
         )
     if args.command == "token-check":
+        token, device_id = _resolve_device(args)
         return _token_check(
             args.base_url,
-            _resolve_device_token(args),
+            token,
+            device_id=device_id,
             account_id=args.account_id,
             password_env=args.password_env,
         )
@@ -82,16 +90,21 @@ def _add_token_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _resolve_device_token(args: argparse.Namespace, *, allow_empty: bool = False, allow_store: bool = True) -> str:
+    token, _device_id = _resolve_device(args, allow_empty=allow_empty, allow_store=allow_store)
+    return token
+
+
+def _resolve_device(args: argparse.Namespace, *, allow_empty: bool = False, allow_store: bool = True) -> tuple[str, str]:
     token = os.environ.get(args.device_token_env, "").strip()
     if token:
-        return token
+        return token, ""
     if allow_store:
         credentials, source = resolve_or_register_device_credentials(cloud_api_base_url=args.base_url)
         _print(f"Device Token 来源: {source}")
-        return credentials.device_token
+        return credentials.device_token, credentials.device_id
     if not token and not allow_empty:
         raise SystemExit(f"{args.device_token_env} is required")
-    return token
+    return token, ""
 
 
 def _health(base_url: str) -> int:
@@ -105,8 +118,8 @@ def _health(base_url: str) -> int:
     return 0
 
 
-def _accounts(base_url: str, device_token: str) -> int:
-    with BaiduCloudClient(base_url, device_token) as cloud:
+def _accounts(base_url: str, device_token: str, *, device_id: str = "") -> int:
+    with BaiduCloudClient(base_url, device_token, device_id=device_id) as cloud:
         accounts = cloud.list_accounts()
     _print(f"真实云端账号数量: {len(accounts)}")
     for account in accounts:
@@ -118,14 +131,14 @@ def _accounts(base_url: str, device_token: str) -> int:
     return 0
 
 
-def _select(base_url: str, device_token: str, account_id: str) -> int:
-    with BaiduCloudClient(base_url, device_token) as cloud:
+def _select(base_url: str, device_token: str, account_id: str, *, device_id: str = "") -> int:
+    with BaiduCloudClient(base_url, device_token, device_id=device_id) as cloud:
         account = cloud.select_account(account_id)
     _print(f"已选择账号: {account.account_id} | {account.display_name or account.baidu_uid}")
     return 0
 
 
-def _register_ephemeral(base_url: str, device_name: str) -> str:
+def _register_ephemeral(base_url: str, device_name: str) -> DeviceRegistration:
     registration = register_device(
         base_url,
         device_name=device_name.strip() or generate_ephemeral_device_name(),
@@ -135,13 +148,14 @@ def _register_ephemeral(base_url: str, device_name: str) -> str:
     )
     _print(f"已注册临时设备: {registration.device_id}")
     _print("Device Token 只在当前进程内使用，脚本不会写入文件。")
-    return registration.device_token
+    return registration
 
 
 def _device_code(
     base_url: str,
     device_token: str,
     *,
+    device_id: str = "",
     password_env: str,
     poll_seconds: int,
     timeout_seconds: int,
@@ -150,8 +164,8 @@ def _device_code(
 
     poll_seconds = max(2, poll_seconds)
     deadline = time.monotonic() + max(30, timeout_seconds)
-    with BaiduCloudClient(base_url, device_token, timeout=30.0) as cloud:
-        workflow = BaiduAuthWorkflow(cloud)
+    with BaiduCloudClient(base_url, device_token, timeout=30.0, device_id=device_id) as cloud:
+        workflow = BaiduAuthWorkflow(cloud, device_id=device_id)
         state = workflow.start_device_code_session()
         session = state.session
         _print("已创建真实云端设备码授权 session。")
@@ -193,10 +207,10 @@ def _device_code(
     return 1
 
 
-def _token_check(base_url: str, device_token: str, *, account_id: str, password_env: str) -> int:
+def _token_check(base_url: str, device_token: str, *, device_id: str = "", account_id: str, password_env: str) -> int:
     password = _read_authorization_password(password_env)
-    with BaiduCloudClient(base_url, device_token, timeout=30.0) as cloud:
-        workflow = BaiduAuthWorkflow(cloud)
+    with BaiduCloudClient(base_url, device_token, timeout=30.0, device_id=device_id) as cloud:
+        workflow = BaiduAuthWorkflow(cloud, device_id=device_id)
         try:
             actual_account_id = account_id.strip() or _selected_account_id(workflow)
             decrypted = workflow.decrypt_password_token(actual_account_id, authorization_password=password)

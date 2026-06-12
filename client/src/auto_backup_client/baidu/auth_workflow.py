@@ -75,9 +75,16 @@ class AuthSessionState:
 
 
 class BaiduAuthWorkflow:
-    def __init__(self, cloud_client: BaiduCloudClient, *, kdf_store: PasswordKDFStore | None = None) -> None:
+    def __init__(
+        self,
+        cloud_client: BaiduCloudClient,
+        *,
+        kdf_store: PasswordKDFStore | None = None,
+        device_id: str = "",
+    ) -> None:
         self._cloud = cloud_client
         self._kdf_store = kdf_store or PasswordKDFStore.from_env()
+        self._device_id = device_id.strip() or getattr(cloud_client, "device_id", "").strip()
 
     def load_accounts(self) -> list[BaiduAccount]:
         return self._cloud.list_accounts()
@@ -119,6 +126,7 @@ class BaiduAuthWorkflow:
         record = self._kdf_store.save_record(
             PasswordKDFRecord.from_params(
                 account_id=account_id,
+                device_id=self._device_id,
                 params=material.to_params(),
                 token_version=result.account.token_version or result.token.token_version,
             )
@@ -134,7 +142,7 @@ class BaiduAuthWorkflow:
         encrypted = self._cloud.get_token(account_id)
         if encrypted.encryption_method != BAIDU_ENCRYPTION_PASSWORD:
             raise ValueError("account token is not encrypted with password_argon2id_aes256gcm_v1")
-        record = self._kdf_store.require_record(encrypted.account_id or account_id)
+        record = self._kdf_store.require_record(encrypted.account_id or account_id, device_id=self._device_id)
         wrapping_key = record.derive_wrapping_key(authorization_password)
         token = decrypt_token_envelope(
             encrypted.encrypted_token_json,

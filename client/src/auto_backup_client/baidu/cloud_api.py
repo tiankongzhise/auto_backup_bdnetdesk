@@ -37,9 +37,11 @@ class BaiduCloudClient:
         *,
         http_client: httpx.Client | None = None,
         timeout: float = 20.0,
+        device_id: str = "",
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._device_token = device_token
+        self.device_id = device_id.strip()
         self._client = http_client or httpx.Client(timeout=timeout)
         self._owns_client = http_client is None
 

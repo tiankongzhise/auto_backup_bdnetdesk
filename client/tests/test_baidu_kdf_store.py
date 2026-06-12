@@ -41,6 +41,21 @@ def test_plaintext_test_store_restores_same_wrapping_key(tmp_path) -> None:
     assert "backup-password" not in path.read_text(encoding="utf-8")
 
 
+def test_device_scoped_records_do_not_overwrite_legacy_account_record(tmp_path) -> None:
+    path = tmp_path / "baidu-kdf.json"
+    store = PasswordKDFStore(path, allow_plaintext=True)
+    legacy = store.save_record(_record(salt=b"0123456789abcdef"))
+    first_device = store.save_record(_record(device_id="device-a", salt=b"aaaaaaaaaaaaaaaa"))
+    second_device = store.save_record(_record(device_id="device-b", salt=b"bbbbbbbbbbbbbbbb"))
+
+    restored = PasswordKDFStore(path, allow_plaintext=True)
+
+    assert restored.require_record("bacc_1").salt == legacy.salt
+    assert restored.require_record("bacc_1", device_id="device-a").salt == first_device.salt
+    assert restored.require_record("bacc_1", device_id="device-b").salt == second_device.salt
+    assert restored.require_record("bacc_1", device_id="unknown-device").salt == legacy.salt
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows DPAPI is only available on Windows")
 def test_default_windows_store_uses_dpapi(tmp_path) -> None:
     path = tmp_path / "baidu-kdf.json"
@@ -54,11 +69,12 @@ def test_default_windows_store_uses_dpapi(tmp_path) -> None:
     assert restored.derive_wrapping_key("backup-password") == saved.derive_wrapping_key("backup-password")
 
 
-def _record() -> PasswordKDFRecord:
+def _record(*, device_id: str = "", salt: bytes = b"0123456789abcdef") -> PasswordKDFRecord:
     return PasswordKDFRecord.from_params(
         account_id="bacc_1",
+        device_id=device_id,
         params=Argon2idParams(
-            salt=b"0123456789abcdef",
+            salt=salt,
             time_cost=1,
             memory_cost_kib=8,
             parallelism=1,

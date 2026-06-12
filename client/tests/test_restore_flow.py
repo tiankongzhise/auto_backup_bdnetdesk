@@ -66,6 +66,29 @@ def test_restore_to_manual_path_writes_file_record_outbox_and_status(tmp_path) -
     assert str(tmp_path) not in outbox_payload
 
 
+def test_restore_directory_source_to_manual_path_preserves_source_root(tmp_path) -> None:
+    folder = tmp_path / "photos"
+    nested = folder / "nested" / "image.jpg"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("payload", encoding="utf-8")
+    store, job_id = _completed_job(tmp_path, folder)
+    target_root = tmp_path / "restored"
+
+    result = RestoreService(store, device_id="device-1", cache_root=tmp_path / "cache").restore(
+        backup_job_id=job_id,
+        target_mode="manual_path",
+        target_root=target_root,
+        password=TEST_PASSWORD,
+        now=NOW,
+    )
+
+    restored = target_root / "photos" / "nested" / "image.jpg"
+    assert result.restored_count == 1
+    assert result.failed_count == 0
+    assert restored.read_text(encoding="utf-8") == "payload"
+    assert not (target_root / "nested" / "image.jpg").exists()
+
+
 def test_restore_keep_both_does_not_overwrite_existing_file(tmp_path) -> None:
     source = tmp_path / "source.txt"
     source.write_text("payload", encoding="utf-8")
@@ -137,7 +160,7 @@ def _completed_job(tmp_path, source: Path) -> tuple[SQLiteClientStore, str]:
     store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
     store.migrate()
     created = BackupJobManager(store, device_id="device-1").create_job(
-        [BackupSourceInput(str(source), "file")],
+        [BackupSourceInput(str(source), "directory" if source.is_dir() else "file")],
         now="2026-06-08T20:30:00Z",
     )
     job_id = created.job.backup_job_id
