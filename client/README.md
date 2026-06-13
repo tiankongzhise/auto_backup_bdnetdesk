@@ -53,7 +53,7 @@ uv run python -m auto_backup_client.ui.main_window
 
 ## 发布构建
 
-P3-14 发布骨架使用 PyInstaller onedir Windows GUI 方案。仓库根目录提供 `client_build.ps1`，会通过 uv 调用 `auto_backup_client.release_build`，并把构建缓存固定到仓库内 `.cache/`。
+P3-14 发布骨架使用 PyInstaller onedir Windows GUI 方案。仓库根目录提供 `client_build.ps1`，会通过 uv 调用 `auto_backup_client.release_build`，并把 uv 临时缓存固定到仓库内 `.cache/`。PyInstaller 的 dist/work/spec 目录会按构建批次隔离。
 
 ```powershell
 cd ..
@@ -68,13 +68,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1
 ```
 
-默认输出目录为 `dist/client/AutoBackupBDNetdisk/`。PyInstaller 参数由 `src/auto_backup_client/release_build.py` 生成，包含：
+默认输出目录为 `dist/client/<yyyyMMdd-HHmmss>/AutoBackupBDNetdisk/`。可通过 `-BuildId <批次名>` 固定批次目录；即使使用 `-DistDir` 自定义输出根目录，脚本也会追加同一批次层，避免覆盖旧构建或混合不同批次产物。PyInstaller 参数由 `src/auto_backup_client/release_build.py` 生成，包含：
 
 - `--onedir`
 - `--windowed`
-- `--distpath <repo>/dist/client`
-- `--workpath <repo>/.cache/pyinstaller`
-- `--specpath <repo>/.cache/pyinstaller-spec`
+- `--distpath <repo>/dist/client/<BuildId>`
+- `--workpath <repo>/.cache/pyinstaller/<BuildId>`
+- `--specpath <repo>/.cache/pyinstaller-spec/<BuildId>`
 - `--paths <repo>/client/src`
 - `--add-data <repo>/client/migrations/sqlite;migrations/sqlite`
 

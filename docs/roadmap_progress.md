@@ -11,21 +11,17 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 授权隔离、备份粒度、恢复结构与校对可视化修复，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划修复用户反馈的 8 个阻塞问题：同一百度账号跨设备授权互相覆盖、创建任务缺少缓存位置 UI、文件夹恢复结构丢失、单任务全部内容打成一个压缩包、清理确认词提示不清晰、云端数据库 UI 不可见、远端校对长提示不可读、远端校对口径与百度实际结果容易混淆。
+- 本轮插队工作：P3 阶段 14 构建脚本批次隔离与 Go build 修复，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划修复服务端 `go_build.ps1` 使用旧 `.cache/go-build` 时标准库误报 `package ... is not in std` 的构建失败，并优化服务端/客户端 build 脚本，让每次构建产物和 PyInstaller 缓存进入 `yyyyMMdd-HHmmss` 批次目录，避免覆盖旧产物或混合不同批次。
 - 本轮完成后回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
 
 ## 本次验收标准
 
-- Go 云端百度授权必须按 `account_id + device_id` 保存密文 token，同一百度 UID 在不同设备重新授权不得覆盖其他设备授权；token 读取、刷新回写和刷新租约均以当前设备授权记录为准。
-- 客户端 KDF store 必须兼容设备级授权材料，并保留旧 account 级记录读取路径，避免旧本机授权材料直接失效。
-- 备份编排必须按“每个选择源”独立生成 archive；一个任务选择单文件和文件夹时至少生成两个 archive，`job.index.json` 汇总该 job 的全部 archive。
-- 恢复到手动路径时，文件夹来源必须保留根文件夹名和内部目录结构；文件来源仍恢复为目标目录下的文件名。
-- 备份任务页必须提供缓存目录输入和选择入口，开始任务时使用 UI 当前缓存目录并继续执行 40GiB 预算检查。
-- 原始数据清理实际执行时必须明确提示确认短语应为 `CLEANUP_SOURCES`；预演不强制确认词，永久删除仍要求 `PERMANENT_DELETE_SOURCES`。
-- 主 UI 必须新增云端同步/云端数据库可视化入口，展示本地 outbox/sync_status 汇总，并支持用真实 Cloud Sync summary 回读指定 entity。
-- 远端校对页长提示必须完整可读，并明确说明当前页校对的是本地 SQLite 上传账本与百度 `list/listall` 结果；云端 PostgreSQL 校验转到云端同步页。
-- 更新 `client/README.md`、`docs/user_guide.md`、`docs/release_acceptance_matrix.md` 和本进度文件；定向测试、全量客户端测试、Go 测试、`compileall` 和 `git diff --check` 必须通过，真实百度人工验收仍作为干净 Windows R04-R14 后续项。
+- `go_build.ps1` 必须新增 `-BuildId`，默认使用本地时间 `yyyyMMdd-HHmmss`；默认输出为 `dist/cloud-api/<BuildId>/linux-amd64/cloud-api`，自定义 `-OutputDir` 时也追加 `<BuildId>`。
+- 服务端构建必须使用批次/目标隔离的 `GOCACHE`，继续复用仓库内 `GOMODCACHE`，并在构建前用目标 `GOOS/GOARCH/CGO_ENABLED` 执行标准库自检；旧 `.cache/go-build` 污染不得再导致本轮默认构建失败。
+- `client_build.ps1` 与 `auto_backup_client.release_build` 必须新增 `BuildId`/`--build-id`；默认输出为 `dist/client/<BuildId>/AutoBackupBDNetdisk/`，自定义 `-DistDir` 时也追加 `<BuildId>`，PyInstaller work/spec 缓存同样按批次隔离。
+- dry-run 必须展示包含批次目录的 `--distpath`、`--workpath`、`--specpath`；测试必须覆盖 `--build-id`、默认路径和自定义路径追加批次层。
+- 更新 `README.md`、`client/README.md`、`docs/release_acceptance_matrix.md`、`AGENTS.MD` 和本进度文件；服务端构建、客户端 dry-run/定向测试、`compileall`、Go 测试和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -58,6 +54,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-13：P3-14 构建脚本批次隔离与 Go build 修复
+
+变更原因：用户执行 `.\go_build.ps1` 时，脚本复用旧仓库根 `.cache/go-build`，Go 1.25.10 在目标构建环境下误报 `crypto/rand`、`net/url`、`log/slog`、`os/signal` 等标准库 `package ... is not in std`；同时服务端和客户端构建产物固定写入旧目录，容易覆盖既有产物或混合不同批次。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布构建阻塞修复和用户明确插队需求。
+
+验收标准：服务端构建使用批次/目标隔离的 `GOCACHE` 并在目标 `GOOS/GOARCH` 下做标准库自检；服务端默认输出 `dist/cloud-api/<BuildId>/linux-amd64/cloud-api`；客户端默认输出 `dist/client/<BuildId>/AutoBackupBDNetdisk/`；自定义输出目录也追加 `<BuildId>`；定向测试、构建验证和静态检查通过。
+
+回到主排期条件：构建脚本、测试和文档提交完成后，下一开发小项回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-12：P3-14 授权隔离、备份粒度、恢复结构与校对可视化修复
 
@@ -130,6 +136,30 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：构建脚本批次隔离与 Go build 修复
+
+- P3 阶段 14 构建脚本批次隔离与 Go build 修复完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- `go_build.ps1` 新增 `-BuildId`，默认按 `yyyyMMdd-HHmmss` 生成批次目录；默认服务端产物改为 `dist/cloud-api/<BuildId>/linux-amd64/cloud-api`，自定义 `-OutputDir` 时同样追加 `<BuildId>/<goos>-<goarch>`。
+- 服务端构建缓存改为 `.cache/go-build/<service>/<BuildId>/<goos>-<goarch>`，继续复用仓库内 `.cache/go-mod`；构建前会在目标 `GOOS/GOARCH/CGO_ENABLED` 下执行 `go list crypto/rand net/url log/slog os/signal runtime` 标准库自检。
+- `client_build.ps1` 新增 `-BuildId` 并传递给 `auto_backup_client.release_build --build-id`；客户端默认产物改为 `dist/client/<BuildId>/AutoBackupBDNetdisk/`，PyInstaller `workpath/specpath` 也改为批次目录。
+- `release_build.py` 统一实现 build id 默认生成、Windows 非法目录名校验和默认/自定义 dist/work/spec 路径追加批次层；`tests/test_release_build.py` 覆盖固定 build id、默认路径追加和非法 build id。
+- 更新 README、`client/README.md`、`docs/user_guide.md` 和 `docs/release_acceptance_matrix.md`，将发布构建输出口径改为批次目录，避免用户误以为新构建会覆盖旧构建。
+- 将旧 `.cache/go-build` 污染导致目标标准库误报 `package ... is not in std` 的问题沉淀到 `AGENTS.MD`；补充 Go 测试冷缓存并发编译标准库偶发 compiler/runtime 崩溃时可用 `go test -p=1 ./...` 复跑确认项目断言。
+- 已验证服务端构建：`powershell -NoProfile -ExecutionPolicy Bypass -File .\go_build.ps1 -BuildId test-build-plan` 成功生成 `dist\cloud-api\test-build-plan\linux-amd64\cloud-api`，且不再出现 `package crypto/rand is not in std`。
+- 已验证服务端默认构建：`powershell -NoProfile -ExecutionPolicy Bypass -File .\go_build.ps1` 成功生成 `dist\cloud-api\20260613-120037\linux-amd64\cloud-api`。
+- 已验证客户端 dry-run：`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun -BuildId test-build-plan` 输出的 `--distpath`、`--workpath`、`--specpath` 均包含 `test-build-plan`。
+- 已验证客户端定向测试：`tests/test_release_build.py` 4 项通过；已验证 `python -m compileall src tests` 通过。
+- 已验证 Go：首次 `go test ./...` 在冷缓存并发编译标准库 `crypto/tls` 时触发本机 Go compiler/runtime 崩溃；随后使用同一仓库缓存策略执行 `go test -p=1 ./...` 通过，确认不是项目测试断言失败。
+- 已验证 `git diff --check` 通过。
+
+提交摘要：本次提交修复服务端发布构建复用旧 Go build cache 导致目标标准库误报不存在的问题，并为服务端与客户端构建引入统一 `BuildId` 批次目录；服务端二进制、客户端 PyInstaller dist/work/spec 均按批次隔离，文档和验收矩阵同步更新。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 干净 Windows 验收时使用实际发布批次目录检查客户端 onedir 启动、迁移目录定位、敏感信息审计和升级覆盖策略。
+- 如 Go 冷缓存并发编译标准库再次崩溃，先按 `AGENTS.MD` 记录的 `go test -p=1 ./...` 复跑确认，再判断是否需要更换干净 Go 工具链。
 
 ### P3 阶段 14 打包发布与最终验收：授权隔离、备份粒度、恢复结构与校对可视化修复
 

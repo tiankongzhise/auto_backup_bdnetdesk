@@ -2,6 +2,7 @@ param(
     [string]$DistDir = "dist/client",
     [string]$WorkDir = ".cache/pyinstaller",
     [string]$SpecDir = ".cache/pyinstaller-spec",
+    [string]$BuildId,
     [switch]$DryRun
 )
 
@@ -13,6 +14,13 @@ chcp 65001 | Out-Null
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ClientDir = Join-Path $RepoRoot "client"
+if ([string]::IsNullOrWhiteSpace($BuildId)) {
+    $BuildId = (Get-Date).ToString("yyyyMMdd-HHmmss")
+}
+if ($BuildId -match '[\\/:*?"<>|]') {
+    throw "Invalid -BuildId '$BuildId'. BuildId must be a Windows-safe folder name."
+}
+
 $env:UV_LINK_MODE = "copy"
 $env:UV_CACHE_DIR = Join-Path $RepoRoot ".cache/uv"
 $env:TMP = Join-Path $RepoRoot ".cache/tmp"
@@ -31,6 +39,10 @@ $Args = @(
     (Join-Path $RepoRoot $WorkDir),
     "--spec-dir",
     (Join-Path $RepoRoot $SpecDir)
+)
+$Args += @(
+    "--build-id",
+    $BuildId
 )
 
 if ($DryRun) {

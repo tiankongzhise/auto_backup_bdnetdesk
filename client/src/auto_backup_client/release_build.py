@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -25,6 +26,7 @@ DEFAULT_MIGRATIONS_DIR = CLIENT_ROOT / "migrations" / "sqlite"
 @dataclass(frozen=True)
 class PyInstallerBuildConfig:
     app_name: str = APP_NAME
+    build_id: str = ""
     dist_dir: Path = DEFAULT_DIST_DIR
     work_dir: Path = DEFAULT_WORK_DIR
     spec_dir: Path = DEFAULT_SPEC_DIR
@@ -36,6 +38,10 @@ class PyInstallerBuildConfig:
 
 def build_pyinstaller_args(config: PyInstallerBuildConfig | None = None) -> list[str]:
     selected = config or PyInstallerBuildConfig()
+    build_id = resolve_build_id(selected.build_id)
+    dist_dir = selected.dist_dir / build_id
+    work_dir = selected.work_dir / build_id
+    spec_dir = selected.spec_dir / build_id
     data_mapping = f"{selected.migrations_dir}{os.pathsep}migrations/sqlite"
     args = [
         sys.executable,
@@ -45,11 +51,11 @@ def build_pyinstaller_args(config: PyInstallerBuildConfig | None = None) -> list
         selected.app_name,
         "--onedir",
         "--distpath",
-        str(selected.dist_dir),
+        str(dist_dir),
         "--workpath",
-        str(selected.work_dir),
+        str(work_dir),
         "--specpath",
-        str(selected.spec_dir),
+        str(spec_dir),
         "--paths",
         str(SOURCE_ROOT),
         "--add-data",
@@ -66,19 +72,31 @@ def build_pyinstaller_args(config: PyInstallerBuildConfig | None = None) -> list
 
 
 def run_pyinstaller(config: PyInstallerBuildConfig, *, dry_run: bool = False) -> int:
-    args = build_pyinstaller_args(config)
+    resolved_config = PyInstallerBuildConfig(
+        app_name=config.app_name,
+        build_id=resolve_build_id(config.build_id),
+        dist_dir=config.dist_dir,
+        work_dir=config.work_dir,
+        spec_dir=config.spec_dir,
+        migrations_dir=config.migrations_dir,
+        clean=config.clean,
+        noconfirm=config.noconfirm,
+        windowed=config.windowed,
+    )
+    args = build_pyinstaller_args(resolved_config)
     print(" ".join(_quote_arg(arg) for arg in args))
     if dry_run:
         return 0
-    config.dist_dir.mkdir(parents=True, exist_ok=True)
-    config.work_dir.mkdir(parents=True, exist_ok=True)
-    config.spec_dir.mkdir(parents=True, exist_ok=True)
+    (resolved_config.dist_dir / resolved_config.build_id).mkdir(parents=True, exist_ok=True)
+    (resolved_config.work_dir / resolved_config.build_id).mkdir(parents=True, exist_ok=True)
+    (resolved_config.spec_dir / resolved_config.build_id).mkdir(parents=True, exist_ok=True)
     completed = subprocess.run(args, cwd=REPO_ROOT, check=False)
     return completed.returncode
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build the Windows desktop client release package.")
+    parser.add_argument("--build-id", default="")
     parser.add_argument("--dist-dir", type=Path, default=DEFAULT_DIST_DIR)
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK_DIR)
     parser.add_argument("--spec-dir", type=Path, default=DEFAULT_SPEC_DIR)
@@ -90,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parsed = parser.parse_args(argv)
     config = PyInstallerBuildConfig(
         app_name=parsed.name,
+        build_id=parsed.build_id,
         dist_dir=parsed.dist_dir,
         work_dir=parsed.work_dir,
         spec_dir=parsed.spec_dir,
@@ -97,6 +116,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         clean=not parsed.no_clean,
     )
     return run_pyinstaller(config, dry_run=parsed.dry_run)
+
+
+def resolve_build_id(build_id: str = "") -> str:
+    if not build_id or build_id.isspace():
+        return datetime.now().strftime("%Y%m%d-%H%M%S")
+    if any(ch in build_id for ch in '\\/:*?"<>|'):
+        raise ValueError(f"Invalid build id: {build_id!r}")
+    return build_id
 
 
 def _quote_arg(arg: str) -> str:

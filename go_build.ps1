@@ -4,13 +4,14 @@
 #   - module: cloud-api/
 #   - service entry: cmd/cloud-api
 #   - target: linux/amd64
-#   - output: dist/cloud-api/linux-amd64/cloud-api
+#   - output: dist/cloud-api/<yyyyMMdd-HHmmss>/linux-amd64/cloud-api
 
 param(
     [string]$ModuleDir,                       # Go module directory. Auto-detected if omitted.
     [string]$ServiceName,                     # Entry point subdir under cmd/. Auto-detected if omitted.
-    [string]$OutputDir,                       # Output directory. Defaults to dist/<service>/<goos>-<goarch>.
+    [string]$OutputDir,                       # Output directory root. Defaults to dist/<service>; <BuildId> is always appended.
     [string]$OutputName,                      # Optional: override binary output name.
+    [string]$BuildId,                         # Build batch id. Defaults to yyyyMMdd-HHmmss.
     [ValidateSet('Module', 'Service')]
     [string]$NameSource = "Module",           # Source for binary name when -OutputName is omitted.
     [string]$GoOS = "linux",
@@ -221,6 +222,20 @@ function Get-OutputFileName {
     return $BaseName
 }
 
+function Get-ValidBuildId {
+    param([string]$RequestedBuildId)
+
+    if ([string]::IsNullOrWhiteSpace($RequestedBuildId)) {
+        return (Get-Date).ToString("yyyyMMdd-HHmmss")
+    }
+
+    if ($RequestedBuildId -match '[\\/:*?"<>|]') {
+        Fail-Build "Invalid -BuildId '$RequestedBuildId'. BuildId must be a Windows-safe folder name."
+    }
+
+    return $RequestedBuildId
+}
+
 # -----------------------------------------------------------------------------
 # Resolve Go module
 # -----------------------------------------------------------------------------
@@ -291,6 +306,9 @@ if ([string]::IsNullOrWhiteSpace($ServiceName)) {
 # -----------------------------------------------------------------------------
 # Determine final binary output path
 # -----------------------------------------------------------------------------
+$BuildId = Get-ValidBuildId $BuildId
+Write-Host "Build ID: $BuildId" -ForegroundColor Gray
+
 if (-not [string]::IsNullOrWhiteSpace($OutputName)) {
     $baseOutputName = $OutputName
     Write-Host "Binary name overridden by -OutputName: $baseOutputName" -ForegroundColor Gray
@@ -317,10 +335,11 @@ if ([string]::IsNullOrWhiteSpace($baseOutputName)) {
 $outputFileName = Get-OutputFileName -BaseName $baseOutputName -TargetGoOS $GoOS
 
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-    $resolvedOutputDir = Join-Path $repoRoot (Join-Path "dist" (Join-Path $ServiceName "$GoOS-$GoArch"))
+    $outputRootDir = Join-Path $repoRoot (Join-Path "dist" $ServiceName)
 } else {
-    $resolvedOutputDir = Resolve-ProjectPath $OutputDir
+    $outputRootDir = Resolve-ProjectPath $OutputDir
 }
+$resolvedOutputDir = Join-Path (Join-Path $outputRootDir $BuildId) "$GoOS-$GoArch"
 $resolvedOutputDir = [System.IO.Path]::GetFullPath($resolvedOutputDir)
 New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null
 
@@ -332,10 +351,12 @@ Write-Host "Output: $outputRelativePath" -ForegroundColor Cyan
 # Prepare local caches
 # -----------------------------------------------------------------------------
 Write-Host "[1/5] Preparing local Go caches..." -ForegroundColor Cyan
-$env:GOCACHE = Join-Path $repoRoot ".cache\go-build"
+$env:GOCACHE = Join-Path $repoRoot (Join-Path ".cache\go-build" (Join-Path $ServiceName (Join-Path $BuildId "$GoOS-$GoArch")))
 $env:GOMODCACHE = Join-Path $repoRoot ".cache\go-mod"
 New-Item -ItemType Directory -Force -Path $env:GOCACHE | Out-Null
 New-Item -ItemType Directory -Force -Path $env:GOMODCACHE | Out-Null
+Write-Host "GOCACHE: $(Get-RelativePathFromRepo $env:GOCACHE)" -ForegroundColor Gray
+Write-Host "GOMODCACHE: $(Get-RelativePathFromRepo $env:GOMODCACHE)" -ForegroundColor Gray
 
 # -----------------------------------------------------------------------------
 # Check Go toolchain version
@@ -372,6 +393,18 @@ Write-Host "[3/5] Building Go binary for $GoOS/$GoArch ..." -ForegroundColor Cya
 $env:GOOS = $GoOS
 $env:GOARCH = $GoArch
 $env:CGO_ENABLED = "0"
+
+# -----------------------------------------------------------------------------
+# Check target standard library availability
+# -----------------------------------------------------------------------------
+Write-Host "Checking target Go standard library for $GoOS/$GoArch ..." -ForegroundColor Cyan
+$stdLibPackages = @("crypto/rand", "net/url", "log/slog", "os/signal", "runtime")
+$stdLibResult = Invoke-GoCapture -Arguments (@("list") + $stdLibPackages) -WorkingDirectory $moduleRoot
+if ($stdLibResult.ExitCode -ne 0) {
+    $goEnvResult = Invoke-GoCapture -Arguments @("env", "GOROOT", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOCACHE", "GOMODCACHE") -WorkingDirectory $moduleRoot
+    $goEnvSummary = $goEnvResult.Output
+    Fail-Build "Target Go standard library check failed. This can be caused by a polluted Go build cache or a broken Go toolchain. Output: $($stdLibResult.Output)`nGo env summary:`n$goEnvSummary"
+}
 
 $entryPoint = "./cmd/$ServiceName"
 $buildArgs = @(

@@ -21,16 +21,18 @@
 默认输出目录：
 
 ```text
-dist/client/AutoBackupBDNetdisk/
+dist/client/<yyyyMMdd-HHmmss>/AutoBackupBDNetdisk/
 ```
 
-构建脚本固定使用仓库内缓存目录：
+可通过 `-BuildId <批次名>` 固定批次目录；自定义 `-DistDir` 时也会在输出根目录下追加同一批次层，避免覆盖旧构建或混合不同批次产物。
+
+构建脚本固定使用仓库内缓存目录，并按批次隔离 PyInstaller work/spec：
 
 ```text
 .cache/uv
 .cache/tmp
-.cache/pyinstaller
-.cache/pyinstaller-spec
+.cache/pyinstaller/<BuildId>
+.cache/pyinstaller-spec/<BuildId>
 ```
 
 这些目录和 `dist/` 均不得提交。
@@ -52,8 +54,8 @@ PyInstaller 官方文档获取记录：
 
 | 编号 | 场景 | 环境 | 操作 | 通过标准 | 当前状态 |
 | --- | --- | --- | --- | --- | --- |
-| R01 | 发布构建 dry-run | 开发机 | `.\client_build.ps1 -DryRun` | 输出 PyInstaller 命令，包含 GUI onedir、源码路径、迁移 data 和仓库内输出/缓存目录 | 本轮已验收 |
-| R02 | 发布构建 | 开发机 | `.\client_build.ps1` | 生成 `dist/client/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe`，无敏感文件进入 dist | 本轮已验收开发机构建；干净机待验收 |
+| R01 | 发布构建 dry-run | 开发机 | `.\client_build.ps1 -DryRun` | 输出 PyInstaller 命令，包含 GUI onedir、源码路径、迁移 data 和带 `<BuildId>` 的仓库内输出/缓存目录 | 本轮已验收 |
+| R02 | 发布构建 | 开发机 | `.\client_build.ps1` | 生成 `dist/client/<BuildId>/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe`，无敏感文件进入 dist | 本轮已验收开发机构建；干净机待验收 |
 | R03 | 迁移定位 | 开发机/打包包 | 启动后初始化新 SQLite | 源码运行读取 `client/migrations/sqlite`；打包运行读取 bundle 内 `migrations/sqlite` | 本轮自动化验收源码与 `_MEIPASS` 分支；打包 exe 启动待干净机验收 |
 | R04 | 首次启动 | 干净 Windows | 双击 exe | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题 | 待执行 |
 | R05 | 百度授权 | 干净 Windows | 设备码/扫码授权 | 只在百度官方页面输入百度账号；本机保存 DPAPI Device Token/KDF 材料；不落仓库路径 | 待执行 |

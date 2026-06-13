@@ -432,3 +432,23 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：将 `GOCACHE` 和 `GOMODCACHE` 显式指向仓库内 `.cache/go-build` 和 `.cache/go-mod` 后，`cloud-api/` 下 `go test ./...` 可在沙箱内通过。
 
 后续约束：后续 Go 测试优先设置 `$env:GOCACHE='<repo>\.cache\go-build'; $env:GOMODCACHE='<repo>\.cache\go-mod'`，不得把用户级 Go 缓存权限错误误判为项目代码失败；`.cache/` 不得提交。
+
+### 2026-06-13：旧 Go build cache 污染导致交叉构建误报标准库不存在
+
+问题：执行 `.\go_build.ps1` 构建 Linux amd64 服务端二进制时，Go 1.25.10 报 `crypto/rand`、`net/url`、`log/slog`、`os/signal` 等标准库 `package ... is not in std`，路径指向 `C:\Program Files\Go\src\...`；但对应标准库目录实际存在，默认环境下 `go list` 可通过。
+
+原因：脚本复用仓库根旧 `.cache/go-build`，该缓存状态会污染目标 `GOOS/GOARCH` 下的标准库识别；改用新的目标/批次隔离 `GOCACHE` 后，同一 Go 安装可通过目标标准库自检。
+
+解决方案：`go_build.ps1` 新增 `-BuildId`，默认按 `yyyyMMdd-HHmmss` 生成批次目录；服务端构建产物输出到 `dist/cloud-api/<BuildId>/<goos>-<goarch>/`，并使用 `.cache/go-build/<service>/<BuildId>/<goos>-<goarch>` 作为构建缓存。构建前在目标 `GOOS/GOARCH/CGO_ENABLED` 下执行 `go list crypto/rand net/url log/slog os/signal runtime`，失败时输出 Go 环境摘要。
+
+后续约束：发布构建不得复用长期存在的通用 `.cache/go-build` 目录；遇到 `package ... is not in std` 时，先检查 `GOCACHE` 是否被旧缓存污染，并使用目标/批次隔离缓存复跑，不得直接归因于业务代码或盲目重装 Go。
+
+### 2026-06-13：Go 测试冷缓存并发编译标准库偶发 compiler/runtime 崩溃
+
+问题：本轮修复后执行 `go test ./...`，在冷的批次测试缓存下编译标准库 `crypto/tls` 时触发 Go compiler/runtime 崩溃，报 `s.allocCount != s.nelems && freeIndex == s.nelems`，失败发生在项目测试断言之前。
+
+原因：当前 Windows Go 1.25.10 本机环境在冷缓存并发编译标准库时仍可能偶发不稳定；同一代码和依赖使用低并发 `go test -p=1 ./...` 可通过。
+
+解决方案：保持发布构建使用批次隔离 `GOCACHE`；Go 测试如遇标准库冷编译 compiler/runtime 崩溃，先用同一 `GOCACHE/GOMODCACHE` 策略配合 `go test -p=1 ./...` 复跑确认项目断言。
+
+后续约束：不得把标准库冷编译阶段的 Go compiler/runtime 崩溃误判为项目代码失败；记录复跑命令和结果，必要时更换干净 Go 工具链继续验收。

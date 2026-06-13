@@ -116,13 +116,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1
 构建成功后，默认输出目录是：
 
 ```text
-dist/client/AutoBackupBDNetdisk/
+dist/client/<yyyyMMdd-HHmmss>/AutoBackupBDNetdisk/
 ```
 
 主程序是：
 
 ```text
-dist/client/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe
+dist/client/<yyyyMMdd-HHmmss>/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe
 ```
 
 如果只是想检查构建命令，不真正打包，可以执行：
