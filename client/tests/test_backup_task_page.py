@@ -16,7 +16,17 @@ from auto_backup_client.dedupe_index import ContentDedupeIndexer
 from auto_backup_client.scan_fingerprints import BackupScanner
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields
 from auto_backup_client.ui import main_window
-from auto_backup_client.ui.main_window import BackupTaskPage, BackupTaskPageConfig, CloudSyncPage, RemoteReconcilePage, RestorePage, SourceCleanupPage, SourceMappingPage
+from auto_backup_client.ui.main_window import (
+    BackupTaskPage,
+    BackupTaskPageConfig,
+    CloudSyncPage,
+    MainWindow,
+    MainWindowConfig,
+    RemoteReconcilePage,
+    RestorePage,
+    SourceCleanupPage,
+    SourceMappingPage,
+)
 from test_backup_pipeline import FakeBaiduForPipeline, FakeCloudForPipeline
 
 
@@ -141,6 +151,28 @@ def test_backup_task_page_start_runs_real_pipeline_without_sensitive_status_leak
     assert str(tmp_path) not in combined_status
     assert "runtime-secret" not in combined_status
     assert "Test123456789" not in combined_status
+
+
+def test_main_window_starts_and_syncs_restore_cache_root(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    window = MainWindow(
+        MainWindowConfig(
+            cloud_api_base_url="https://backup.baichengedu.com",
+            device_token="secret-device-token",
+            device_id="device-1",
+            sqlite_path=str(tmp_path / "backup_state.sqlite3"),
+            cache_root=str(tmp_path / "cache"),
+        )
+    )
+
+    assert hasattr(window._restore_page, "set_cache_root")
+    new_cache = str(tmp_path / "new-cache")
+    window._backup_page.cache_root_changed.emit(new_cache)
+
+    assert window._restore_page._cache_root == new_cache
+    assert not hasattr(window._cleanup_page, "set_cache_root")
+    window.close()
 
 
 def test_source_mapping_page_renders_rows_without_local_path_leak(tmp_path, monkeypatch) -> None:

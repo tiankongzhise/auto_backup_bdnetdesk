@@ -11,17 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 构建脚本批次隔离与 Go build 修复，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划修复服务端 `go_build.ps1` 使用旧 `.cache/go-build` 时标准库误报 `package ... is not in std` 的构建失败，并优化服务端/客户端 build 脚本，让每次构建产物和 PyInstaller 缓存进入 `yyyyMMdd-HHmmss` 批次目录，避免覆盖旧产物或混合不同批次。
+- 本轮插队工作：P3 阶段 14 打包客户端启动阻塞修复，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划修复构建后的本地客户端启动时 `RestorePage` 缺少 `set_cache_root` 导致主窗口构建失败的问题，并补齐主窗口启动和备份页缓存目录联动的自动化回归测试。
 - 本轮完成后回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
 
 ## 本次验收标准
 
-- `go_build.ps1` 必须新增 `-BuildId`，默认使用本地时间 `yyyyMMdd-HHmmss`；默认输出为 `dist/cloud-api/<BuildId>/linux-amd64/cloud-api`，自定义 `-OutputDir` 时也追加 `<BuildId>`。
-- 服务端构建必须使用批次/目标隔离的 `GOCACHE`，继续复用仓库内 `GOMODCACHE`，并在构建前用目标 `GOOS/GOARCH/CGO_ENABLED` 执行标准库自检；旧 `.cache/go-build` 污染不得再导致本轮默认构建失败。
-- `client_build.ps1` 与 `auto_backup_client.release_build` 必须新增 `BuildId`/`--build-id`；默认输出为 `dist/client/<BuildId>/AutoBackupBDNetdisk/`，自定义 `-DistDir` 时也追加 `<BuildId>`，PyInstaller work/spec 缓存同样按批次隔离。
-- dry-run 必须展示包含批次目录的 `--distpath`、`--workpath`、`--specpath`；测试必须覆盖 `--build-id`、默认路径和自定义路径追加批次层。
-- 更新 `README.md`、`client/README.md`、`docs/release_acceptance_matrix.md`、`AGENTS.MD` 和本进度文件；服务端构建、客户端 dry-run/定向测试、`compileall`、Go 测试和 `git diff --check` 必须通过。
+- 主窗口初始化必须不再因 `RestorePage.set_cache_root` 缺失抛出 `AttributeError`，源码运行和打包后的同一入口都应能完成 UI 构建。
+- `RestorePage` 必须提供 `set_cache_root` 页面接口，备份页切换缓存目录后恢复页应同步更新自身 `_cache_root` 和 `RestoreService`。
+- 移除误挂在 `SourceCleanupPage` 上的恢复缓存切换逻辑，避免清理页持有不存在字段或错误服务类型。
+- 新增自动化回归测试覆盖 `MainWindow` 构建和 `cache_root_changed -> RestorePage.set_cache_root` 信号联动。
+- 重新构建客户端发布包并执行短时启动 smoke，确认新 exe 不再在主窗口构建阶段抛出本轮 `AttributeError`。
+- 更新本进度文件；客户端定向测试、发布构建、启动 smoke、`compileall` 和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -42,7 +43,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖和开发机云同步真实性审计已完成，P3 阶段 14 尚未整体完成 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计和打包客户端启动阻塞修复已完成，P3 阶段 14 尚未整体完成 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
 
 ## 进度差异审计
 
@@ -54,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-14：P3-14 打包客户端启动阻塞修复
+
+变更原因：用户反馈构建后的本地客户端启动失败，主窗口在连接备份页 `cache_root_changed` 信号到恢复页时抛出 `AttributeError: 'RestorePage' object has no attribute 'set_cache_root'`；排查发现恢复页缓存切换方法误放到了原始数据清理页。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选启动阻塞修复和用户明确插队需求。
+
+验收标准：主窗口可完成构建；恢复页提供 `set_cache_root` 并在备份页缓存目录变化后重建恢复服务；自动化测试覆盖该启动和信号联动路径；客户端定向测试、发布包构建、短时启动 smoke、`compileall` 和静态检查通过。
+
+回到主排期条件：本轮启动阻塞修复、测试和进度记录提交完成后，下一开发小项回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-13：P3-14 构建脚本批次隔离与 Go build 修复
 
@@ -136,6 +147,26 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：打包客户端启动阻塞修复
+
+- P3 阶段 14 打包客户端启动阻塞修复完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 修复构建后的本地客户端启动失败问题：主窗口连接 `BackupTaskPage.cache_root_changed` 到 `RestorePage.set_cache_root` 时，不再因恢复页缺少该方法抛出 `AttributeError`。
+- 将误放在 `SourceCleanupPage` 上的恢复缓存切换方法移到 `RestorePage`；恢复页切换缓存目录时会更新 `_cache_root`，重建 `RestoreService`，并刷新恢复候选。
+- 新增 `test_main_window_starts_and_syncs_restore_cache_root`，覆盖 `MainWindow` 构建、恢复页存在 `set_cache_root`、备份页缓存目录信号可同步恢复页，以及清理页不再暴露错误的恢复缓存切换接口。
+- 已验证客户端 UI 定向测试：`uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-ui-startup-full tests/test_backup_task_page.py` 通过，11 个测试通过。
+- 已验证客户端编译检查：`uv run python -m compileall src tests` 通过。
+- 已验证客户端发布构建：`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -BuildId startup-fix-20260614` 成功生成 `dist\client\startup-fix-20260614\AutoBackupBDNetdisk\AutoBackupBDNetdisk.exe`。
+- 已验证构建包短时启动 smoke：设置 `QT_QPA_PLATFORM=offscreen` 后启动新 exe，5 秒后进程仍存活，随后主动结束该进程；未再出现本轮主窗口构建阶段 `AttributeError`。
+- 已验证 `git diff --check` 通过。
+
+提交摘要：本次提交修复 PyInstaller 构建客户端启动时恢复页缺少 `set_cache_root` 的阻塞错误，将缓存目录联动接口归位到 `RestorePage`，用主窗口启动回归测试锁定备份页到恢复页的缓存目录信号链路，并重新构建发布包完成短时启动 smoke。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows R04-R14 发布候选验收。
+- 重新构建客户端发布包后，在实际 onedir 目录中双击 `AutoBackupBDNetdisk.exe` 验证 R04 首次启动不再出现本轮 `AttributeError`。
+- 干净 Windows 仍需继续真实授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计矩阵。
 
 ### P3 阶段 14 打包发布与最终验收：构建脚本批次隔离与 Go build 修复
 

@@ -953,14 +953,6 @@ class SourceCleanupPage(QWidget):
         self._build_ui()
         self.refresh_candidates()
 
-    def set_cache_root(self, cache_root: str) -> None:
-        cleaned = cache_root.strip()
-        if not cleaned or cleaned == self._cache_root:
-            return
-        self._cache_root = cleaned
-        self._service = RestoreService(self._store, device_id=self._device_id, cache_root=cleaned)
-        self.refresh_candidates()
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -1143,6 +1135,14 @@ class RestorePage(QWidget):
         self._service = RestoreService(store, device_id=self._device_id, cache_root=cache_root)
         self._candidates = []
         self._build_ui()
+        self.refresh_candidates()
+
+    def set_cache_root(self, cache_root: str) -> None:
+        cleaned = cache_root.strip()
+        if not cleaned or cleaned == self._cache_root:
+            return
+        self._cache_root = cleaned
+        self._service = RestoreService(self._store, device_id=self._device_id, cache_root=cleaned)
         self.refresh_candidates()
 
     def _build_ui(self) -> None:
