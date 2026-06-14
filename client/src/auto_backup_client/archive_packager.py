@@ -62,6 +62,13 @@ class SevenZipNotFoundError(ArchivePackagingError):
     pass
 
 
+class PayloadSourceChangedError(ArchivePackagingError):
+    def __init__(self, *, file_item_id: str, display_name: str) -> None:
+        self.file_item_id = file_item_id
+        self.display_name = display_name
+        super().__init__(f"payload source file changed after scan: {display_name}")
+
+
 class SevenZipRunner:
     def __init__(self, executable: str | Path | None = None) -> None:
         self.executable = resolve_7zip_executable(executable)
@@ -122,7 +129,13 @@ class SevenZipRunner:
             errors="replace",
         )
         if completed.returncode != 0:
-            raise ArchivePackagingError(f"7-Zip {action} failed with exit code {completed.returncode}")
+            detail = _sanitize_7zip_output(
+                "\n".join(part for part in (completed.stderr, completed.stdout) if part)
+            )
+            message = f"7-Zip {action} failed with exit code {completed.returncode}"
+            if detail:
+                message = f"{message}: {detail}"
+            raise ArchivePackagingError(message)
 
 
 class ArchivePackager:
@@ -167,7 +180,11 @@ class ArchivePackager:
         manifest_id = _manifest_id(cleaned_job_id, archive_seq)
         archive_id = _archive_id(cleaned_job_id, archive_seq, manifest_id)
         archive_type = _archive_type(context.file_references)
-        external_references = _payload_archive_references(self.store, cleaned_job_id)
+        external_references = _payload_archive_references(
+            self.store,
+            cleaned_job_id,
+            exclude_archive_id=archive_id,
+        )
         manifest_data = _build_manifest_data(
             context,
             device_id=self.device_id,
@@ -569,7 +586,12 @@ def _filter_manifest_context(
     )
 
 
-def _payload_archive_references(store: SQLiteClientStore, backup_job_id: str) -> dict[str, dict[str, str]]:
+def _payload_archive_references(
+    store: SQLiteClientStore,
+    backup_job_id: str,
+    *,
+    exclude_archive_id: str = "",
+) -> dict[str, dict[str, str]]:
     with store.connect() as conn:
         rows = conn.execute(
             """
@@ -584,9 +606,10 @@ def _payload_archive_references(store: SQLiteClientStore, backup_job_id: str) ->
                AND ro.object_type = 'archive'
             WHERE am.job_id = ?
               AND am.member_type = 'payload'
+              AND am.archive_id <> ?
             ORDER BY am.created_at DESC, am.archive_member_id
             """,
-            (backup_job_id,),
+            (backup_job_id, exclude_archive_id),
         ).fetchall()
     references: dict[str, dict[str, str]] = {}
     for row in rows:
@@ -712,7 +735,10 @@ def _stage_payload_members(payload_refs: Sequence[Mapping[str, Any]], payload_di
             raise ArchivePackagingError("payload source file is missing")
         expected_size = int(ref["size_bytes"])
         if _file_size(source) != expected_size or file_sha256(source) != str(ref["file_sha256"]):
-            raise ArchivePackagingError("payload source file changed after scan")
+            raise PayloadSourceChangedError(
+                file_item_id=str(ref["file_item_id"]),
+                display_name=str(ref["display_name"]),
+            )
         content_id = str(ref["content_id"])
         local_fs.make_dirs(payload_dir)
         target = payload_dir / content_id
@@ -797,6 +823,34 @@ def _reject_secret_keys(value: Any) -> None:
     elif isinstance(value, list):
         for item in value:
             _reject_secret_keys(item)
+
+
+def _sanitize_7zip_output(value: str) -> str:
+    text = value.replace("\r", " ").replace("\n", " ")
+    redacted_parts: list[str] = []
+    for raw_part in text.split():
+        part = raw_part.strip()
+        if not part:
+            continue
+        if _looks_sensitive_7zip_token(part):
+            redacted_parts.append("[redacted-path]")
+        else:
+            redacted_parts.append(part)
+    sanitized = " ".join(redacted_parts)
+    if len(sanitized) > 360:
+        sanitized = sanitized[:357] + "..."
+    return sanitized
+
+
+def _looks_sensitive_7zip_token(value: str) -> bool:
+    stripped = value.strip("\"'")
+    if stripped.startswith("-p") and len(stripped) > 2:
+        return True
+    if stripped.startswith("-o") and (":\\" in stripped or ":/" in stripped or stripped.startswith("-o\\\\")):
+        return True
+    if ":\\" in stripped or ":/" in stripped or stripped.startswith("\\\\"):
+        return True
+    return False
 
 
 def _reset_dir(path: Path) -> None:

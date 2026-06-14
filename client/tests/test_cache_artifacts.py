@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from auto_backup_client import cache_artifacts
 from auto_backup_client.cache_artifacts import (
     CacheArtifactError,
     CacheArtifactManager,
@@ -88,6 +89,32 @@ def test_cache_usage_blocks_when_effective_budget_below_minimum(tmp_path) -> Non
                 reserve_bytes=0,
             )
         )
+
+
+def test_cache_usage_effective_budget_does_not_subtract_existing_cache_bytes(tmp_path, monkeypatch) -> None:
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    cache_root = tmp_path / "cache"
+    large_existing_cache = cache_root / "jobs" / "old" / "archives" / "old.7z"
+    large_existing_cache.parent.mkdir(parents=True)
+    large_existing_cache.write_bytes(b"x" * 10)
+    manager = CacheArtifactManager(store, cache_root=cache_root)
+    monkeypatch.setattr(cache_artifacts, "_directory_size", lambda path: 70)
+    monkeypatch.setattr(cache_artifacts, "_disk_free_bytes", lambda path: 100)
+
+    usage = manager.ensure_can_start(
+        CacheBudget(
+            cache_root=cache_root,
+            cache_quota_bytes=80,
+            min_effective_budget_bytes=80,
+            max_archive_size_bytes=1,
+            reserve_bytes=0,
+        )
+    )
+
+    assert usage.used_bytes == 70
+    assert usage.effective_budget_bytes == 80
+    assert usage.can_start_new_job is True
 
 
 def test_cache_level_classification_boundaries() -> None:

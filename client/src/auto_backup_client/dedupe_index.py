@@ -398,26 +398,26 @@ def _rewrite_reference_roles(conn, backup_job_id: str, content_id: str, *, statu
 
 
 def _existing_payload_reference_count(conn, content_id: str, *, excluding_backup_job_id: str = "") -> int:
+    query = """
+        SELECT COUNT(*)
+        FROM content_references cr
+        WHERE cr.content_id = ?
+          AND cr.reference_role = 'payload_source'
+          AND (
+              cr.dedupe_status = 'archive_assigned'
+              OR EXISTS (
+                  SELECT 1
+                  FROM archive_members am
+                  WHERE am.content_reference_id = cr.content_reference_id
+                    AND am.member_type = 'payload'
+              )
+          )
+    """
+    values: list[object] = [content_id]
     if excluding_backup_job_id:
-        row = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM content_references
-            WHERE content_id = ?
-              AND reference_role = 'payload_source'
-              AND backup_job_id <> ?
-            """,
-            (content_id, excluding_backup_job_id),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM content_references
-            WHERE content_id = ? AND reference_role = 'payload_source'
-            """,
-            (content_id,),
-        ).fetchone()
+        query += " AND cr.backup_job_id <> ?"
+        values.append(excluding_backup_job_id)
+    row = conn.execute(query, tuple(values)).fetchone()
     return int(row[0]) if row is not None else 0
 
 

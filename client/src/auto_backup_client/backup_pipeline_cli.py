@@ -224,6 +224,8 @@ def _safe_error_summary(exc: Exception) -> str:
         code = exc.error_code or "unknown"
         status = f" status={exc.status_code}" if exc.status_code else ""
         return f"baidu_netdisk_error{status} code={code}"
+    if isinstance(exc, BackupPipelineError):
+        return _sanitize_local_error_text(str(exc)) or "backup_pipeline_error"
     if isinstance(exc, ValueError):
         allowed = {
             "account_id is required because current device has no selected Baidu account",
@@ -238,6 +240,24 @@ def _safe_error_summary(exc: Exception) -> str:
     if isinstance(exc, OSError):
         return "filesystem_error"
     return type(exc).__name__
+
+
+def _sanitize_local_error_text(value: str) -> str:
+    text = value.replace("\r", " ").replace("\n", " ")
+    parts: list[str] = []
+    for raw_part in text.split():
+        part = raw_part.strip()
+        if not part:
+            continue
+        stripped = part.strip("\"'")
+        if ":\\" in stripped or ":/" in stripped or stripped.startswith("\\\\"):
+            parts.append("[redacted-path]")
+        else:
+            parts.append(part)
+    sanitized = " ".join(parts)
+    if len(sanitized) > 220:
+        sanitized = sanitized[:217] + "..."
+    return sanitized
 
 
 def _print(message: str) -> None:

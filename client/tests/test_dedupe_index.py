@@ -4,12 +4,16 @@ from datetime import datetime, timezone
 
 import pytest
 
+from auto_backup_client.archive_packager import ArchivePackager
 from auto_backup_client.baidu.cloud_api import CloudAPIError
 from auto_backup_client.baidu.models import ContentObject
 from auto_backup_client.backup_jobs import BackupJobManager, BackupSourceInput
 from auto_backup_client.dedupe_index import ContentDedupeIndexer, DedupeIndexError
 from auto_backup_client.scan_fingerprints import BackupScanner, file_content_id
 from auto_backup_client.sqlite_store import SQLiteClientStore
+
+
+TEST_ARCHIVE_PASSWORD = "Test123456789"
 
 
 def test_build_job_index_creates_one_content_object_and_multiple_references_without_paths_in_outbox(tmp_path) -> None:
@@ -79,6 +83,12 @@ def test_existing_content_in_another_job_makes_new_job_reference_local_duplicate
     indexer = ContentDedupeIndexer(store, device_id="device-1")
 
     first_result = indexer.build_job_index(first_job.job.backup_job_id, now="2026-06-08T03:02:00Z")
+    ArchivePackager(store, device_id="device-1").package_job(
+        first_job.job.backup_job_id,
+        cache_root=tmp_path / "cache",
+        password=TEST_ARCHIVE_PASSWORD,
+        now="2026-06-08T03:03:00Z",
+    )
     second_result = indexer.build_job_index(second_job.job.backup_job_id, now="2026-06-08T03:12:00Z")
 
     assert first_result.payload_source_count == 1

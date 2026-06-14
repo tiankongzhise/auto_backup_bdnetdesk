@@ -147,7 +147,10 @@ class CacheArtifactManager:
             max_archive_size_bytes=actual_budget.max_archive_size_bytes,
             reserve_bytes=actual_budget.reserve_bytes,
         )
-        effective_budget = min(max(0, actual_budget.cache_quota_bytes - used_bytes), disk_free)
+        effective_budget = min(
+            actual_budget.cache_quota_bytes,
+            max(0, disk_free - actual_budget.reserve_bytes),
+        )
         reason = ""
         if level == "critical":
             reason = "cache level is critical"

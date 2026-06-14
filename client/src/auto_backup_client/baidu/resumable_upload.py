@@ -504,6 +504,26 @@ class BaiduResumableUploader:
                 fs_id=int(remote.get("archive", {}).get("fs_id") or 0),
                 meta_sha256=str(remote.get("archive_meta", {}).get("sha256") or ""),
             )
+        for row in self._store.list_upload_sessions_for_reconcile(job_id=job_id):
+            archive_id = str(row["archive_id"])
+            if not archive_id or archive_id == current.archive_id or archive_id in archives_by_id:
+                continue
+            if str(row.get("upload_status", "")) != "remote_created" or str(row.get("meta_status", "")) != "uploaded":
+                continue
+            remote = self._remote_paths_for_archive(job_id=job_id, archive_id=archive_id)
+            if not remote:
+                continue
+            archives_by_id[archive_id] = JobIndexArchive(
+                archive_id=archive_id,
+                archive_seq=int(row["archive_seq"] or 0),
+                archive_sha256=str(row["archive_sha256"] or ""),
+                archive_size=int(row["archive_size"] or 0),
+                archive_type=str(row["archive_type"] or ""),
+                remote_archive_path=str(row["remote_archive_path"] or remote.get("archive", {}).get("remote_path", "")),
+                remote_meta_path=str(row["remote_meta_path"] or remote.get("archive_meta", {}).get("remote_path", "")),
+                fs_id=int(remote.get("archive", {}).get("fs_id") or row.get("fs_id") or 0),
+                meta_sha256=str(remote.get("archive_meta", {}).get("sha256") or ""),
+            )
         archives_by_id[current.archive_id] = current
         return build_job_index_document(
             job_id=job_id,

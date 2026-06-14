@@ -215,6 +215,44 @@ class BackupScanner:
             sources=tuple(source_results),
         )
 
+    def mark_file_changed(
+        self,
+        *,
+        backup_job_id: str,
+        file_item_id: str,
+        now: str | None = None,
+    ) -> None:
+        cleaned_job_id = backup_job_id.strip()
+        cleaned_file_item_id = file_item_id.strip()
+        if not cleaned_job_id or not cleaned_file_item_id:
+            raise BackupScanError("backup_job_id and file_item_id are required")
+        actual_now = now or utc_now_iso()
+        with self.store.transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM file_items
+                WHERE backup_job_id = ? AND file_item_id = ?
+                """,
+                (cleaned_job_id, cleaned_file_item_id),
+            ).fetchone()
+            if row is None:
+                raise BackupScanError("file item not found")
+            payload = dict(row)
+            payload["scan_status"] = "changed_during_scan"
+            payload["updated_at"] = actual_now
+            versioned = build_version_fields(
+                entity_payload=payload,
+                updated_by_device_id=self.device_id,
+                data_version=int(row["data_version"]) + 1,
+                schema_version=int(row["schema_version"]),
+                now=actual_now,
+                sync_status="sync_pending",
+                deleted_at=row["deleted_at"],
+                last_synced_revision_id=row["last_synced_revision_id"],
+            )
+            self.store.put_file_item(conn, versioned)
+
     def _load_job_with_sources(self, backup_job_id: str) -> BackupJobWithSources:
         try:
             from auto_backup_client.backup_jobs import BackupJobManager

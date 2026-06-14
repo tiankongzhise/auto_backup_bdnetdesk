@@ -11,17 +11,17 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 百度授权设备标识修复，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划修复百度设置页以“当前设备”作为选择标识导致多设备授权难以区分的问题：云端账号列表补充绑定设备 ID 和本机设备标记，客户端改为显示设备 ID 前四后四摘要并支持双击查看完整 ID，不再把“当前设备”作为可见选择项。本轮修复已完成。
+- 本轮插队工作：P3 阶段 14 真实备份压缩失败与重试缓存预算修复，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划修复用户反馈的真实备份阻塞：同时选择 `C:\Users\3700x\Downloads\LibreHardwareMonitor` 文件夹和 `C:\Users\3700x\Downloads\LibreHardwareMonitor.zip` 文件时压缩失败；同一任务重启重试时缓存目录 `C:/Users/3700x/Desktop/新建文件夹/cache` 实际空间足够但误报有效缓存预算低于最小要求。
 - 本轮完成后回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
 
 ## 本次验收标准
 
-- `GET /v1/baidu/accounts` 返回的账号条目必须包含设备级授权所属 `device_id` 和 `current_device` 标记，仍兼容既有账号字段。
-- 百度设置页账号表不再显示“当前设备”选择文案，改为显示设备 ID 前四后四摘要；本机设备在摘要后标注“(本机设备)”。
-- 用户双击账号表设备列时，必须弹窗显示完整 `device_id`，便于人工区分和排查多设备授权。
-- 客户端模型、UI 和云端响应测试必须覆盖设备 ID 解析、摘要显示、本机标记和完整 ID 查看入口。
-- 更新本进度文件；客户端定向测试、Go 定向测试、`compileall` 和 `git diff --check` 必须通过。
+- 归档重试不得把同一 `archive_id` 上一次失败/旧记录中的 payload member 当作本次 manifest 的外部引用，避免自引用或陈旧引用导致压缩/验证失败。
+- 7-Zip 创建、测试或 manifest 解压失败时，错误信息必须保留脱敏后的 7-Zip stderr/stdout 摘要，方便定位具体压缩错误；UI 仍不得泄露本地完整路径和密码。
+- 缓存有效预算必须按产品规格 `min(cache_quota, disk_free_space - reserve)` 计算，不得因缓存目录已有占用把用户设置的总额度误当作剩余额度扣减；缓存等级仍可继续使用当前缓存占用判断。
+- 自动化测试覆盖同名文件夹 + `.zip` 文件作为两个来源的本地备份归档、缓存预算已有占用但磁盘空间足够时允许启动、以及 7-Zip 错误摘要保留。
+- 更新本进度文件；客户端定向测试、`compileall` 和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -54,6 +54,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-14：P3-14 真实备份压缩失败与重试缓存预算修复
+
+变更原因：用户反馈真实备份同时选择 `LibreHardwareMonitor` 文件夹和同名 `LibreHardwareMonitor.zip` 文件会压缩失败；同一任务重启重试时缓存目录实际空间足够却误报“cache 位置大小小于最小要求”，阻塞发布候选真实备份验收。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于真实备份阻塞修复和用户明确插队需求。
+
+验收标准：归档重试不使用当前 archive 的旧 payload member 作为外部引用；7-Zip 失败输出保留脱敏摘要；缓存有效预算按 `min(cache_quota, disk_free_space - reserve)` 判断；定向测试覆盖同名文件夹与 `.zip` 来源、本地缓存已有占用、7-Zip 错误摘要。
+
+回到主排期条件：本轮压缩/缓存预算修复、测试和进度记录提交完成后，下一开发小项回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-14：P3-14 百度授权设备标识修复
 
@@ -156,6 +166,30 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：真实备份压缩失败与重试缓存预算修复
+
+- P3 阶段 14 真实备份压缩失败与重试缓存预算修复完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
+- 修复 `BackupScanner.scan_job` 多来源循环缩进错误：文件来源和文件夹来源现在都会在同一 job 内逐个扫描并写入 `file_items/folder_items`，避免文件夹 + 文件组合只保留最后一个来源，导致后续归档阶段找不到来源内容。
+- 归档阶段新增 `PayloadSourceChangedError`，当源文件扫描后仍在写入或发生变化时记录具体显示名；`BackupPipeline` 会将该文件标记为 `changed_during_scan`，重建内容索引并跳过该不稳定文件，让其他稳定文件继续归档。
+- `ArchivePackager` 重试同一 archive 时排除当前正在重写的 `archive_id`，避免把旧的 payload member 当作本次 manifest 的外部引用；7-Zip 失败时保留脱敏 stderr/stdout 摘要，UI/CLI 仍过滤本地路径和密码。
+- 缓存有效预算改回产品规格口径 `min(cache_quota, disk_free_space - reserve)`，不再把缓存目录已有占用从用户设置的总额度里重复扣减；缓存等级仍按当前占用和磁盘余量判断。
+- 内容去重只把已经成功归档分配或已有 payload member 的历史引用当作可复用 payload，避免失败/未归档任务让后续任务误判为 manifest-only。
+- `job.index.json` 汇总兼容仅通过上传入口产生的多 archive 记录：除 `archives` 表外，也会从已完成 `upload_sessions` 和 `remote_objects` 补齐历史 archive，保证同一 job 多归档上传后索引完整。
+- 已使用用户给定真实来源执行本地复现：`C:\Users\3700x\Downloads\LibreHardwareMonitor` + `C:\Users\3700x\Downloads\LibreHardwareMonitor.zip` 在本地模式完成扫描、去重和 2 个 7-Zip 归档。
+- 已使用同一真实 job 再次运行模拟重启重试，归档阶段通过，未再因旧 archive/member 状态失败。
+- 已使用默认 40GiB 缓存预算检查运行同一真实来源，输出 `cache_level_before=sufficient`、`cache_effective_budget_bytes_before=42949672960`，未再误报缓存位置小于最小要求。
+- 已验证客户端全量测试：`uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-full-fix-2` 通过，159 个测试通过。
+- 已验证客户端编译检查：`uv run python -m compileall src tests` 通过。
+- 已验证 `git diff --check` 通过。
+
+提交摘要：本次提交修复 P3 阶段 14 真实备份压缩与重试阻塞：多来源扫描不再漏掉文件夹来源，活动日志文件变化时会标记不稳定并跳过而不是让整个任务压缩失败，归档重试排除当前 archive 的旧 payload 引用，缓存预算按规格计算，并补齐多 archive job.index 汇总兼容。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows R04-R14 发布候选验收。
+- 对正在运行的程序目录备份时，仍需在 UI 上提示“仍在写入的文件会跳过本轮，可停止程序后再备份一次补齐”。
+- 干净 Windows 仍需继续真实授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计矩阵。
 
 ### P3 阶段 14 打包发布与最终验收：百度授权设备标识修复
 

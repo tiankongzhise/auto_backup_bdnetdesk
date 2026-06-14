@@ -6,6 +6,7 @@ import pytest
 
 from auto_backup_client.backup_jobs import BackupJobManager, BackupSourceInput
 from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineError, BackupPipelineOptions
+from auto_backup_client.scan_fingerprints import FileFingerprint, fingerprint_file
 from auto_backup_client.baidu.models import SyncRevisionResult
 from auto_backup_client.baidu.upload import (
     BaiduFileItem,
@@ -182,6 +183,51 @@ def test_pipeline_packages_each_selected_source_as_separate_archive(tmp_path) ->
     assert [archive.archive_seq for archive in result.archives] == [1, 2]
     assert len(archives) == 2
     assert {row["archive_id"] for row in references} == {archive.archive_id for archive in result.archives}
+
+
+def test_pipeline_skips_file_that_changes_between_scan_and_packaging(tmp_path) -> None:
+    stable = tmp_path / "stable.txt"
+    changing = tmp_path / "LibreHardwareMonitorLog-2026-06-14-141.csv"
+    stable.write_text("stable", encoding="utf-8")
+    changing.write_text("before", encoding="utf-8")
+    store, job_id = _job(store_path=tmp_path / "backup_state.sqlite3", sources=[stable, changing])
+
+    original_fingerprint = fingerprint_file
+    changed_once = {"done": False}
+
+    def changing_fingerprint(path):
+        result = original_fingerprint(path)
+        if path.name == changing.name and not changed_once["done"]:
+            path.write_text("after", encoding="utf-8")
+            changed_once["done"] = True
+        return result
+
+    pipeline = BackupPipeline(store=store, device_id="device-1")
+
+    from auto_backup_client import scan_fingerprints
+
+    original_module_fingerprint = scan_fingerprints.fingerprint_file
+    scan_fingerprints.fingerprint_file = changing_fingerprint
+    try:
+        result = pipeline.run_job(
+            job_id,
+            BackupPipelineOptions(
+                cache_root=tmp_path / "cache",
+                password=TEST_ARCHIVE_PASSWORD,
+                mark_completed=False,
+                now="2026-06-08T09:06:00Z",
+            ),
+        )
+    finally:
+        scan_fingerprints.fingerprint_file = original_module_fingerprint
+
+    files = store.list_file_items(job_id)
+    references = store.list_content_references(job_id)
+
+    assert result.completed is False
+    assert len(result.archives) == 1
+    assert [row["display_name"] for row in references] == ["stable.txt"]
+    assert {row["display_name"]: row["scan_status"] for row in files}[changing.name] == "changed_during_scan"
 
 
 def test_pipeline_uploads_syncs_reconciles_and_marks_job_completed(tmp_path) -> None:

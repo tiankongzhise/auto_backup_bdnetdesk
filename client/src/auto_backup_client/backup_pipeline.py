@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from auto_backup_client.archive_packager import ArchivePackageResult, ArchivePackager
+from auto_backup_client.archive_packager import ArchivePackageResult, ArchivePackager, ArchivePackagingError, PayloadSourceChangedError
 from auto_backup_client.backup_jobs import BackupJobError, BackupJobManager, BackupJobWithSources
 from auto_backup_client.baidu.reconcile import RemoteObjectReconciler, RemoteReconcileReport, RemoteReconcileScope, RequestRateLimiter
 from auto_backup_client.baidu.resumable_upload import BaiduResumableUploader, ResumableArchiveInput, ResumableUploadResult
@@ -135,16 +135,17 @@ class BackupPipeline:
             job_with_sources = manager.get_job_with_sources(cleaned_job_id)
             archives: list[ArchivePackageResult] = []
             for source in job_with_sources.sources:
-                archives.append(
-                    packager.package_job(
-                        cleaned_job_id,
-                        cache_root=options.cache_root,
-                        password=options.password,
-                        archive_seq=int(source.source_seq),
-                        backup_source_id=source.backup_source_id,
-                        now=options.now,
-                    )
+                archive_item = self._package_source_with_changed_file_recovery(
+                    packager,
+                    cleaned_job_id,
+                    cache_root=options.cache_root,
+                    password=options.password,
+                    archive_seq=int(source.source_seq),
+                    backup_source_id=source.backup_source_id,
+                    now=options.now,
                 )
+                if archive_item is not None:
+                    archives.append(archive_item)
             if not archives:
                 raise BackupPipelineError("backup job has no sources to archive")
             archive = archives[0]
@@ -231,6 +232,8 @@ class BackupPipeline:
                 raise
             if isinstance(exc, CacheArtifactError):
                 raise BackupPipelineError(str(exc)) from exc
+            if isinstance(exc, ArchivePackagingError):
+                raise BackupPipelineError(f"backup pipeline failed at stage: {stage}: {exc}") from exc
             raise BackupPipelineError(f"backup pipeline failed at stage: {stage}") from exc
 
     def _upload_archive(
@@ -276,6 +279,47 @@ class BackupPipeline:
                 now=options.now,
             )
         return result
+
+    def _package_source_with_changed_file_recovery(
+        self,
+        packager: ArchivePackager,
+        backup_job_id: str,
+        *,
+        cache_root: Path | str,
+        password: str,
+        archive_seq: int,
+        backup_source_id: str,
+        now: str | None,
+    ) -> ArchivePackageResult | None:
+        try:
+            return packager.package_job(
+                backup_job_id,
+                cache_root=cache_root,
+                password=password,
+                archive_seq=archive_seq,
+                backup_source_id=backup_source_id,
+                now=now,
+            )
+        except PayloadSourceChangedError as exc:
+            BackupScanner(self.store, device_id=self.device_id).mark_file_changed(
+                backup_job_id=backup_job_id,
+                file_item_id=exc.file_item_id,
+                now=now,
+            )
+            ContentDedupeIndexer(self.store, device_id=self.device_id).build_job_index(backup_job_id, now=now)
+            try:
+                return packager.package_job(
+                    backup_job_id,
+                    cache_root=cache_root,
+                    password=password,
+                    archive_seq=archive_seq,
+                    backup_source_id=backup_source_id,
+                    now=now,
+                )
+            except ArchivePackagingError as retry_exc:
+                if str(retry_exc) == "backup source has no indexed files or folders to package":
+                    return None
+                raise
 
     def _ensure_running(self, manager: BackupJobManager, backup_job_id: str, *, now: str | None) -> None:
         job = manager.get_job_with_sources(backup_job_id).job
