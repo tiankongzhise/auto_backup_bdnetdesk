@@ -119,6 +119,7 @@ func toBaiduAuthSessionResponse(session BaiduAuthSession) BaiduAuthSessionRespon
 func toBaiduAccountResponse(account BaiduAccount) BaiduAccountResponse {
 	return BaiduAccountResponse{
 		AccountID:        account.AccountID,
+		DeviceID:         account.DeviceID,
 		DisplayName:      account.DisplayName,
 		BaiduUID:         account.BaiduUID,
 		BaiduUK:          account.BaiduUK,
@@ -129,6 +130,7 @@ func toBaiduAccountResponse(account BaiduAccount) BaiduAccountResponse {
 		PrivateKeyHint:   account.PrivateKeyHint,
 		TokenVersion:     account.TokenVersion,
 		Selected:         account.Selected,
+		CurrentDevice:    account.CurrentDevice,
 		LastVerifiedAt:   account.LastVerifiedAt,
 		LastVerifyStatus: account.LastVerifyStatus,
 	}

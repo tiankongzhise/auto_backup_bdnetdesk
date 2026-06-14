@@ -670,7 +670,9 @@ RETURNING completed_at
 	session.Status = BaiduAuthStatusCompleted
 	session.CompletedAt = &completedAt
 	session.AccountID = account.AccountID
+	account.DeviceID = deviceID
 	account.Selected = true
+	account.CurrentDevice = true
 	return session, account, nil
 }
 
@@ -678,6 +680,7 @@ func (s *PostgresStore) ListBaiduAccounts(ctx context.Context, deviceID string) 
 	rows, err := s.pool.Query(ctx, `
 SELECT
     a.account_id,
+    COALESCE(b.device_id, '') AS device_id,
     a.baidu_uid,
     a.baidu_uk,
     a.display_name,
@@ -689,12 +692,12 @@ SELECT
     COALESCE(b.token_version, 0) AS token_version,
     b.last_verified_at,
     COALESCE(b.last_verify_status, 'unknown') AS last_verify_status,
-    b.account_id IS NOT NULL AS selected
+    COALESCE(b.device_id = $1, false) AS selected,
+    COALESCE(b.device_id = $1, false) AS current_device
 FROM baidu_accounts a
 LEFT JOIN baidu_account_device_bindings b
     ON b.account_id = a.account_id
-   AND b.device_id = $1
-ORDER BY selected DESC, COALESCE(b.updated_at, a.updated_at) DESC
+ORDER BY current_device DESC, selected DESC, COALESCE(b.updated_at, a.updated_at) DESC
 `, deviceID)
 	if err != nil {
 		return nil, err
@@ -767,6 +770,7 @@ WHERE b.account_id = $1
   AND b.encrypted_token_json IS NOT NULL
 RETURNING
     a.account_id,
+    b.device_id,
     a.baidu_uid,
     a.baidu_uk,
     a.display_name,
@@ -778,7 +782,8 @@ RETURNING
     b.token_version,
     b.last_verified_at,
     b.last_verify_status,
-    true AS selected
+    true AS selected,
+    true AS current_device
 `, accountID,
 		expectedVersion,
 		update.TokenExpiresAt,
@@ -944,6 +949,7 @@ func queryBaiduAccount(ctx context.Context, queryer queryRower, accountID string
 	row := queryer.QueryRow(ctx, `
 SELECT
     a.account_id,
+    COALESCE(b.device_id, '') AS device_id,
     a.baidu_uid,
     a.baidu_uk,
     a.display_name,
@@ -955,7 +961,8 @@ SELECT
     COALESCE(b.token_version, 0) AS token_version,
     b.last_verified_at,
     COALESCE(b.last_verify_status, 'unknown') AS last_verify_status,
-    b.account_id IS NOT NULL AS selected
+    COALESCE(b.device_id = $2, false) AS selected,
+    COALESCE(b.device_id = $2, false) AS current_device
 FROM baidu_accounts a
 LEFT JOIN baidu_account_device_bindings b
     ON b.account_id = a.account_id
@@ -973,6 +980,7 @@ func queryBaiduAuthorizedAccount(ctx context.Context, queryer queryRower, accoun
 	row := queryer.QueryRow(ctx, `
 SELECT
     a.account_id,
+    b.device_id,
     a.baidu_uid,
     a.baidu_uk,
     a.display_name,
@@ -984,7 +992,8 @@ SELECT
     b.token_version,
     b.last_verified_at,
     b.last_verify_status,
-    true AS selected
+    true AS selected,
+    b.device_id = $2 AS current_device
 FROM baidu_accounts a
 JOIN baidu_account_device_bindings b
     ON b.account_id = a.account_id
@@ -1021,6 +1030,7 @@ func scanBaiduAccountValue(row scanner) (BaiduAccount, error) {
 	var lastVerifiedAt pgtype.Timestamptz
 	err := row.Scan(
 		&account.AccountID,
+		&account.DeviceID,
 		&account.BaiduUID,
 		&account.BaiduUK,
 		&account.DisplayName,
@@ -1033,6 +1043,7 @@ func scanBaiduAccountValue(row scanner) (BaiduAccount, error) {
 		&lastVerifiedAt,
 		&account.LastVerifyStatus,
 		&account.Selected,
+		&account.CurrentDevice,
 	)
 	if err != nil {
 		return BaiduAccount{}, err

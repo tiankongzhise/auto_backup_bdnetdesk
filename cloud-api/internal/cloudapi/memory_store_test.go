@@ -389,7 +389,9 @@ func (s *memoryStore) CompleteBaiduAuthSession(_ context.Context, session BaiduA
 	} else {
 		account.TokenVersion = 1
 	}
+	account.DeviceID = deviceID
 	account.Selected = true
+	account.CurrentDevice = true
 	s.baiduAuthorizations[account.AccountID][deviceID] = account
 
 	now := time.Now().UTC()
@@ -411,8 +413,35 @@ func (s *memoryStore) ListBaiduAccounts(_ context.Context, deviceID string) ([]B
 	}
 	accounts := make([]BaiduAccount, 0, len(s.baiduAccounts))
 	for _, account := range s.baiduAccounts {
-		deviceAccount, _ := s.baiduAccountForDeviceLocked(account.AccountID, deviceID, false)
-		accounts = append(accounts, deviceAccount)
+		listedDeviceIDs := map[string]bool{}
+		if bindings := s.baiduBindings[account.AccountID]; bindings != nil {
+			for boundDeviceID := range bindings {
+				listedDeviceIDs[boundDeviceID] = true
+			}
+		}
+		if deviceAccounts := s.baiduAuthorizations[account.AccountID]; deviceAccounts != nil {
+			for authorizedDeviceID := range deviceAccounts {
+				listedDeviceIDs[authorizedDeviceID] = true
+			}
+		}
+		if len(listedDeviceIDs) == 0 {
+			deviceAccount, _ := s.baiduAccountForDeviceLocked(account.AccountID, deviceID, false)
+			accounts = append(accounts, deviceAccount)
+			continue
+		}
+		for listedDeviceID := range listedDeviceIDs {
+			deviceAccount, _ := s.baiduAccountForDeviceLocked(account.AccountID, listedDeviceID, false)
+			deviceAccount.Selected = listedDeviceID == deviceID
+			deviceAccount.CurrentDevice = listedDeviceID == deviceID
+			if !deviceAccount.Selected {
+				deviceAccount.Selected = false
+				deviceAccount.CurrentDevice = false
+			}
+			if deviceAccount.DeviceID == "" {
+				deviceAccount.DeviceID = listedDeviceID
+			}
+			accounts = append(accounts, deviceAccount)
+		}
 	}
 	return accounts, nil
 }
@@ -432,6 +461,8 @@ func (s *memoryStore) SelectBaiduAccount(_ context.Context, accountID string, de
 	}
 	s.baiduBindings[accountID][deviceID] = true
 	selected, _ := s.baiduAccountForDeviceLocked(accountID, deviceID, false)
+	selected.DeviceID = deviceID
+	selected.CurrentDevice = true
 	return selected, true, nil
 }
 
@@ -465,8 +496,10 @@ func (s *memoryStore) UpdateBaiduAccountToken(_ context.Context, accountID strin
 	update.BaiduUK = current.BaiduUK
 	update.DisplayName = current.DisplayName
 	update.Scope = current.Scope
+	update.DeviceID = deviceID
 	update.TokenVersion = current.TokenVersion + 1
 	update.Selected = s.baiduBindings[accountID][deviceID]
+	update.CurrentDevice = true
 	s.baiduAuthorizations[accountID][deviceID] = update
 	return update, true, nil
 }
@@ -504,13 +537,17 @@ func (s *memoryStore) baiduAccountForDeviceLocked(accountID string, deviceID str
 	if deviceAccounts := s.baiduAuthorizations[accountID]; deviceAccounts != nil {
 		if authorized, ok := deviceAccounts[deviceID]; ok && authorized.TokenVersion > 0 && len(authorized.EncryptedToken) > 0 {
 			authorized.Selected = s.baiduBindings[accountID][deviceID]
+			authorized.DeviceID = deviceID
+			authorized.CurrentDevice = true
 			return authorized, true
 		}
 	}
 	if requireAuthorization {
 		return BaiduAccount{}, false
 	}
+	account.DeviceID = deviceID
 	account.Selected = s.baiduBindings[accountID][deviceID]
+	account.CurrentDevice = account.Selected
 	account.TokenExpiresAt = time.Time{}
 	account.EncryptionMethod = ""
 	account.EncryptedToken = nil

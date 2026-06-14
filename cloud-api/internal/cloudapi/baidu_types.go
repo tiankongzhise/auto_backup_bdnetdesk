@@ -69,6 +69,7 @@ type CompleteBaiduAuthSessionResponse struct {
 
 type BaiduAccountResponse struct {
 	AccountID        string     `json:"account_id"`
+	DeviceID         string     `json:"device_id,omitempty"`
 	DisplayName      string     `json:"display_name"`
 	BaiduUID         string     `json:"baidu_uid"`
 	BaiduUK          string     `json:"baidu_uk,omitempty"`
@@ -79,6 +80,7 @@ type BaiduAccountResponse struct {
 	PrivateKeyHint   string     `json:"private_key_hint,omitempty"`
 	TokenVersion     int64      `json:"token_version"`
 	Selected         bool       `json:"selected"`
+	CurrentDevice    bool       `json:"current_device"`
 	LastVerifiedAt   *time.Time `json:"last_verified_at,omitempty"`
 	LastVerifyStatus string     `json:"last_verify_status"`
 }
@@ -143,6 +145,7 @@ type BaiduAuthSession struct {
 
 type BaiduAccount struct {
 	AccountID        string
+	DeviceID         string
 	BaiduUID         string
 	BaiduUK          string
 	DisplayName      string
@@ -155,6 +158,7 @@ type BaiduAccount struct {
 	LastVerifiedAt   *time.Time
 	LastVerifyStatus string
 	Selected         bool
+	CurrentDevice    bool
 }
 
 type BaiduRefreshLease struct {

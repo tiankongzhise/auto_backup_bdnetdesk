@@ -177,9 +177,10 @@ class BaiduSettingsPage(QWidget):
         layout.addLayout(toolbar)
 
         self.accounts_table = QTableWidget(0, 7)
-        self.accounts_table.setHorizontalHeaderLabels(["选择", "显示名", "百度 UID", "Scope", "Token", "版本", "校验"])
+        self.accounts_table.setHorizontalHeaderLabels(["设备", "显示名", "百度 UID", "Scope", "Token", "版本", "校验"])
         self.accounts_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.accounts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.accounts_table.itemDoubleClicked.connect(self._show_account_device_id)
         self.accounts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.accounts_table.verticalHeader().setVisible(False)
         layout.addWidget(self.accounts_table)
@@ -390,7 +391,7 @@ class BaiduSettingsPage(QWidget):
         self.accounts_table.setRowCount(len(accounts))
         for row, account in enumerate(accounts):
             values = [
-                "当前设备" if account.selected else "",
+                _device_id_label(account.device_id, current_device=account.current_device),
                 account.display_name,
                 account.baidu_uid,
                 account.scope,
@@ -400,10 +401,23 @@ class BaiduSettingsPage(QWidget):
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                if col == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, account.device_id)
+                    item.setToolTip(account.device_id or "该账号尚未绑定设备授权")
                 if account.selected:
                     item.setBackground(Qt.GlobalColor.lightGray)
                 self.accounts_table.setItem(row, col, item)
         self.status_label.setText(f"已读取 {len(accounts)} 个真实云端账号。")
+
+    @Slot(QTableWidgetItem)
+    def _show_account_device_id(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0:
+            return
+        device_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not device_id:
+            self._show_warning("该账号尚未绑定设备授权。")
+            return
+        QMessageBox.information(self, "完整设备 ID", device_id)
 
     def _on_account_selected(self, account: BaiduAccount) -> None:
         self.status_label.setText(f"已选择账号：{account.display_name or account.baidu_uid}")
@@ -535,6 +549,19 @@ def _preferred_qr_source(state: AuthSessionState) -> str:
 def _looks_like_url(value: str) -> bool:
     lowered = value.strip().lower()
     return lowered.startswith("https://") or lowered.startswith("http://")
+
+
+def _device_id_label(device_id: str, *, current_device: bool = False) -> str:
+    cleaned = device_id.strip()
+    if not cleaned:
+        return "未绑定"
+    if len(cleaned) <= 8:
+        short = cleaned
+    else:
+        short = f"{cleaned[:4]}...{cleaned[-4:]}"
+    if current_device:
+        return f"{short} (本机设备)"
+    return short
 
 
 if __name__ == "__main__":

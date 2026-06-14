@@ -65,6 +65,8 @@ class BaiduAccount:
     encryption_method: str
     token_version: int
     selected: bool
+    device_id: str = ""
+    current_device: bool = False
     baidu_uk: str = ""
     private_key_hint: str = ""
     last_verify_status: str = ""
@@ -73,6 +75,7 @@ class BaiduAccount:
     def from_json(cls, data: Mapping[str, Any]) -> "BaiduAccount":
         return cls(
             account_id=str(data.get("account_id", "")),
+            device_id=str(data.get("device_id", "")),
             display_name=str(data.get("display_name", "")),
             baidu_uid=str(data.get("baidu_uid", "")),
             baidu_uk=str(data.get("baidu_uk", "")),
@@ -83,6 +86,7 @@ class BaiduAccount:
             private_key_hint=str(data.get("private_key_hint", "")),
             token_version=int(data.get("token_version", 0)),
             selected=bool(data.get("selected", False)),
+            current_device=bool(data.get("current_device", data.get("selected", False))),
             last_verify_status=str(data.get("last_verify_status", "")),
         )
 

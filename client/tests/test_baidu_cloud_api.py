@@ -18,12 +18,14 @@ def test_cloud_client_sends_device_bearer_token_and_parses_accounts() -> None:
                         "account_id": "bacc_1",
                         "display_name": "test account",
                         "baidu_uid": "uid-1",
+                        "device_id": "dev-abcd-1234",
                         "scope": "basic,netdisk",
                         "token_expires_at": "2026-06-05T08:00:00Z",
                         "token_valid": True,
                         "encryption_method": "password_argon2id_aes256gcm_v1",
                         "token_version": 3,
                         "selected": True,
+                        "current_device": True,
                         "last_verify_status": "valid",
                     }
                 ]
@@ -39,7 +41,9 @@ def test_cloud_client_sends_device_bearer_token_and_parses_accounts() -> None:
     accounts = cloud.list_accounts()
 
     assert accounts[0].account_id == "bacc_1"
+    assert accounts[0].device_id == "dev-abcd-1234"
     assert accounts[0].selected is True
+    assert accounts[0].current_device is True
     assert accounts[0].token_version == 3
 
 

@@ -452,3 +452,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：保持发布构建使用批次隔离 `GOCACHE`；Go 测试如遇标准库冷编译 compiler/runtime 崩溃，先用同一 `GOCACHE/GOMODCACHE` 策略配合 `go test -p=1 ./...` 复跑确认项目断言。
 
 后续约束：不得把标准库冷编译阶段的 Go compiler/runtime 崩溃误判为项目代码失败；记录复跑命令和结果，必要时更换干净 Go 工具链继续验收。
+
+### 2026-06-14：沙箱内 Git 暂存写入 `.git/index.lock` 被拒绝
+
+问题：本轮提交前执行 `git add ...` 时，当前沙箱返回 `fatal: Unable to create .../.git/index.lock: Permission denied`，导致暂存失败；同时命令里一次 UTF-8 类型名手误先触发 PowerShell 类型错误。
+
+原因：当前 workspace-write 沙箱可读 `.git`，但写入 Git index 仍可能被权限边界拒绝；失败发生在 Git 元数据写入阶段，不是工作区文件不可写，也不是提交内容问题。
+
+解决方案：确认 `.git/index.lock` 不存在后，按权限流程提升运行同一 `git add` 和 `git commit`；提交成功后用 `git status --short --branch` 和 `git log --oneline -1` 确认结果。
+
+后续约束：若后续暂存或提交时出现 `.git/index.lock: Permission denied`，先检查是否存在遗留 lock；不存在时按权限流程提升执行 Git 写元数据命令。不得误删 `.git` 内容或用破坏性 Git 命令绕过。

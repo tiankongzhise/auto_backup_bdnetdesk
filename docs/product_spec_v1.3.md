@@ -485,7 +485,7 @@ GET /v1/readyz
 - `GET /v1/baidu/auth/sessions/{session_id}`：轮询授权会话状态。
 - `GET /v1/baidu/oauth/callback`：只记录百度回调的 `code/state/error`，不在公开回调中换取或返回 token。
 - `POST /v1/baidu/auth/sessions/{session_id}/complete`：由已认证客户端完成 OAuth token 交换、token 加密入库和账号绑定。
-- `GET /v1/baidu/accounts`：列出所有可选百度账号，并标明当前设备是否已选择。
+- `GET /v1/baidu/accounts`：列出可选百度账号的设备级授权/绑定行，条目必须包含授权所属 `device_id` 和 `current_device` 标记；客户端用设备 ID 摘要区分多台电脑，不得只显示“当前设备”。
 - `POST /v1/baidu/accounts/{account_id}/select`：当前设备选择已有百度账号。
 - `GET /v1/baidu/accounts/{account_id}/token`：返回密文 token envelope，必须包含 `encryption_method` 和 `token_version`。
 - `PUT /v1/baidu/accounts/{account_id}/token`：客户端刷新并重新加密 token 后回写，必须携带 `expected_token_version`。

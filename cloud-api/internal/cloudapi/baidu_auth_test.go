@@ -143,6 +143,9 @@ func TestBaiduDeviceAuthPasswordFlow(t *testing.T) {
 	if len(list.Accounts) != 1 || !list.Accounts[0].Selected {
 		t.Fatalf("expected selected account in list, got %#v", list)
 	}
+	if list.Accounts[0].DeviceID == "" || !list.Accounts[0].CurrentDevice {
+		t.Fatalf("expected current device id in list, got %#v", list.Accounts[0])
+	}
 
 	tokenRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+complete.Account.AccountID+"/token", token, "")
 	if tokenRec.Code != http.StatusOK {
@@ -279,8 +282,10 @@ func TestBaiduSameUIDAuthorizationIsDeviceScoped(t *testing.T) {
 		WithBaiduOAuthConfig(testBaiduOAuthConfig()),
 		WithBaiduOAuthClient(newFakeBaiduOAuthClient()),
 	)
-	firstToken := registerDevice(t, handler).DeviceToken
-	secondToken := registerDevice(t, handler).DeviceToken
+	firstDevice := registerDevice(t, handler)
+	secondDevice := registerDevice(t, handler)
+	firstToken := firstDevice.DeviceToken
+	secondToken := secondDevice.DeviceToken
 
 	firstAccountID := createPasswordBaiduAccountWithKey(t, handler, firstToken, bytes.Repeat([]byte{3}, 32))
 	firstTokenRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts/"+firstAccountID+"/token", firstToken, "")
@@ -318,6 +323,34 @@ func TestBaiduSameUIDAuthorizationIsDeviceScoped(t *testing.T) {
 	decodeResponse(t, firstAfterRec, &firstAfter)
 	if firstAfter.TokenVersion != 1 || !bytes.Equal(firstBefore.EncryptedToken, firstAfter.EncryptedToken) {
 		t.Fatalf("expected first device token to remain unchanged, before=%#v after=%#v", firstBefore, firstAfter)
+	}
+
+	secondListRec := authedJSON(t, handler, http.MethodGet, "/v1/baidu/accounts", secondToken, "")
+	if secondListRec.Code != http.StatusOK {
+		t.Fatalf("expected second device account list 200, got %d: %s", secondListRec.Code, secondListRec.Body.String())
+	}
+	var secondList ListBaiduAccountsResponse
+	decodeResponse(t, secondListRec, &secondList)
+	if len(secondList.Accounts) != 2 {
+		t.Fatalf("expected two device-scoped account rows, got %#v", secondList)
+	}
+	var sawFirstDevice, sawSecondDevice bool
+	for _, account := range secondList.Accounts {
+		switch account.DeviceID {
+		case firstDevice.DeviceID:
+			sawFirstDevice = true
+			if account.CurrentDevice || account.Selected {
+				t.Fatalf("expected first device row to be visible but not current, got %#v", account)
+			}
+		case secondDevice.DeviceID:
+			sawSecondDevice = true
+			if !account.CurrentDevice || !account.Selected {
+				t.Fatalf("expected second device row to be current, got %#v", account)
+			}
+		}
+	}
+	if !sawFirstDevice || !sawSecondDevice {
+		t.Fatalf("expected both device ids in account list, first=%s second=%s list=%#v", firstDevice.DeviceID, secondDevice.DeviceID, secondList)
 	}
 
 	update := UpdateBaiduTokenRequest{
