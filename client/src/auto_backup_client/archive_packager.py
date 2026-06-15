@@ -18,6 +18,7 @@ from auto_backup_client.sqlite_store import (
     stable_json_dumps,
     utc_now_iso,
 )
+from auto_backup_client.subprocess_utils import hidden_subprocess_kwargs
 
 
 MANIFEST_VERSION = 1
@@ -127,6 +128,7 @@ class SevenZipRunner:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **hidden_subprocess_kwargs(),
         )
         if completed.returncode != 0:
             detail = _sanitize_7zip_output(
@@ -387,6 +389,7 @@ class ArchivePackager:
             self.store.put_archive_member(
                 conn,
                 _archive_member_payload(
+                    device_id=self.device_id,
                     archive_id=result.archive_id,
                     job_id=result.backup_job_id,
                     member_type="manifest",
@@ -399,6 +402,7 @@ class ArchivePackager:
                 self.store.put_archive_member(
                     conn,
                     _archive_member_payload(
+                        device_id=self.device_id,
                         archive_id=result.archive_id,
                         job_id=result.backup_job_id,
                         member_type="payload",
@@ -421,6 +425,7 @@ class ArchivePackager:
                     self.store.put_archive_member(
                         conn,
                         _archive_member_payload(
+                            device_id=self.device_id,
                             archive_id=result.archive_id,
                             job_id=result.backup_job_id,
                             member_type="reference",
@@ -454,6 +459,7 @@ class ArchivePackager:
                 self.store.put_archive_member(
                     conn,
                     _archive_member_payload(
+                        device_id=self.device_id,
                         archive_id=result.archive_id,
                         job_id=result.backup_job_id,
                         member_type="folder",
@@ -751,6 +757,7 @@ def _stage_payload_members(payload_refs: Sequence[Mapping[str, Any]], payload_di
 
 def _archive_member_payload(
     *,
+    device_id: str,
     archive_id: str,
     job_id: str,
     member_type: str,
@@ -768,22 +775,29 @@ def _archive_member_payload(
     digest = hashlib.sha256(
         f"{archive_id}\0{member_type}\0{member_path}\0{content_reference_id}\0{file_item_id}\0{folder_item_id}".encode("utf-8")
     ).hexdigest()
-    return {
-        "archive_member_id": f"amem_{digest}",
-        "archive_id": archive_id,
-        "job_id": job_id,
-        "content_reference_id": content_reference_id,
-        "file_item_id": file_item_id,
-        "folder_item_id": folder_item_id,
-        "content_id": content_id,
-        "member_type": member_type,
-        "member_path": member_path,
-        "file_sha256": file_sha256,
-        "size_bytes": int(size_bytes),
-        "referenced_archive_id": referenced_archive_id,
-        "referenced_archive_remote_path": referenced_archive_remote_path,
-        "created_at": created_at,
-    }
+    archive_member_id = f"amem_{digest}"
+    return build_version_fields(
+        entity_payload={
+            "archive_member_id": archive_member_id,
+            "entity_id": f"archive_member_{archive_member_id}",
+            "archive_id": archive_id,
+            "job_id": job_id,
+            "content_reference_id": content_reference_id,
+            "file_item_id": file_item_id,
+            "folder_item_id": folder_item_id,
+            "content_id": content_id,
+            "member_type": member_type,
+            "member_path": member_path,
+            "file_sha256": file_sha256,
+            "size_bytes": int(size_bytes),
+            "referenced_archive_id": referenced_archive_id,
+            "referenced_archive_remote_path": referenced_archive_remote_path,
+            "created_at": created_at,
+        },
+        updated_by_device_id=device_id,
+        now=created_at,
+        sync_status="sync_pending",
+    )
 
 
 def _archive_id(job_id: str, archive_seq: int, manifest_id: str) -> str:

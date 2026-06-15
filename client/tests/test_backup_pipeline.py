@@ -100,6 +100,25 @@ class FakeBaiduForPipeline:
         )
 
 
+class FakeBaiduWithExtraRemote(FakeBaiduForPipeline):
+    def list_all(self, *, remote_path: str, start: int = 0, limit: int = 1000, recursion: bool = True, web: bool = False):
+        result = super().list_all(remote_path=remote_path, start=start, limit=limit, recursion=recursion, web=web)
+        return BaiduFileListResult(
+            errno=0,
+            items=result.items
+            + (
+                BaiduFileItem(
+                    fs_id=9999,
+                    path=remote_path.rstrip("/") + "/unexpected.7z",
+                    server_filename="unexpected.7z",
+                    isdir=False,
+                    size=1,
+                    md5="e" * 32,
+                ),
+            ),
+        )
+
+
 class FakeCloudForPipeline:
     def __init__(self) -> None:
         self.synced_event_ids: list[str] = []
@@ -270,6 +289,42 @@ def test_pipeline_uploads_syncs_reconciles_and_marks_job_completed(tmp_path) -> 
     assert job is not None
     assert job["status"] == "completed"
     assert job["sync_status"] == "synced"
+
+
+def test_pipeline_reconcile_difference_marks_job_failed_retryable_with_stage_reason(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    store, job_id = _job(store_path=tmp_path / "backup_state.sqlite3", sources=[source])
+
+    result = BackupPipeline(
+        store=store,
+        device_id="device-1",
+        baidu_client=FakeBaiduWithExtraRemote(),
+        cloud_client=FakeCloudForPipeline(),
+    ).run_job(
+        job_id,
+        BackupPipelineOptions(
+            cache_root=tmp_path / "cache",
+            password=TEST_ARCHIVE_PASSWORD,
+            account_id="account-1",
+            run_upload=True,
+            sync_outbox=True,
+            reconcile_remote=True,
+            now="2026-06-08T09:15:00Z",
+        ),
+    )
+
+    job = store.get_backup_job(job_id)
+    assert result.completed is False
+    assert result.final_stage == "reconcile"
+    assert result.sync is not None
+    assert result.sync.retryable == 0
+    assert result.reconcile is not None
+    assert result.reconcile.status_counts["baidu_only"] == 1
+    assert job is not None
+    assert job["status"] == "failed_retryable"
+    assert job["last_stage"] == "reconcile"
+    assert "baidu_only" in job["last_error"]
 
 
 def test_pipeline_upload_failure_keeps_job_retryable_and_never_completed(tmp_path) -> None:

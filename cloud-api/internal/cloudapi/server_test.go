@@ -177,6 +177,68 @@ func TestInvalidContentPayloadRejected(t *testing.T) {
 	}
 }
 
+func TestListBackupsReturnsOnlyAuthenticatedDeviceHistory(t *testing.T) {
+	store := newMemoryStore()
+	handler := NewServer(store, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
+	first := registerDevice(t, handler)
+	second := registerDevice(t, handler)
+
+	firstEvent := RevisionEvent{
+		EventID:               "evt-history-first",
+		EntityType:            "backup_jobs",
+		EntityID:              "backup_job_job-first",
+		RevisionID:            "rev-history-first",
+		SchemaVersion:         1,
+		DataVersion:           1,
+		Operation:             "upsert",
+		CanonicalRecordSHA256: testSHA,
+		Payload:               json.RawMessage(`{"backup_job_id":"job-first","device_id":"` + first.DeviceID + `","status":"completed"}`),
+	}
+	secondEvent := RevisionEvent{
+		EventID:               "evt-history-second",
+		EntityType:            "backup_jobs",
+		EntityID:              "backup_job_job-second",
+		RevisionID:            "rev-history-second",
+		SchemaVersion:         1,
+		DataVersion:           1,
+		Operation:             "upsert",
+		CanonicalRecordSHA256: secondSHA,
+		Payload:               json.RawMessage(`{"backup_job_id":"job-second","device_id":"` + second.DeviceID + `","status":"completed"}`),
+	}
+	if got := syncEvents(t, handler, first.DeviceToken, firstEvent).Results[0]; got.Status != StatusSynced {
+		t.Fatalf("expected first synced, got %#v", got)
+	}
+	if got := syncEvents(t, handler, second.DeviceToken, secondEvent).Results[0]; got.Status != StatusSynced {
+		t.Fatalf("expected second synced, got %#v", got)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/backups?device_id=current&limit=10", nil)
+	req.Header.Set("Authorization", "Bearer "+first.DeviceToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected history 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp BackupHistoryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode history response: %v", err)
+	}
+	if resp.DeviceID != first.DeviceID {
+		t.Fatalf("expected first device id, got %s", resp.DeviceID)
+	}
+	if len(resp.Entities) != 1 || resp.Entities[0].EntityID != firstEvent.EntityID {
+		t.Fatalf("expected only first device history, got %#v", resp.Entities)
+	}
+
+	forbidden := httptest.NewRequest(http.MethodGet, "/v1/backups?device_id="+second.DeviceID, nil)
+	forbidden.Header.Set("Authorization", "Bearer "+first.DeviceToken)
+	forbiddenRec := httptest.NewRecorder()
+	handler.ServeHTTP(forbiddenRec, forbidden)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden cross-device history, got %d: %s", forbiddenRec.Code, forbiddenRec.Body.String())
+	}
+}
+
 func registerDevice(t *testing.T, handler http.Handler) RegisterDeviceResponse {
 	t.Helper()
 

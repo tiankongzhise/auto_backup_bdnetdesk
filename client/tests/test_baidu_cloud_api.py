@@ -247,3 +247,46 @@ def test_get_content_parses_cloud_dedupe_candidate() -> None:
     assert content.file_sha256 == "a" * 64
     assert content.size_bytes == 123
     assert content.latest_entity_id == "content_object_entity"
+
+
+def test_list_backup_history_uses_current_device_and_parses_entities() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer fake-device-token"
+        assert request.method == "GET"
+        assert request.url.path == "/v1/backups"
+        assert request.url.params["device_id"] == "current"
+        assert request.url.params["limit"] == "25"
+        return httpx.Response(
+            200,
+            json={
+                "device_id": "dev-1",
+                "entities": [
+                    {
+                        "entity_id": "backup_job_job-1",
+                        "entity_type": "backup_jobs",
+                        "data_version": 2,
+                        "revision_id": "rev-2",
+                        "canonical_record_sha256": "a" * 64,
+                        "updated_by_device_id": "dev-1",
+                        "payload": {
+                            "backup_job_id": "job-1",
+                            "entity_id": "backup_job_job-1",
+                            "device_id": "dev-1",
+                            "status": "completed",
+                        },
+                    }
+                ],
+            },
+        )
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    history = cloud.list_backup_history(limit=25)
+
+    assert history.device_id == "dev-1"
+    assert history.entities[0].entity_type == "backup_jobs"
+    assert history.entities[0].payload["backup_job_id"] == "job-1"

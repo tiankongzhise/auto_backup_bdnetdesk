@@ -15,6 +15,7 @@ from auto_backup_client.backup_jobs import path_sha256
 from auto_backup_client.baidu.upload import BaiduNetdiskClient
 from auto_backup_client.cache_artifacts import CacheArtifactManager, build_job_cache_dir
 from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields, new_id, utc_now_iso
+from auto_backup_client.subprocess_utils import hidden_subprocess_kwargs
 
 
 RestoreTargetMode = Literal["original_path", "manual_path"]
@@ -24,6 +25,8 @@ ArchiveSource = Literal["local_cache", "downloaded", "not_available"]
 
 @dataclass(frozen=True)
 class RestoreCandidate:
+    restore_candidate_id: str
+    backup_source_id: str
     content_reference_id: str
     file_item_id: str
     backup_job_id: str
@@ -55,6 +58,7 @@ class RestoreCandidate:
     remote_archive_status: str
     candidate_status: str
     reason: str
+    file_count: int = 1
 
     @property
     def local_archive_available(self) -> bool:
@@ -152,6 +156,7 @@ class SevenZipRestoreRunner:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **hidden_subprocess_kwargs(),
         )
         if completed.returncode != 0:
             raise RestoreFlowError(f"7-Zip {action} failed")
@@ -216,7 +221,7 @@ class RestoreService:
             raise RestoreFlowError("target_root is required for manual_path restore")
         selected_ids = tuple(dict.fromkeys(value.strip() for value in content_reference_ids if value.strip()))
         report = self.list_candidates(backup_job_id=backup_job_id, limit=5000)
-        candidates = tuple(candidate for candidate in report.candidates if not selected_ids or candidate.content_reference_id in selected_ids)
+        candidates = tuple(candidate for candidate in report.candidates if not selected_ids or candidate.restore_candidate_id in selected_ids)
         if selected_ids and len(candidates) != len(selected_ids):
             raise RestoreFlowError("one or more selected restore references were not found")
         if not candidates:
@@ -225,7 +230,7 @@ class RestoreService:
         actual_now = now or utc_now_iso()
         results: list[RestoreItemResult] = []
         for candidate in candidates:
-            target_path = _target_path(candidate, target_mode=cleaned_target_mode, target_root=target_root)
+            target_path = _target_root_path(candidate, target_mode=cleaned_target_mode, target_root=target_root)
             archive_path: Path | None = None
             archive_source: ArchiveSource = "not_available"
             restore_dir = self._restore_dir(candidate, actual_now)
@@ -240,62 +245,68 @@ class RestoreService:
                 self._register_artifact(restore_dir, job_id=candidate.backup_job_id, now=actual_now)
                 extracted_root = self._extract_archive(candidate.archive_id, archive_path, restore_dir, password=password)
                 manifest = _load_manifest(extracted_root, expected_sha256=candidate.manifest_sha256)
-                item = _manifest_item_for_candidate(manifest, candidate)
-                payload_path = self._payload_path(
-                    item,
-                    current_archive_id=candidate.archive_id,
-                    current_extract_root=extracted_root,
-                    restore_dir=restore_dir,
-                    password=password,
-                    now=actual_now,
-                )
-                if file_sha256(payload_path) != candidate.sha256:
-                    raise RestoreFlowError("restored payload sha256 does not match manifest")
-                final_path, skipped = _resolve_conflict(target_path, cleaned_conflict_strategy, now=actual_now)
-                if skipped:
-                    result = self._write_record(
-                        candidate,
-                        status="skipped_existing",
-                        target_mode=cleaned_target_mode,
-                        conflict_strategy=cleaned_conflict_strategy,
-                        archive_source=archive_source,
-                        target_path=target_path,
-                        final_path=target_path,
-                        archive_path=archive_path,
-                        manifest_sha256=candidate.manifest_sha256,
-                        restored_sha256="",
-                        error_code="",
-                        error_message="",
+                items = _manifest_items_for_candidate(manifest, candidate)
+                if not items:
+                    raise RestoreFlowError("selected source is missing from archive manifest")
+                for item in items:
+                    item_candidate = _candidate_for_manifest_item(candidate, item)
+                    item_target_path = _target_path(item_candidate, target_mode=cleaned_target_mode, target_root=target_root)
+                    payload_path = self._payload_path(
+                        item,
+                        current_archive_id=candidate.archive_id,
+                        current_extract_root=extracted_root,
+                        restore_dir=restore_dir,
+                        password=password,
                         now=actual_now,
-                        reference_restore_status="not_restored",
                     )
-                    results.append(result)
-                    continue
-                local_fs.make_dirs(final_path.parent)
-                with local_fs.open_file(payload_path, "rb") as src, local_fs.open_file(final_path, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
-                restored_sha256 = file_sha256(final_path)
-                if restored_sha256 != candidate.sha256:
-                    local_fs.unlink(final_path, missing_ok=True)
-                    raise RestoreFlowError("restored file sha256 mismatch after copy")
-                results.append(
-                    self._write_record(
-                        candidate,
-                        status="restored",
-                        target_mode=cleaned_target_mode,
-                        conflict_strategy=cleaned_conflict_strategy,
-                        archive_source=archive_source,
-                        target_path=target_path,
-                        final_path=final_path,
-                        archive_path=archive_path,
-                        manifest_sha256=candidate.manifest_sha256,
-                        restored_sha256=restored_sha256,
-                        error_code="",
-                        error_message="",
-                        now=actual_now,
-                        reference_restore_status="restored",
+                    if file_sha256(payload_path) != item_candidate.sha256:
+                        raise RestoreFlowError("restored payload sha256 does not match manifest")
+                    final_path, skipped = _resolve_conflict(item_target_path, cleaned_conflict_strategy, now=actual_now)
+                    if skipped:
+                        results.append(
+                            self._write_record(
+                                item_candidate,
+                                status="skipped_existing",
+                                target_mode=cleaned_target_mode,
+                                conflict_strategy=cleaned_conflict_strategy,
+                                archive_source=archive_source,
+                                target_path=item_target_path,
+                                final_path=item_target_path,
+                                archive_path=archive_path,
+                                manifest_sha256=candidate.manifest_sha256,
+                                restored_sha256="",
+                                error_code="",
+                                error_message="",
+                                now=actual_now,
+                                reference_restore_status="not_restored",
+                            )
+                        )
+                        continue
+                    local_fs.make_dirs(final_path.parent)
+                    with local_fs.open_file(payload_path, "rb") as src, local_fs.open_file(final_path, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    restored_sha256 = file_sha256(final_path)
+                    if restored_sha256 != item_candidate.sha256:
+                        local_fs.unlink(final_path, missing_ok=True)
+                        raise RestoreFlowError("restored file sha256 mismatch after copy")
+                    results.append(
+                        self._write_record(
+                            item_candidate,
+                            status="restored",
+                            target_mode=cleaned_target_mode,
+                            conflict_strategy=cleaned_conflict_strategy,
+                            archive_source=archive_source,
+                            target_path=item_target_path,
+                            final_path=final_path,
+                            archive_path=archive_path,
+                            manifest_sha256=candidate.manifest_sha256,
+                            restored_sha256=restored_sha256,
+                            error_code="",
+                            error_message="",
+                            now=actual_now,
+                            reference_restore_status="restored",
+                        )
                     )
-                )
             except Exception as exc:
                 results.append(
                     self._write_record(
@@ -339,10 +350,10 @@ class RestoreService:
                 """
                 (
                     lower(j.job_name) LIKE ?
-                    OR lower(cr.display_name) LIKE ?
-                    OR lower(cr.relative_path) LIKE ?
-                    OR lower(cr.content_id) LIKE ?
-                    OR lower(cr.file_sha256) LIKE ?
+                    OR lower(bs.display_name) LIKE ?
+                    OR lower(bs.local_path) LIKE ?
+                    OR lower(a.archive_sha256) LIKE ?
+                    OR lower(ro.remote_path) LIKE ?
                 )
                 """
             )
@@ -358,20 +369,29 @@ class RestoreService:
                     j.device_id,
                     bs.source_type,
                     bs.display_name AS source_display_name,
-                    cr.content_reference_id,
-                    cr.file_item_id,
-                    cr.local_path,
-                    cr.relative_path,
-                    cr.path_sha256,
-                    cr.display_name,
-                    cr.size_bytes,
-                    cr.file_sha256,
-                    cr.content_id,
-                    cr.cleanup_status,
-                    cr.restore_status,
+                    bs.backup_source_id,
+                    MIN(cr.content_reference_id) AS content_reference_id,
+                    MIN(cr.file_item_id) AS file_item_id,
+                    bs.local_path,
+                    '' AS relative_path,
+                    bs.path_sha256,
+                    bs.display_name,
+                    COALESCE(SUM(cr.size_bytes), 0) AS size_bytes,
+                    COALESCE(MAX(cr.file_sha256), '') AS file_sha256,
+                    COALESCE(MAX(cr.content_id), '') AS content_id,
+                    CASE
+                        WHEN SUM(CASE WHEN cr.cleanup_status = 'cleaned' THEN 1 ELSE 0 END) = COUNT(cr.content_reference_id) THEN 'cleaned'
+                        WHEN SUM(CASE WHEN cr.cleanup_status = 'not_cleaned' THEN 1 ELSE 0 END) = COUNT(cr.content_reference_id) THEN 'not_cleaned'
+                        ELSE 'mixed'
+                    END AS cleanup_status,
+                    CASE
+                        WHEN SUM(CASE WHEN cr.restore_status = 'restored' THEN 1 ELSE 0 END) = COUNT(cr.content_reference_id) THEN 'restored'
+                        WHEN SUM(CASE WHEN cr.restore_status = 'not_restored' THEN 1 ELSE 0 END) = COUNT(cr.content_reference_id) THEN 'not_restored'
+                        ELSE 'mixed'
+                    END AS restore_status,
                     cr.archive_id,
                     cr.archive_sha256,
-                    cr.archive_member_path,
+                    '' AS archive_member_path,
                     a.archive_seq,
                     a.archive_size,
                     a.archive_type,
@@ -380,7 +400,8 @@ class RestoreService:
                     a.manifest_sha256,
                     ro.remote_path AS remote_archive_path,
                     ro.fs_id AS remote_archive_fs_id,
-                    ro.status AS remote_archive_status
+                    ro.status AS remote_archive_status,
+                    COUNT(cr.content_reference_id) AS file_count
                 FROM content_references cr
                 JOIN backup_jobs j ON j.backup_job_id = cr.backup_job_id
                 JOIN backup_sources bs ON bs.backup_source_id = cr.backup_source_id
@@ -389,7 +410,29 @@ class RestoreService:
                     ON ro.archive_id = cr.archive_id
                    AND ro.object_type = 'archive'
                 {where_sql}
-                ORDER BY j.created_at DESC, cr.source_seq, cr.relative_path, cr.content_reference_id
+                GROUP BY
+                    j.backup_job_id,
+                    j.job_name,
+                    j.status,
+                    j.device_id,
+                    bs.backup_source_id,
+                    bs.source_seq,
+                    bs.source_type,
+                    bs.display_name,
+                    bs.local_path,
+                    bs.path_sha256,
+                    cr.archive_id,
+                    cr.archive_sha256,
+                    a.archive_seq,
+                    a.archive_size,
+                    a.archive_type,
+                    a.verify_status,
+                    a.local_archive_path,
+                    a.manifest_sha256,
+                    ro.remote_path,
+                    ro.fs_id,
+                    ro.status
+                ORDER BY j.created_at DESC, bs.source_seq, bs.backup_source_id
                 LIMIT ?
                 """,
                 tuple(params + [limit]),
@@ -626,6 +669,8 @@ class RestoreService:
 def _candidate_from_row(row: Mapping[str, object]) -> RestoreCandidate:
     status, reason = _candidate_status(row)
     return RestoreCandidate(
+        restore_candidate_id=str(row.get("backup_source_id") or row.get("content_reference_id") or ""),
+        backup_source_id=str(row.get("backup_source_id") or ""),
         content_reference_id=str(row["content_reference_id"]),
         file_item_id=str(row["file_item_id"]),
         backup_job_id=str(row["backup_job_id"]),
@@ -657,6 +702,7 @@ def _candidate_from_row(row: Mapping[str, object]) -> RestoreCandidate:
         remote_archive_status=str(row["remote_archive_status"] or ""),
         candidate_status=status,
         reason=reason,
+        file_count=int(row.get("file_count") or 1),
     )
 
 
@@ -692,15 +738,80 @@ def _load_manifest(extract_root: Path, *, expected_sha256: str) -> dict[str, Any
     return data
 
 
-def _manifest_item_for_candidate(manifest: Mapping[str, Any], candidate: RestoreCandidate) -> Mapping[str, Any]:
+def _manifest_items_for_candidate(manifest: Mapping[str, Any], candidate: RestoreCandidate) -> tuple[Mapping[str, Any], ...]:
+    matches: list[Mapping[str, Any]] = []
     for item in manifest["items"]:
         if not isinstance(item, Mapping) or str(item.get("item_type", "")) != "file":
             continue
+        if candidate.backup_source_id and str(item.get("backup_source_id", "")) == candidate.backup_source_id:
+            matches.append(item)
+            continue
         if str(item.get("content_reference_id", "")) == candidate.content_reference_id:
-            return item
+            matches.append(item)
+            continue
         if str(item.get("item_id", "")) == candidate.file_item_id:
-            return item
-    raise RestoreFlowError("selected file is missing from archive manifest")
+            matches.append(item)
+    return tuple(matches)
+
+
+def _candidate_for_manifest_item(candidate: RestoreCandidate, item: Mapping[str, Any]) -> RestoreCandidate:
+    relative_path = str(item.get("relative_path") or candidate.relative_path)
+    display_name = str(item.get("display_name") or item.get("original_name") or Path(relative_path).name or candidate.display_name)
+    file_sha256 = str(item.get("sha256") or item.get("file_sha256") or candidate.sha256)
+    content_reference_id = str(item.get("content_reference_id") or candidate.content_reference_id)
+    file_item_id = str(item.get("file_item_id") or item.get("item_id") or candidate.file_item_id)
+    content_id = str(item.get("content_id") or candidate.content_id)
+    size_bytes = int(item.get("size_bytes") or item.get("size") or candidate.size_bytes or 0)
+    archive_member_path = str(item.get("archive_member_path") or candidate.archive_member_path)
+    path_digest = str(item.get("path_sha256") or path_sha256(str(Path(candidate.original_path).parent / relative_path)))
+    original_path = str(item.get("local_path") or item.get("original_path") or candidate.original_path)
+    return RestoreCandidate(
+        restore_candidate_id=candidate.restore_candidate_id,
+        backup_source_id=candidate.backup_source_id,
+        content_reference_id=content_reference_id,
+        file_item_id=file_item_id,
+        backup_job_id=candidate.backup_job_id,
+        job_name=candidate.job_name,
+        job_status=candidate.job_status,
+        device_id=candidate.device_id,
+        source_type=candidate.source_type,
+        source_display_name=candidate.source_display_name,
+        display_name=display_name,
+        original_path=original_path,
+        relative_path=relative_path,
+        path_sha256=path_digest,
+        size_bytes=size_bytes,
+        sha256=file_sha256,
+        content_id=content_id,
+        cleanup_status=candidate.cleanup_status,
+        restore_status=candidate.restore_status,
+        archive_id=candidate.archive_id,
+        archive_seq=candidate.archive_seq,
+        archive_sha256=candidate.archive_sha256,
+        archive_size=candidate.archive_size,
+        archive_type=candidate.archive_type,
+        archive_member_path=archive_member_path,
+        archive_verify_status=candidate.archive_verify_status,
+        local_archive_path=candidate.local_archive_path,
+        manifest_sha256=candidate.manifest_sha256,
+        remote_archive_path=candidate.remote_archive_path,
+        remote_archive_fs_id=candidate.remote_archive_fs_id,
+        remote_archive_status=candidate.remote_archive_status,
+        candidate_status=candidate.candidate_status,
+        reason=candidate.reason,
+        file_count=1,
+    )
+
+
+def _target_root_path(candidate: RestoreCandidate, *, target_mode: RestoreTargetMode, target_root: str | Path | None) -> Path:
+    if target_mode == "original_path":
+        return Path(candidate.original_path).expanduser()
+    root = Path(target_root or "").expanduser()
+    if not str(root).strip():
+        raise RestoreFlowError("target_root is required for manual_path restore")
+    if candidate.source_type == "directory":
+        return root / _safe_relative_path(candidate.source_display_name or candidate.display_name)
+    return root / _safe_relative_path(candidate.display_name)
 
 
 def _target_path(candidate: RestoreCandidate, *, target_mode: RestoreTargetMode, target_root: str | Path | None) -> Path:

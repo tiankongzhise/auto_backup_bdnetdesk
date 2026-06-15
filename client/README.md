@@ -38,7 +38,7 @@
 
 ## PySide6 主窗口
 
-主窗口提供备份任务、百度设置、来源映射、远端校对、云端同步、原始数据清理和恢复入口。备份任务页支持选择/拖拽来源、设置本次缓存目录、创建任务和真实开始备份；点击“开始”会要求运行时输入归档密码和授权密码，然后在后台调用 `BackupPipeline` 执行扫描、去重、按每个选择源生成 7-Zip 加密归档、百度上传、Cloud Sync、远端校对和 completed final sync。归档密码和授权密码只保留在本次内存调用中，启动后会清空输入框，不写入 SQLite、日志或 UI 状态。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度 `list/listall` 生成差异报告，校对对象是本地 `remote_objects/upload_sessions` 与百度网盘实际结果；云端 PostgreSQL summary 回读在“云端同步”页完成。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页可按 job/关键字筛选候选，选择手动目录或原路径，运行时输入归档密码后执行 7-Zip 解压恢复；文件夹来源恢复到手动目录时会保留来源根文件夹和内部结构，本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
+主窗口提供备份任务、百度设置、来源映射、远端校对、云端同步、原始数据清理和恢复入口。备份任务页提供统一“添加来源”和拖拽入口，后端自动识别文件/文件夹来源，支持设置本次缓存目录、创建任务和真实开始备份；点击“开始”会要求运行时输入归档密码和授权密码，然后在后台调用 `BackupPipeline` 执行扫描、去重、按每个选择源生成 7-Zip 加密归档、百度上传、Cloud Sync、远端校对和 completed final sync。归档密码和授权密码只保留在本次内存调用中，启动后会清空输入框，不写入 SQLite、日志或 UI 状态。来源映射页展示本地 SQLite 中 job、source、file/content/archive/member/remote object 的关联，默认使用路径 hash、文件名和状态字段展示关系。远端校对页可按 job、upload session 或 remote dir 调用真实百度 `list/listall` 生成差异报告，校对对象是本地 `remote_objects/upload_sessions` 与百度网盘实际结果；云端 PostgreSQL summary 回读在“云端同步”页完成。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页刷新时会按本机 `device_id` 拉取云端历史，按用户备份时选择的来源聚合候选，选择手动目录或原路径，运行时输入归档密码后整包解压 archive 并只恢复所选来源范围；文件夹来源恢复到手动目录时会保留来源根文件夹和内部结构，本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
 
 ```powershell
 cd client
@@ -179,7 +179,9 @@ uv run python -m auto_backup_client.real_backup_pipeline_test_cli --password-env
 
 ## 恢复流程
 
-阶段 P2-13 新增 `restore_records` 同步实体和 `RestoreService`。恢复候选来自 `content_references`、`archives` 和 `remote_objects`，只要求备份 job 已 `completed`、archive 标准验证通过且来源已有 archive assignment；即使原始源文件已经清理，只要本地 archive 或已确认远端 archive 可用，仍会被列为可恢复候选。
+阶段 P2-13 新增 `restore_records` 同步实体和 `RestoreService`。P3-14 起，恢复候选按 `backup_sources + archives` 聚合，每一行代表用户当初选择的一个文件或文件夹来源，而不是文件夹内部的单个文件。候选来自 `backup_sources`、`content_references`、`archives` 和 `remote_objects`，只要求备份 job 已 `completed`、archive 标准验证通过且来源已有 archive assignment；即使原始源文件已经清理，只要本地 archive 或已确认远端 archive 可用，仍会被列为可恢复候选。
+
+恢复页刷新时会调用 Cloud API `GET /v1/backups?device_id=current`，使用本机 DPAPI 保存的 Device Token 按本机 `device_id` 拉取历史 `backup_jobs/backup_sources/file_items/folder_items/content_objects/content_references/archives/archive_members/remote_objects`，幂等导入本地 SQLite。新 exe 或空本地库只要设备凭据仍在，就可以重新看到本设备历史备份来源并进入远端拉取恢复；若 Device Token 被删除，则必须重新注册设备，无法安全证明它是原设备。
 
 恢复优先复用 `archives.local_archive_path` 指向的本地 archive。若本地 archive 缺失且 `remote_objects` 记录 archive 为 `remote_created` 并带有 `fs_id`，候选会进入 `needs_download`；恢复服务支持注入 `BaiduArchiveDownloader` 下载 archive。百度下载官方依据来自百度网盘开放平台文档：`filemetas` 通过 `GET /rest/2.0/xpan/multimedia?method=filemetas&fsids=[...]&dlink=1` 获取 `dlink`，下载时在 `dlink` 后追加 `access_token` 并设置 `User-Agent: pan.baidu.com`，`dlink` 有效期 8 小时且可能 302 跳转。
 
@@ -194,14 +196,14 @@ cd client
 $env:UV_LINK_MODE='copy'
 $env:UV_CACHE_DIR='..\.cache\uv'
 $env:BAIDU_AUTH_PASSWORD='<runtime-only-archive-password>'
-uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --job-id <job_id> list
-uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --job-id <job_id> --password-env BAIDU_AUTH_PASSWORD restore --target-root .\restored
+uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache list
+uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --password-env BAIDU_AUTH_PASSWORD restore --source-id <backup_source_id> --target-root .\restored
 
 # 本地 archive 已清理但远端 archive 已确认时，显式启用远端拉取。
-uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --job-id <job_id> --password-env BAIDU_AUTH_PASSWORD --enable-remote-download --authorization-password-env BAIDU_AUTH_PASSWORD restore --target-root .\restored
+uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --password-env BAIDU_AUTH_PASSWORD --enable-remote-download --authorization-password-env BAIDU_AUTH_PASSWORD restore --source-id <backup_source_id> --target-root .\restored
 ```
 
-`restore_cli` 和恢复页输出只展示数量、状态、文件名、content/archive hash 和路径 hash，不输出完整本地来源路径、目标路径、SQLite 路径、缓存路径、归档密码或百度 token。每个实际结果都会写入 `restore_records`，并同事务更新 `content_references.restore_status`；同步 payload 会过滤 `target_path`、`final_path` 和 `archive_path`。
+`restore_cli` 和恢复页输出只展示数量、状态、来源名、文件数、content/archive hash 和路径 hash，不输出完整本地来源路径、目标路径、SQLite 路径、缓存路径、归档密码或百度 token。每个实际恢复出的文件都会写入 `restore_records`，并同事务更新对应 `content_references.restore_status`；同步 payload 会过滤 `target_path`、`final_path` 和 `archive_path`。
 
 ## PySide6 百度设置页
 

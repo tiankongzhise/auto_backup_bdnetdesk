@@ -15,6 +15,7 @@ type Store interface {
 	GetContent(ctx context.Context, contentID string) (ContentObject, bool, error)
 	GetArchive(ctx context.Context, archiveSHA256 string) (ArchiveObject, bool, error)
 	GetEntitySummary(ctx context.Context, entityID string) (EntitySummary, bool, error)
+	ListBackupHistory(ctx context.Context, deviceID string, limit int) ([]BackupHistoryEntity, error)
 	CreateBaiduAuthSession(ctx context.Context, session BaiduAuthSession) error
 	GetBaiduAuthSession(ctx context.Context, sessionID string) (BaiduAuthSession, bool, error)
 	GetBaiduAuthSessionByState(ctx context.Context, state string) (BaiduAuthSession, bool, error)

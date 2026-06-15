@@ -43,6 +43,7 @@ from auto_backup_client.baidu.reconcile_repair import (
 from auto_backup_client.baidu.upload import BaiduNetdiskClient
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient
+from auto_backup_client.backup_history_sync import sync_device_backup_history
 from auto_backup_client.backup_jobs import (
     BackupJobError,
     BackupJobManager,
@@ -171,12 +172,9 @@ class BackupTaskPage(QWidget):
         self.job_name_input = QLineEdit()
         self.job_name_input.setPlaceholderText("留空时使用创建时间")
         name_row.addWidget(self.job_name_input, stretch=1)
-        self.add_files_button = QPushButton("选择文件")
-        self.add_files_button.clicked.connect(self.choose_files)
-        self.add_folder_button = QPushButton("选择文件夹")
-        self.add_folder_button.clicked.connect(self.choose_directory)
-        name_row.addWidget(self.add_files_button)
-        name_row.addWidget(self.add_folder_button)
+        self.add_sources_button = QPushButton("添加来源")
+        self.add_sources_button.clicked.connect(self.choose_sources)
+        name_row.addWidget(self.add_sources_button)
         layout.addLayout(name_row)
 
         self.pending_table = QTableWidget(0, 3)
@@ -195,7 +193,7 @@ class BackupTaskPage(QWidget):
         self.clear_sources_button.clicked.connect(self.clear_pending_sources)
         self.create_job_button = QPushButton("创建任务")
         self.create_job_button.clicked.connect(self.create_job)
-        toolbar.addWidget(QLabel("可拖拽文件或文件夹到此页"))
+        toolbar.addWidget(QLabel("可拖拽或添加任意文件/文件夹"))
         toolbar.addStretch(1)
         toolbar.addWidget(self.remove_source_button)
         toolbar.addWidget(self.clear_sources_button)
@@ -248,8 +246,8 @@ class BackupTaskPage(QWidget):
         toolbar.addWidget(self.cancel_button)
         layout.addLayout(toolbar)
 
-        self.jobs_table = QTableWidget(0, 6)
-        self.jobs_table.setHorizontalHeaderLabels(["任务", "状态", "来源数", "同步", "版本", "更新时间"])
+        self.jobs_table = QTableWidget(0, 8)
+        self.jobs_table.setHorizontalHeaderLabels(["任务", "状态", "阶段", "说明", "来源数", "同步", "版本", "更新时间"])
         self.jobs_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.jobs_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.jobs_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -265,12 +263,11 @@ class BackupTaskPage(QWidget):
             self.cache_root_input.setText(directory)
 
     @Slot()
-    def choose_files(self) -> None:
+    def choose_sources(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, "选择备份文件")
-        self.add_sources(files)
-
-    @Slot()
-    def choose_directory(self) -> None:
+        if files:
+            self.add_sources(files)
+            return
         directory = QFileDialog.getExistingDirectory(self, "选择备份文件夹")
         if directory:
             self.add_sources([directory])
@@ -337,6 +334,8 @@ class BackupTaskPage(QWidget):
             values = [
                 job.job_name,
                 status_label(job.status),
+                job.last_stage,
+                job.last_error,
                 str(job.source_count),
                 job.sync_status,
                 str(job.data_version),
@@ -345,6 +344,7 @@ class BackupTaskPage(QWidget):
             for col, value in enumerate(values):
                 table_item = QTableWidgetItem(value)
                 table_item.setData(Qt.ItemDataRole.UserRole, job.backup_job_id)
+                table_item.setToolTip(value)
                 self.jobs_table.setItem(row, col, table_item)
         self._refresh_job_buttons()
 
@@ -969,7 +969,7 @@ class SourceCleanupPage(QWidget):
         filters.addWidget(self.job_id_input, stretch=2)
         filters.addWidget(QLabel("关键字"))
         self.keyword_input = QLineEdit()
-        self.keyword_input.setPlaceholderText("任务名、文件名、relative path、content hash")
+        self.keyword_input.setPlaceholderText("任务名、来源名、archive 或远端路径")
         filters.addWidget(self.keyword_input, stretch=2)
         self.refresh_button = QPushButton("刷新")
         self.refresh_button.clicked.connect(self.refresh_candidates)
@@ -1213,8 +1213,8 @@ class RestorePage(QWidget):
         self.summary_label = QLabel("尚未加载")
         layout.addWidget(self.summary_label)
 
-        self.candidates_table = QTableWidget(0, 10)
-        self.candidates_table.setHorizontalHeaderLabels(["状态", "任务", "文件名", "大小", "SHA256", "路径", "清理", "恢复", "archive", "原因"])
+        self.candidates_table = QTableWidget(0, 11)
+        self.candidates_table.setHorizontalHeaderLabels(["状态", "类型", "来源", "任务", "文件数", "总大小", "清理", "恢复", "archive", "远端", "原因"])
         self.candidates_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.candidates_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.candidates_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -1224,6 +1224,7 @@ class RestorePage(QWidget):
     @Slot()
     def refresh_candidates(self) -> None:
         try:
+            self._sync_remote_history()
             report = self._service.list_candidates(
                 backup_job_id=self.job_id_input.text(),
                 keyword=self.keyword_input.text(),
@@ -1240,21 +1241,32 @@ class RestorePage(QWidget):
         for row_index, candidate in enumerate(self._candidates):
             values = [
                 candidate.candidate_status,
+                "文件夹" if candidate.source_type == "directory" else "文件",
+                candidate.source_display_name or candidate.display_name,
                 candidate.job_name,
-                candidate.display_name,
+                str(candidate.file_count),
                 str(candidate.size_bytes),
-                short_digest(candidate.sha256),
-                short_digest(candidate.path_sha256),
                 candidate.cleanup_status,
                 candidate.restore_status,
                 short_digest(candidate.archive_sha256),
+                candidate.remote_archive_status or "-",
                 candidate.reason,
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                item.setData(Qt.ItemDataRole.UserRole, candidate.content_reference_id)
+                item.setData(Qt.ItemDataRole.UserRole, candidate.restore_candidate_id)
+                item.setToolTip(value)
                 self.candidates_table.setItem(row_index, col, item)
         self.status_changed.emit(f"恢复候选已刷新：可恢复 {report.restorable_count} 条。")
+
+    def _sync_remote_history(self) -> None:
+        if not self._cloud_api_base_url or not self._device_token:
+            return
+        try:
+            with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0, device_id=self._device_id) as cloud:
+                sync_device_backup_history(store=self._store, cloud=cloud, limit=5000)
+        except Exception:
+            return
 
     @Slot()
     def choose_target_root(self) -> None:
@@ -1310,7 +1322,7 @@ class RestorePage(QWidget):
 
     def _selected_candidates_need_download(self, selected_ids: tuple[str, ...]) -> bool:
         selected = set(selected_ids)
-        candidates = self._candidates if not selected else [candidate for candidate in self._candidates if candidate.content_reference_id in selected]
+        candidates = self._candidates if not selected else [candidate for candidate in self._candidates if candidate.restore_candidate_id in selected]
         return any(candidate.remote_download_available for candidate in candidates)
 
     def _warn(self, message: str) -> None:

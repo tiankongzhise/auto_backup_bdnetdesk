@@ -11,17 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 真实备份压缩失败与重试缓存预算修复，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划修复用户反馈的真实备份阻塞：同时选择 `C:\Users\3700x\Downloads\LibreHardwareMonitor` 文件夹和 `C:\Users\3700x\Downloads\LibreHardwareMonitor.zip` 文件时压缩失败；同一任务重启重试时缓存目录 `C:/Users/3700x/Desktop/新建文件夹/cache` 实际空间足够但误报有效缓存预算低于最小要求。
+- 本轮插队工作：P3 阶段 14 发布候选体验与恢复同步修复，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划修复用户反馈的发布候选阻塞：运行时频繁闪现 CMD 窗口、恢复入口错误暴露文件夹内部单文件粒度、备份上传/同步后仍显示运行中且缺少卡点说明、备份来源选择区分文件/文件夹增加用户负担、重新生成本机 exe 后不能按本机 `device_id` 拉取远端历史备份记录。
 - 本轮完成后回到干净 Windows 发布候选端到端验收和安装/升级/卸载验证。
 
 ## 本次验收标准
 
-- 归档重试不得把同一 `archive_id` 上一次失败/旧记录中的 payload member 当作本次 manifest 的外部引用，避免自引用或陈旧引用导致压缩/验证失败。
-- 7-Zip 创建、测试或 manifest 解压失败时，错误信息必须保留脱敏后的 7-Zip stderr/stdout 摘要，方便定位具体压缩错误；UI 仍不得泄露本地完整路径和密码。
-- 缓存有效预算必须按产品规格 `min(cache_quota, disk_free_space - reserve)` 计算，不得因缓存目录已有占用把用户设置的总额度误当作剩余额度扣减；缓存等级仍可继续使用当前缓存占用判断。
-- 自动化测试覆盖同名文件夹 + `.zip` 文件作为两个来源的本地备份归档、缓存预算已有占用但磁盘空间足够时允许启动、以及 7-Zip 错误摘要保留。
-- 更新本进度文件；客户端定向测试、`compileall` 和 `git diff --check` 必须通过。
+- 7-Zip 压缩、测试、恢复解压和发布构建等子进程在 Windows 打包/运行时不得弹出一闪而过的控制台窗口；失败时仍保留脱敏后的 stdout/stderr 摘要。
+- 备份任务页只提供统一“添加来源”入口和拖拽入口，文件/文件夹类型由后端自动识别并写入任务来源。
+- 已上传并同步的任务如果不能标记 completed，必须把任务从 `running` 收口到可解释状态，并在 UI 显示最终阶段、远端校对差异或同步失败原因。
+- 恢复页必须按备份时用户选择的文件或文件夹来源展示和恢复；文件夹来源不得要求用户单独选择内部某个文件，远端恢复仍按 archive 整包下载后恢复该来源范围。
+- 新本机 exe 在本机 DPAPI Device Token 仍存在时，必须能按本机 `device_id` 从云端拉取本设备历史备份记录并重建恢复候选，不再要求用户记住 `job_id`。
+- 更新用户手册、发布验收矩阵和本进度文件；客户端定向测试、`compileall`、Go 测试和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -54,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-15：P3-14 发布候选体验与恢复同步修复
+
+变更原因：用户反馈发布候选运行时频繁闪现 CMD 窗口影响体验；恢复入口以文件夹内部单文件为粒度，不符合每个选择源独立压缩归档后的恢复逻辑；真实备份已上传同步但任务仍显示运行中且缺少卡点说明；备份来源选择不应要求用户区分文件和文件夹；重新生成本机 exe 后无法按本机设备拉取历史备份记录。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选真实体验、恢复可用性和云端同步可恢复性阻塞修复。
+
+验收标准：Windows 子进程隐藏控制台窗口；备份页统一添加来源并自动识别类型；备份流水线不能静默停留 `running`；恢复页按用户选择源聚合候选并整包恢复；云端新增按本机 `device_id` 拉取历史备份记录能力，客户端可从空本地库重建本设备恢复候选；客户端/Go 定向测试、compileall 和静态检查通过。
+
+回到主排期条件：本轮体验、恢复同步、测试和文档提交完成后，下一开发小项回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-14：P3-14 真实备份压缩失败与重试缓存预算修复
 
@@ -166,6 +177,31 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：发布候选体验与恢复同步修复
+
+- P3 阶段 14 发布候选体验与恢复同步修复完成；P3 阶段 14 仍在进行中，下一个开发小项回到干净 Windows R04-R14 发布候选验收、安装/升级/卸载验证和真实链路复验。
+- 新增 `subprocess_utils.hidden_subprocess_kwargs()`，7-Zip 归档、测试、恢复解压和 PyInstaller 发布构建 subprocess 在 Windows 下统一传入隐藏窗口参数，避免运行时闪现 CMD；失败路径仍保留脱敏错误摘要。
+- 备份任务页将 `选择文件`/`选择文件夹` 合并为统一 `添加来源` 入口，拖拽仍可用，后端继续通过路径自动识别文件或文件夹并写入 `backup_sources`。
+- `backup_jobs` 新增 `last_stage` 和 `last_error` 进度字段；`BackupPipeline` 在 scan/dedupe/archive/upload/sync/reconcile/final_sync/cache_cleanup 阶段持续记录进度，上传和同步后若远端校对或完成条件不满足，会进入 `failed_retryable` 并展示卡住阶段和原因，不再静默停留 `running`。
+- `backup_sources/content_references/archive_members` 接入可同步版本字段，支持恢复历史重建；新增云端 `GET /v1/backups?device_id=current`，服务端按认证设备过滤本设备历史实体，禁止读取其他设备历史。
+- 新增客户端 `backup_history_sync`，恢复页刷新时使用本机 Device Token 拉取云端历史并幂等写回本地 SQLite；新 exe 或空本地库在设备凭据仍存在时，可重建本设备过去的来源级恢复候选。
+- 恢复候选从单个 `content_reference` 文件行改为按 `backup_sources + archives` 聚合，每行代表用户备份时选择的一个文件或文件夹来源；执行恢复时下载/解压整个 archive，但按 manifest 只恢复所选来源范围。
+- 恢复页表格改为显示状态、来源类型、来源名称、任务名、文件数、总大小、清理状态、恢复状态、archive 摘要、远端状态和原因；恢复 CLI 新增 `--source-id`，旧 `--content-reference-id` 保留兼容。
+- 更新 `docs/user_guide.md`、`docs/release_acceptance_matrix.md`、`client/README.md` 和根 README，删除恢复必须记住任务 ID 的使用暗示，改为按本机设备历史、任务名和来源名浏览。
+- 已验证客户端定向测试：`tests/test_backup_history_sync.py tests/test_baidu_cloud_api.py tests/test_backup_pipeline.py tests/test_restore_flow.py tests/test_backup_task_page.py tests/test_subprocess_utils.py` 共 42 项通过。
+- 已验证恢复页 UI 定向测试：`test_restore_page_restores_selected_candidate_without_path_leak`、`test_restore_page_downloads_remote_archive_when_local_cache_is_missing`、`test_restore_page_refresh_imports_device_history_before_listing` 共 3 项通过。
+- 已验证客户端编译检查：`uv run python -m compileall src tests` 通过。
+- 已验证 Go 云端测试：`go test -p=1 ./...` 通过。
+
+提交摘要：本次提交完成 P3 阶段 14 发布候选体验与恢复同步修复，隐藏 Windows 子进程控制台窗口，统一备份来源入口和后端自动识别，收口备份完成条件失败时的运行状态与原因展示，恢复改为来源级整包下载/解压后按 manifest 写出，并新增按本机设备拉取云端历史记录重建恢复候选。
+
+后续待办：
+
+- P3 阶段 14 下一个开发小项回到干净 Windows R04-R14 发布候选验收。
+- 真实线上云端需要部署包含 `GET /v1/backups?device_id=current` 的新版 Go 服务后，干净机/新 exe 才能走真实设备历史拉取。
+- 若用户删除本机 DPAPI Device Token 或换 Windows 用户，需要重新注册设备；此时不能把新设备自动视为旧设备。
+- 干净 Windows 仍需继续真实授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计矩阵。
 
 ### P3 阶段 14 打包发布与最终验收：真实备份压缩失败与重试缓存预算修复
 

@@ -170,6 +170,48 @@ class ContentObject:
 
 
 @dataclass(frozen=True)
+class BackupHistoryEntity:
+    entity_id: str
+    entity_type: str
+    data_version: int
+    revision_id: str
+    canonical_record_sha256: str
+    updated_by_device_id: str
+    payload: JSONDict
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "BackupHistoryEntity":
+        payload = data.get("payload", {})
+        if not isinstance(payload, dict):
+            raise ValueError("backup history payload must be a JSON object")
+        return cls(
+            entity_id=str(data.get("entity_id", "")),
+            entity_type=str(data.get("entity_type", "")),
+            data_version=int(data.get("data_version", 0) or 0),
+            revision_id=str(data.get("revision_id", "")),
+            canonical_record_sha256=str(data.get("canonical_record_sha256", "")),
+            updated_by_device_id=str(data.get("updated_by_device_id", "")),
+            payload=dict(payload),
+        )
+
+
+@dataclass(frozen=True)
+class BackupHistoryResponse:
+    device_id: str
+    entities: tuple[BackupHistoryEntity, ...]
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "BackupHistoryResponse":
+        raw_entities = data.get("entities", [])
+        if not isinstance(raw_entities, list):
+            raise ValueError("backup history entities must be a list")
+        return cls(
+            device_id=str(data.get("device_id", "")),
+            entities=tuple(BackupHistoryEntity.from_json(item) for item in raw_entities),
+        )
+
+
+@dataclass(frozen=True)
 class SyncRevisionEvent:
     event_id: str
     entity_type: str

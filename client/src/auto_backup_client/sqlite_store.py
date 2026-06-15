@@ -44,6 +44,9 @@ LOCAL_ONLY_SYNC_FIELDS = frozenset(
 SYNC_ENTITY_TABLES = {
     "archives": "archives",
     "backup_jobs": "backup_jobs",
+    "backup_sources": "backup_sources",
+    "content_references": "content_references",
+    "archive_members": "archive_members",
     "content_objects": "content_objects",
     "file_items": "file_items",
     "folder_items": "folder_items",
@@ -344,7 +347,7 @@ class SQLiteClientStore:
         self.enqueue_revision(conn, record)
         return record
 
-    def put_backup_job(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+    def put_backup_job(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> RevisionRecord:
         row = dict(payload)
         _put_row(conn, "backup_jobs", row, key_field="backup_job_id")
         record = revision_from_payload(
@@ -358,11 +361,27 @@ class SQLiteClientStore:
             updated_at=str(row["updated_at"]),
             deleted_at=row.get("deleted_at"),
         )
-        self.enqueue_revision(conn, record)
+        if enqueue:
+            self.enqueue_revision(conn, record)
         return record
 
-    def put_backup_source(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
-        _put_row(conn, "backup_sources", dict(payload), key_field="backup_source_id")
+    def put_backup_source(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> None:
+        row = dict(payload)
+        _put_row(conn, "backup_sources", row, key_field="backup_source_id")
+        if "entity_id" in row:
+            record = revision_from_payload(
+                entity_type="backup_sources",
+                entity_id=str(row["entity_id"]),
+                revision_id=str(row["revision_id"]),
+                schema_version=int(row["schema_version"]),
+                data_version=int(row["data_version"]),
+                canonical_record_sha256=str(row["canonical_record_sha256"]),
+                payload=row,
+                updated_at=str(row["updated_at"]),
+                deleted_at=row.get("deleted_at"),
+            )
+            if enqueue:
+                self.enqueue_revision(conn, record)
 
     def replace_scan_results_for_source(
         self,
@@ -501,7 +520,7 @@ class SQLiteClientStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def put_content_object(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+    def put_content_object(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> RevisionRecord:
         row = dict(payload)
         _put_row(conn, "content_objects", row, key_field="content_id")
         record = revision_from_payload(
@@ -515,11 +534,27 @@ class SQLiteClientStore:
             updated_at=str(row["updated_at"]),
             deleted_at=row.get("deleted_at"),
         )
-        self.enqueue_revision(conn, record)
+        if enqueue:
+            self.enqueue_revision(conn, record)
         return record
 
-    def put_content_reference(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
-        _put_row(conn, "content_references", dict(payload), key_field="content_reference_id")
+    def put_content_reference(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> None:
+        row = dict(payload)
+        _put_row(conn, "content_references", row, key_field="content_reference_id")
+        if "revision_id" in row and "canonical_record_sha256" in row:
+            record = revision_from_payload(
+                entity_type="content_references",
+                entity_id=str(row["entity_id"]),
+                revision_id=str(row["revision_id"]),
+                schema_version=int(row["schema_version"]),
+                data_version=int(row["data_version"]),
+                canonical_record_sha256=str(row["canonical_record_sha256"]),
+                payload=row,
+                updated_at=str(row["updated_at"]),
+                deleted_at=row.get("deleted_at"),
+            )
+            if enqueue:
+                self.enqueue_revision(conn, record)
 
     def update_content_reference_cleanup_status(
         self,
@@ -573,6 +608,31 @@ class SQLiteClientStore:
         updated_at: str,
         updated_by_device_id: str,
     ) -> None:
+        existing = conn.execute(
+            "SELECT * FROM content_references WHERE content_reference_id = ?",
+            (content_reference_id,),
+        ).fetchone()
+        if existing is None:
+            raise ValueError("content reference not found")
+        payload = dict(existing)
+        payload.update(
+            {
+                "archive_id": archive_id,
+                "archive_sha256": archive_sha256,
+                "archive_member_path": archive_member_path,
+                "dedupe_status": dedupe_status,
+            }
+        )
+        versioned = build_version_fields(
+            entity_payload=payload,
+            updated_by_device_id=updated_by_device_id,
+            data_version=self.next_data_version(conn, "content_references", "content_reference_id", content_reference_id),
+            schema_version=int(payload["schema_version"] or 1),
+            now=updated_at,
+            sync_status="sync_pending",
+            deleted_at=payload.get("deleted_at"),
+            last_synced_revision_id=payload.get("last_synced_revision_id"),
+        )
         conn.execute(
             """
             UPDATE content_references
@@ -585,17 +645,18 @@ class SQLiteClientStore:
             WHERE content_reference_id = ?
             """,
             (
-                archive_id,
-                archive_sha256,
-                archive_member_path,
-                dedupe_status,
-                updated_at,
-                updated_by_device_id,
+                versioned["archive_id"],
+                versioned["archive_sha256"],
+                versioned["archive_member_path"],
+                versioned["dedupe_status"],
+                versioned["updated_at"],
+                versioned["updated_by_device_id"],
                 content_reference_id,
             ),
         )
+        self.put_content_reference(conn, versioned)
 
-    def put_archive(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+    def put_archive(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> RevisionRecord:
         row = dict(payload)
         _put_row(conn, "archives", row, key_field="archive_id")
         record = revision_from_payload(
@@ -609,11 +670,27 @@ class SQLiteClientStore:
             updated_at=str(row["updated_at"]),
             deleted_at=row.get("deleted_at"),
         )
-        self.enqueue_revision(conn, record)
+        if enqueue:
+            self.enqueue_revision(conn, record)
         return record
 
-    def put_archive_member(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> None:
-        _put_row(conn, "archive_members", dict(payload), key_field="archive_member_id")
+    def put_archive_member(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> None:
+        row = dict(payload)
+        _put_row(conn, "archive_members", row, key_field="archive_member_id")
+        if "entity_id" in row and row.get("entity_id"):
+            record = revision_from_payload(
+                entity_type="archive_members",
+                entity_id=str(row["entity_id"]),
+                revision_id=str(row["revision_id"]),
+                schema_version=int(row["schema_version"]),
+                data_version=int(row["data_version"]),
+                canonical_record_sha256=str(row["canonical_record_sha256"]),
+                payload=row,
+                updated_at=str(row["updated_at"]),
+                deleted_at=row.get("deleted_at"),
+            )
+            if enqueue:
+                self.enqueue_revision(conn, record)
 
     def update_archive_remote_path(
         self,
@@ -949,7 +1026,7 @@ class SQLiteClientStore:
         self.enqueue_revision(conn, record)
         return record
 
-    def put_remote_object(self, conn: sqlite3.Connection, payload: Mapping[str, Any]) -> RevisionRecord:
+    def put_remote_object(self, conn: sqlite3.Connection, payload: Mapping[str, Any], *, enqueue: bool = True) -> RevisionRecord:
         row = dict(payload)
         _put_row(conn, "remote_objects", row, key_field="remote_object_id")
         record = revision_from_payload(
@@ -963,7 +1040,8 @@ class SQLiteClientStore:
             updated_at=str(row["updated_at"]),
             deleted_at=row.get("deleted_at"),
         )
-        self.enqueue_revision(conn, record)
+        if enqueue:
+            self.enqueue_revision(conn, record)
         return record
 
     def get_upload_session_by_remote_path(self, remote_path: str) -> dict[str, Any] | None:

@@ -11,6 +11,7 @@ from auto_backup_client.baidu.models import (
     BaiduAuthSession,
     BaiduEncryptedToken,
     BaiduRefreshLease,
+    BackupHistoryResponse,
     CompleteAuthResult,
     ContentObject,
     DeviceRegistration,
@@ -177,6 +178,12 @@ class BaiduCloudClient:
             raise ValueError("content_id is required")
         data = self._request("GET", f"/v1/contents/{cleaned}")
         return ContentObject.from_json(data)
+
+    def list_backup_history(self, *, limit: int = 5000) -> BackupHistoryResponse:
+        if limit < 1 or limit > 20000:
+            raise ValueError("backup history limit must be between 1 and 20000")
+        data = self._request("GET", f"/v1/backups?device_id=current&limit={limit}")
+        return BackupHistoryResponse.from_json(data)
 
     def _request(
         self,

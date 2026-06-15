@@ -80,7 +80,8 @@ def test_backup_job_status_transitions_are_versioned(tmp_path) -> None:
     assert status_label("paused") == "已暂停"
 
     with store.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type = 'backup_jobs'").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type = 'backup_sources'").fetchone()[0] == 1
 
 
 def test_invalid_backup_job_status_transition_does_not_enqueue_revision(tmp_path) -> None:
@@ -98,5 +99,5 @@ def test_invalid_backup_job_status_transition_does_not_enqueue_revision(tmp_path
         job = conn.execute("SELECT status, data_version FROM backup_jobs").fetchone()
         assert job["status"] == "queued"
         assert job["data_version"] == 1
-        assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 1
-
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type = 'backup_jobs'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type = 'backup_sources'").fetchone()[0] == 1

@@ -65,6 +65,8 @@ class BackupJobRecord:
     updated_at: str
     sync_status: str
     created_at: str
+    last_stage: str = ""
+    last_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,8 @@ class BackupJobManager:
                 "paused_at": None,
                 "canceled_at": None,
                 "completed_at": None,
+                "last_stage": "queued",
+                "last_error": "",
                 "created_at": actual_now,
             },
             updated_by_device_id=self.device_id,
@@ -129,7 +133,16 @@ class BackupJobManager:
                     "created_at": actual_now,
                     "updated_at": actual_now,
                 }
-                self.store.put_backup_source(conn, source_payload)
+                source_versioned = build_version_fields(
+                    entity_payload={
+                        **source_payload,
+                        "entity_id": f"backup_source_{source_payload['backup_source_id']}",
+                    },
+                    updated_by_device_id=self.device_id,
+                    now=actual_now,
+                    sync_status="sync_pending",
+                )
+                self.store.put_backup_source(conn, source_versioned)
         return self.get_job_with_sources(backup_job_id)
 
     def transition_job(
@@ -161,6 +174,9 @@ class BackupJobManager:
 
             payload = dict(row)
             payload["status"] = cleaned_status
+            if cleaned_status == "running":
+                payload["last_stage"] = "running"
+                payload["last_error"] = ""
             if cleaned_status == "running" and current in {"queued", "failed_retryable"}:
                 payload["started_at"] = payload.get("started_at") or actual_now
             if cleaned_status == "paused":
@@ -171,7 +187,60 @@ class BackupJobManager:
                 payload["canceled_at"] = actual_now
             elif cleaned_status == "completed":
                 payload["completed_at"] = actual_now
+                payload["last_stage"] = "complete"
+                payload["last_error"] = ""
+            elif cleaned_status in {"failed_retryable", "failed_terminal"}:
+                payload["last_stage"] = payload.get("last_stage") or "failed"
 
+            versioned = build_version_fields(
+                entity_payload=payload,
+                updated_by_device_id=self.device_id,
+                data_version=self.store.next_data_version(
+                    conn,
+                    "backup_jobs",
+                    "backup_job_id",
+                    cleaned_job_id,
+                ),
+                schema_version=int(payload["schema_version"]),
+                now=actual_now,
+                sync_status="sync_pending",
+                deleted_at=payload.get("deleted_at"),
+                last_synced_revision_id=payload.get("last_synced_revision_id"),
+            )
+            self.store.put_backup_job(conn, versioned)
+        return self.get_job_with_sources(cleaned_job_id)
+
+    def record_progress(
+        self,
+        backup_job_id: str,
+        *,
+        stage: str,
+        error: str = "",
+        status: str | None = None,
+        now: str | None = None,
+    ) -> BackupJobWithSources:
+        cleaned_job_id = backup_job_id.strip()
+        cleaned_stage = " ".join(stage.strip().split())
+        if not cleaned_job_id:
+            raise BackupJobError("backup_job_id is required")
+        if not cleaned_stage:
+            raise BackupJobError("stage is required")
+        actual_now = now or utc_now_iso()
+        with self.store.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM backup_jobs WHERE backup_job_id = ?",
+                (cleaned_job_id,),
+            ).fetchone()
+            if row is None:
+                raise BackupJobError("backup job not found")
+            payload = dict(row)
+            if status is not None:
+                cleaned_status = status.strip()
+                if cleaned_status not in JOB_STATUS_LABELS:
+                    raise BackupJobError(f"unsupported backup job status: {cleaned_status}")
+                payload["status"] = cleaned_status
+            payload["last_stage"] = cleaned_stage
+            payload["last_error"] = _short_error(error)
             versioned = build_version_fields(
                 entity_payload=payload,
                 updated_by_device_id=self.device_id,
@@ -272,6 +341,8 @@ def _job_from_row(row: dict[str, object]) -> BackupJobRecord:
         updated_at=str(row["updated_at"]),
         sync_status=str(row["sync_status"]),
         created_at=str(row["created_at"]),
+        last_stage=str(row.get("last_stage") or ""),
+        last_error=str(row.get("last_error") or ""),
     )
 
 
@@ -288,3 +359,10 @@ def _source_from_row(row: dict[str, object]) -> BackupSourceRecord:
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
+
+
+def _short_error(value: str) -> str:
+    cleaned = " ".join(str(value).strip().split())
+    if len(cleaned) > 500:
+        return cleaned[:497] + "..."
+    return cleaned

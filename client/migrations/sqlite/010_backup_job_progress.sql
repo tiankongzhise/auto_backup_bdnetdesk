@@ -1,0 +1,5 @@
+ALTER TABLE backup_jobs
+ADD COLUMN last_stage TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE backup_jobs
+ADD COLUMN last_error TEXT NOT NULL DEFAULT '';

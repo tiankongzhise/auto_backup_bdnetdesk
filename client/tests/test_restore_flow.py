@@ -69,10 +69,17 @@ def test_restore_to_manual_path_writes_file_record_outbox_and_status(tmp_path) -
 def test_restore_directory_source_to_manual_path_preserves_source_root(tmp_path) -> None:
     folder = tmp_path / "photos"
     nested = folder / "nested" / "image.jpg"
+    sibling = folder / "cover.jpg"
     nested.parent.mkdir(parents=True)
     nested.write_text("payload", encoding="utf-8")
+    sibling.write_text("cover", encoding="utf-8")
     store, job_id = _completed_job(tmp_path, folder)
     target_root = tmp_path / "restored"
+
+    report = RestoreService(store, device_id="device-1", cache_root=tmp_path / "cache").list_candidates(backup_job_id=job_id)
+    assert len(report.candidates) == 1
+    assert report.candidates[0].source_type == "directory"
+    assert report.candidates[0].file_count == 2
 
     result = RestoreService(store, device_id="device-1", cache_root=tmp_path / "cache").restore(
         backup_job_id=job_id,
@@ -83,9 +90,10 @@ def test_restore_directory_source_to_manual_path_preserves_source_root(tmp_path)
     )
 
     restored = target_root / "photos" / "nested" / "image.jpg"
-    assert result.restored_count == 1
+    assert result.restored_count == 2
     assert result.failed_count == 0
     assert restored.read_text(encoding="utf-8") == "payload"
+    assert (target_root / "photos" / "cover.jpg").read_text(encoding="utf-8") == "cover"
     assert not (target_root / "nested" / "image.jpg").exists()
 
 

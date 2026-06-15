@@ -35,7 +35,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     subparsers.add_parser("list", help="列出可恢复对象候选。")
     restore = subparsers.add_parser("restore", help="执行恢复。")
-    restore.add_argument("--content-reference-id", action="append", default=[], help="指定 content_reference_id；可重复。")
+    restore.add_argument("--source-id", action="append", default=[], help="指定来源级恢复候选 ID；可重复。")
+    restore.add_argument("--content-reference-id", action="append", default=[], help="兼容旧参数；现在按同名来源级候选 ID 选择。")
     restore.add_argument("--target-mode", choices=("manual_path", "original_path"), default="manual_path")
     restore.add_argument("--target-root", default="", help="manual_path 模式下的恢复根目录。")
     restore.add_argument("--conflict-strategy", choices=("keep_both", "skip_existing"), default="keep_both")
@@ -81,7 +82,7 @@ def _run(args: argparse.Namespace) -> int:
             password = _read_archive_password(args.password_env)
             result = service.restore(
                 backup_job_id=args.job_id,
-                content_reference_ids=tuple(args.content_reference_id),
+                content_reference_ids=tuple(args.source_id + args.content_reference_id),
                 target_mode=args.target_mode,
                 target_root=args.target_root or None,
                 password=password,

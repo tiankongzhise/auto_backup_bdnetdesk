@@ -2,6 +2,7 @@ package cloudapi
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -32,6 +33,7 @@ type memoryEntity struct {
 	RevisionID            string
 	CanonicalRecordSHA256 string
 	UpdatedByDeviceID     string
+	Payload               json.RawMessage
 	DeletedAt             *time.Time
 }
 
@@ -174,6 +176,7 @@ func (s *memoryStore) applyRevisionLocked(deviceID string, event RevisionEvent) 
 		RevisionID:            event.RevisionID,
 		CanonicalRecordSHA256: event.CanonicalRecordSHA256,
 		UpdatedByDeviceID:     deviceID,
+		Payload:               append(json.RawMessage(nil), event.Payload...),
 		DeletedAt:             event.DeletedAt,
 	}
 	if hasContentIndex {
@@ -270,6 +273,39 @@ func (s *memoryStore) GetEntitySummary(_ context.Context, entityID string) (Enti
 		})
 	}
 	return summary, true, nil
+}
+
+func (s *memoryStore) ListBackupHistory(_ context.Context, deviceID string, limit int) ([]BackupHistoryEntity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.err != nil {
+		return nil, s.err
+	}
+	entities := make([]BackupHistoryEntity, 0)
+	for _, entity := range s.entities {
+		if entity.DeletedAt != nil || entity.UpdatedByDeviceID != deviceID {
+			continue
+		}
+		switch entity.EntityType {
+		case "backup_jobs", "backup_sources", "file_items", "folder_items", "content_objects", "content_references", "archives", "archive_members", "remote_objects":
+		default:
+			continue
+		}
+		entities = append(entities, BackupHistoryEntity{
+			EntityID:              entity.EntityID,
+			EntityType:            entity.EntityType,
+			DataVersion:           entity.DataVersion,
+			RevisionID:            entity.RevisionID,
+			CanonicalRecordSHA256: entity.CanonicalRecordSHA256,
+			UpdatedByDeviceID:     entity.UpdatedByDeviceID,
+			Payload:               append(json.RawMessage(nil), entity.Payload...),
+		})
+		if len(entities) >= limit {
+			break
+		}
+	}
+	return entities, nil
 }
 
 func (s *memoryStore) Ping(_ context.Context) error {

@@ -110,15 +110,18 @@ class BackupPipeline:
         stage = "start"
         try:
             stage = "scan"
+            self._record_stage(manager, cleaned_job_id, stage, now=options.now)
             scan = BackupScanner(self.store, device_id=self.device_id).scan_job(cleaned_job_id, now=options.now)
 
             stage = "dedupe"
+            self._record_stage(manager, cleaned_job_id, stage, now=options.now)
             indexer = ContentDedupeIndexer(self.store, device_id=self.device_id)
             content_index = indexer.build_job_index(cleaned_job_id, now=options.now)
 
             cloud_candidates = None
             if options.refresh_cloud_candidates:
                 stage = "cloud_candidates"
+                self._record_stage(manager, cleaned_job_id, stage, now=options.now)
                 cloud_candidates = indexer.refresh_cloud_candidates(
                     cleaned_job_id,
                     cloud_client=self.cloud_client,  # type: ignore[arg-type]
@@ -126,6 +129,7 @@ class BackupPipeline:
                 )
 
             stage = "archive"
+            self._record_stage(manager, cleaned_job_id, stage, now=options.now)
             packager = ArchivePackager(
                 self.store,
                 device_id=self.device_id,
@@ -153,6 +157,7 @@ class BackupPipeline:
             uploads: list[ResumableUploadResult] = []
             if options.run_upload:
                 stage = "upload"
+                self._record_stage(manager, cleaned_job_id, stage, now=options.now)
                 for archive_item in archives:
                     uploads.append(self._upload_archive(cleaned_job_id, archive_item, options, job_with_sources))
             upload = uploads[0] if uploads else None
@@ -160,6 +165,7 @@ class BackupPipeline:
             sync = None
             if options.sync_outbox:
                 stage = "sync"
+                self._record_stage(manager, cleaned_job_id, stage, now=options.now)
                 sync = _run_sync_until_idle(
                     self.store,
                     self.cloud_client,  # type: ignore[arg-type]
@@ -171,6 +177,7 @@ class BackupPipeline:
             reconcile = None
             if options.reconcile_remote:
                 stage = "reconcile"
+                self._record_stage(manager, cleaned_job_id, stage, now=options.now)
                 reconcile = RemoteObjectReconciler(
                     store=self.store,
                     baidu=self.baidu_client,  # type: ignore[arg-type]
@@ -189,6 +196,7 @@ class BackupPipeline:
                     )
                 if options.sync_outbox:
                     stage = "final_sync"
+                    self._record_stage(manager, cleaned_job_id, stage, now=options.now)
                     final_sync = _run_sync_until_idle(
                         self.store,
                         self.cloud_client,  # type: ignore[arg-type]
@@ -197,10 +205,21 @@ class BackupPipeline:
                         now=options.now,
                     )
                     sync = _merge_sync_results(sync or SyncWorkerResult(selected=0, sent=0, synced=0, conflicts=0, rejected=0, retryable=0), final_sync)
+            else:
+                reason = _incomplete_reason(options, uploads=tuple(uploads), sync=sync, reconcile=reconcile)
+                self._record_stage(
+                    manager,
+                    cleaned_job_id,
+                    stage,
+                    error=reason,
+                    status="failed_retryable" if options.mark_completed else None,
+                    now=options.now,
+                )
 
             cache_cleanup = None
             if options.cleanup_cache_artifacts:
                 stage = "cache_cleanup"
+                self._record_stage(manager, cleaned_job_id, stage, now=options.now)
                 usage_for_cleanup = artifact_manager.usage(_cache_budget(options))
                 cache_cleanup = artifact_manager.cleanup(
                     current_stage="completed" if completed else stage,
@@ -227,7 +246,7 @@ class BackupPipeline:
                 cache_cleanup=cache_cleanup,
             )
         except Exception as exc:
-            self._mark_failed_retryable(manager, cleaned_job_id, now=options.now)
+            self._mark_failed_retryable(manager, cleaned_job_id, stage=stage, error=str(exc), now=options.now)
             if isinstance(exc, BackupPipelineError):
                 raise
             if isinstance(exc, CacheArtifactError):
@@ -330,11 +349,26 @@ class BackupPipeline:
             return
         raise BackupPipelineError(f"backup job is not runnable from status: {job.status}")
 
-    def _mark_failed_retryable(self, manager: BackupJobManager, backup_job_id: str, *, now: str | None) -> None:
+    def _record_stage(
+        self,
+        manager: BackupJobManager,
+        backup_job_id: str,
+        stage: str,
+        *,
+        error: str = "",
+        status: str | None = None,
+        now: str | None,
+    ) -> None:
+        try:
+            manager.record_progress(backup_job_id, stage=stage, error=error, status=status, now=now)
+        except BackupJobError:
+            return
+
+    def _mark_failed_retryable(self, manager: BackupJobManager, backup_job_id: str, *, stage: str, error: str, now: str | None) -> None:
         try:
             job = manager.get_job_with_sources(backup_job_id).job
             if job.status == "running":
-                manager.transition_job(backup_job_id, "failed_retryable", now=now)
+                manager.record_progress(backup_job_id, stage=stage or "failed", error=error, status="failed_retryable", now=now)
         except BackupJobError:
             return
 
@@ -442,6 +476,27 @@ def _can_mark_completed(
     if sync is not None and (sync.conflicts or sync.rejected or sync.retryable):
         return False
     return True
+
+
+def _incomplete_reason(
+    options: BackupPipelineOptions,
+    *,
+    uploads: tuple[ResumableUploadResult, ...],
+    sync: SyncWorkerResult | None,
+    reconcile: RemoteReconcileReport | None,
+) -> str:
+    if not options.mark_completed:
+        return "mark_completed is disabled"
+    if reconcile is None:
+        return "remote reconcile did not run"
+    if reconcile.has_differences:
+        counts = {key: value for key, value in reconcile.status_counts.items() if value}
+        return f"remote reconcile has differences: {counts}"
+    if options.run_upload and not uploads:
+        return "upload did not produce any completed archive"
+    if sync is not None and (sync.conflicts or sync.rejected or sync.retryable):
+        return f"sync not idle: conflicts={sync.conflicts}, rejected={sync.rejected}, retryable={sync.retryable}"
+    return "completion conditions were not satisfied"
 
 
 def _parse_utc_datetime(value: str) -> datetime:

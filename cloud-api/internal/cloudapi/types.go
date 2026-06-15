@@ -101,3 +101,18 @@ type RevisionSummary struct {
 	CanonicalRecordSHA256 string    `json:"canonical_record_sha256"`
 	CreatedAt             time.Time `json:"created_at"`
 }
+
+type BackupHistoryEntity struct {
+	EntityID              string          `json:"entity_id"`
+	EntityType            string          `json:"entity_type"`
+	DataVersion           int64           `json:"data_version"`
+	RevisionID            string          `json:"revision_id"`
+	CanonicalRecordSHA256 string          `json:"canonical_record_sha256"`
+	UpdatedByDeviceID     string          `json:"updated_by_device_id"`
+	Payload               json.RawMessage `json:"payload"`
+}
+
+type BackupHistoryResponse struct {
+	DeviceID string                `json:"device_id"`
+	Entities []BackupHistoryEntity `json:"entities"`
+}

@@ -307,6 +307,78 @@ LIMIT 10
 	return summary, true, nil
 }
 
+func (s *PostgresStore) ListBackupHistory(ctx context.Context, deviceID string, limit int) ([]BackupHistoryEntity, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT
+    entity_id,
+    entity_type,
+    data_version,
+    revision_id,
+    canonical_record_sha256,
+    updated_by_device_id,
+    payload_json
+FROM cloud_entities
+WHERE deleted_at IS NULL
+  AND entity_type IN (
+      'backup_jobs',
+      'backup_sources',
+      'file_items',
+      'folder_items',
+      'content_objects',
+      'content_references',
+      'archives',
+      'archive_members',
+      'remote_objects'
+  )
+  AND (
+      updated_by_device_id = $1
+      OR payload_json->>'device_id' = $1
+      OR payload_json->>'updated_by_device_id' = $1
+  )
+ORDER BY
+    CASE entity_type
+        WHEN 'backup_jobs' THEN 1
+        WHEN 'backup_sources' THEN 2
+        WHEN 'file_items' THEN 3
+        WHEN 'folder_items' THEN 4
+        WHEN 'content_objects' THEN 5
+        WHEN 'content_references' THEN 6
+        WHEN 'archives' THEN 7
+        WHEN 'archive_members' THEN 8
+        WHEN 'remote_objects' THEN 9
+        ELSE 99
+    END,
+    updated_at,
+    entity_id
+LIMIT $2
+`, deviceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entities []BackupHistoryEntity
+	for rows.Next() {
+		var entity BackupHistoryEntity
+		if err := rows.Scan(
+			&entity.EntityID,
+			&entity.EntityType,
+			&entity.DataVersion,
+			&entity.RevisionID,
+			&entity.CanonicalRecordSHA256,
+			&entity.UpdatedByDeviceID,
+			&entity.Payload,
+		); err != nil {
+			return nil, err
+		}
+		entities = append(entities, entity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entities, nil
+}
+
 func (s *PostgresStore) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }

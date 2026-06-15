@@ -58,6 +58,27 @@ def test_backup_task_page_creates_persistent_job_without_status_path_leak(tmp_pa
         assert conn.execute("SELECT COUNT(*) FROM backup_sources").fetchone()[0] == 1
 
 
+def test_backup_task_page_single_add_source_entry_auto_detects_files_and_folders(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    file_source = tmp_path / "source.txt"
+    folder_source = tmp_path / "photos"
+    file_source.write_text("hello", encoding="utf-8")
+    folder_source.mkdir()
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    page = BackupTaskPage(BackupJobManager(store, device_id="device-1"))
+
+    page.add_sources([str(file_source), str(folder_source), str(file_source)])
+    page.create_job()
+
+    with store.connect() as conn:
+        sources = conn.execute("SELECT source_type, display_name FROM backup_sources ORDER BY source_seq").fetchall()
+    assert page.add_sources_button.text() == "添加来源"
+    assert [row["source_type"] for row in sources] == ["file", "directory"]
+    assert [row["display_name"] for row in sources] == ["source.txt", "photos"]
+
+
 def test_backup_task_page_transitions_selected_job(tmp_path, monkeypatch) -> None:
     _app()
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
@@ -80,7 +101,7 @@ def test_backup_task_page_transitions_selected_job(tmp_path, monkeypatch) -> Non
         job = conn.execute("SELECT status, data_version FROM backup_jobs").fetchone()
         assert job["status"] == "canceled"
         assert job["data_version"] == 5
-        assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 6
 
 
 def test_backup_task_page_start_runs_real_pipeline_without_sensitive_status_leak(tmp_path, monkeypatch) -> None:
@@ -349,6 +370,32 @@ def test_restore_page_downloads_remote_archive_when_local_cache_is_missing(tmp_p
     records = store.list_restore_records(created.job.backup_job_id)
     assert records[0]["restore_status"] == "restored"
     assert records[0]["archive_source"] == "downloaded"
+
+
+def test_restore_page_refresh_imports_device_history_before_listing(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    imported: list[int] = []
+
+    def fake_sync_device_backup_history(*, store, cloud, limit: int = 5000):  # type: ignore[no-untyped-def]
+        imported.append(limit)
+        return SimpleNamespace(imported_count=0, skipped_count=0)
+
+    monkeypatch.setattr(main_window, "sync_device_backup_history", fake_sync_device_backup_history)
+    monkeypatch.setattr(main_window, "BaiduCloudClient", _FakeCloudClient)
+
+    page = RestorePage(
+        store,
+        device_id="device-1",
+        cache_root=str(tmp_path / "cache"),
+        cloud_api_base_url="https://backup.baichengedu.com",
+        device_token="secret-device-token",
+    )
+    page.refresh_candidates()
+
+    assert imported == [5000, 5000]
 
 
 def test_source_cleanup_page_hides_permanent_delete_and_requires_selection(tmp_path, monkeypatch) -> None:

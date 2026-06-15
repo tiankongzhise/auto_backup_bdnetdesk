@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -75,6 +76,7 @@ func (s *Server) routes() http.Handler {
 			authed.Get("/contents/{content_id}", s.handleGetContent)
 			authed.Get("/archives/{archive_sha256}", s.handleGetArchive)
 			authed.Get("/reconcile/entities/{entity_id}", s.handleGetEntitySummary)
+			authed.Get("/backups", s.handleListBackups)
 			authed.Post("/baidu/auth/sessions", s.handleCreateBaiduAuthSession)
 			authed.Get("/baidu/auth/sessions/{session_id}", s.handleGetBaiduAuthSession)
 			authed.Post("/baidu/auth/sessions/{session_id}/complete", s.handleCompleteBaiduAuthSession)
@@ -277,6 +279,33 @@ func (s *Server) handleGetEntitySummary(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
+	device := deviceFromContext(r.Context())
+	deviceID := strings.TrimSpace(r.URL.Query().Get("device_id"))
+	if deviceID == "" {
+		deviceID = "current"
+	}
+	if deviceID != "current" && deviceID != device.DeviceID {
+		writeError(w, http.StatusForbidden, "forbidden_device", "backup history can only be listed for the authenticated device")
+		return
+	}
+	limit := 5000
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := parsePositiveInt(rawLimit)
+		if err != nil || parsed < 1 || parsed > 20000 {
+			writeError(w, http.StatusBadRequest, "invalid_limit", "limit must be between 1 and 20000")
+			return
+		}
+		limit = parsed
+	}
+	entities, err := s.store.ListBackupHistory(r.Context(), device.DeviceID, limit)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "retryable_error", "cloud store is unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, BackupHistoryResponse{DeviceID: device.DeviceID, Entities: entities})
 }
 
 func (s *Server) handleCreateBaiduAuthSession(w http.ResponseWriter, r *http.Request) {
@@ -694,6 +723,14 @@ func bearerToken(header string) (string, bool) {
 func deviceFromContext(ctx context.Context) Device {
 	device, _ := ctx.Value(deviceContextKey{}).(Device)
 	return device
+}
+
+func parsePositiveInt(value string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || parsed < 1 {
+		return 0, errors.New("value must be positive")
+	}
+	return parsed, nil
 }
 
 func validateRevisionEvent(event RevisionEvent) error {

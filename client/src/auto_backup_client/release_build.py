@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from auto_backup_client import __version__
+from auto_backup_client.subprocess_utils import hidden_subprocess_kwargs
 
 
 APP_NAME = "AutoBackupBDNetdisk"
@@ -90,7 +91,7 @@ def run_pyinstaller(config: PyInstallerBuildConfig, *, dry_run: bool = False) ->
     (resolved_config.dist_dir / resolved_config.build_id).mkdir(parents=True, exist_ok=True)
     (resolved_config.work_dir / resolved_config.build_id).mkdir(parents=True, exist_ok=True)
     (resolved_config.spec_dir / resolved_config.build_id).mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(args, cwd=REPO_ROOT, check=False)
+    completed = subprocess.run(args, cwd=REPO_ROOT, check=False, **hidden_subprocess_kwargs())
     return completed.returncode
 
 
