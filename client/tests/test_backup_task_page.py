@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from auto_backup_client.backup_jobs import BackupJobManager
+from auto_backup_client.backup_history_sync import DeviceBackupHistoryRefreshResult
 from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineOptions
 from auto_backup_client.baidu.upload import BaiduFileItem, BaiduFileListResult
 from auto_backup_client.dedupe_index import ContentDedupeIndexer
@@ -79,6 +80,28 @@ def test_backup_task_page_single_add_source_entry_auto_detects_files_and_folders
     assert [row["display_name"] for row in sources] == ["source.txt", "photos"]
 
 
+def test_backup_task_page_source_picker_adds_files_and_folders_together(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    file_source = tmp_path / "source.txt"
+    folder_source = tmp_path / "photos"
+    file_source.write_text("hello", encoding="utf-8")
+    folder_source.mkdir()
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    page = BackupTaskPage(BackupJobManager(store, device_id="device-1"))
+
+    page.choose_sources()
+    assert page._source_picker is not None
+    page._source_picker.sources_selected.emit([str(file_source), str(folder_source)])
+    page.create_job()
+
+    with store.connect() as conn:
+        sources = conn.execute("SELECT source_type, display_name FROM backup_sources ORDER BY source_seq").fetchall()
+    assert [row["source_type"] for row in sources] == ["file", "directory"]
+    assert [row["display_name"] for row in sources] == ["source.txt", "photos"]
+
+
 def test_backup_task_page_transitions_selected_job(tmp_path, monkeypatch) -> None:
     _app()
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
@@ -102,6 +125,24 @@ def test_backup_task_page_transitions_selected_job(tmp_path, monkeypatch) -> Non
         assert job["status"] == "canceled"
         assert job["data_version"] == 5
         assert conn.execute("SELECT COUNT(*) FROM sync_outbox").fetchone()[0] == 6
+
+
+def test_backup_task_page_continue_is_enabled_for_imported_running_job(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    source = tmp_path / "source.txt"
+    source.write_text("hello", encoding="utf-8")
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    manager = BackupJobManager(store, device_id="device-1")
+    created = manager.create_job([str(source)], job_name="cloud running")
+    manager.transition_job(created.job.backup_job_id, "running")
+
+    page = BackupTaskPage(manager)
+    page.jobs_table.selectRow(0)
+
+    assert page.start_button.isEnabled() is False
+    assert page.resume_button.isEnabled() is True
 
 
 def test_backup_task_page_start_runs_real_pipeline_without_sensitive_status_leak(tmp_path, monkeypatch) -> None:
@@ -210,13 +251,32 @@ def test_source_mapping_page_renders_rows_without_local_path_leak(tmp_path, monk
     ContentDedupeIndexer(store, device_id="device-1").build_job_index(created.job.backup_job_id)
 
     page = SourceMappingPage(store)
-    page.job_id_input.setText(created.job.backup_job_id)
+    page.select_job(created.job.backup_job_id)
     page.refresh_mapping()
 
     table_text = _table_text(page.mapping_table)
     assert "secret.txt" in table_text
     assert str(secret_source) not in table_text
     assert str(tmp_path) not in table_text
+
+
+def test_source_mapping_and_cleanup_refresh_device_history_before_listing(tmp_path, monkeypatch) -> None:
+    _app()
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
+    store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
+    store.migrate()
+    mapping_refresher = _FakeHistoryRefresher()
+    cleanup_refresher = _FakeHistoryRefresher()
+
+    mapping_page = SourceMappingPage(store, history_refresher=mapping_refresher)
+    cleanup_page = SourceCleanupPage(store, device_id="device-1", history_refresher=cleanup_refresher)
+    mapping_page.refresh_mapping()
+    cleanup_page.refresh_candidates()
+
+    assert mapping_refresher.calls == 2
+    assert cleanup_refresher.calls == 2
+    assert mapping_page.job_filter.currentText() == "全部最近记录"
+    assert cleanup_page.job_filter.currentText() == "全部最近记录"
 
 
 def test_remote_reconcile_page_applies_confirmed_safe_repair(tmp_path, monkeypatch) -> None:
@@ -291,7 +351,7 @@ def test_restore_page_restores_selected_candidate_without_path_leak(tmp_path, mo
     target_root = tmp_path / "restored"
 
     page = RestorePage(store, device_id="device-1", cache_root=str(tmp_path / "cache"))
-    page.job_id_input.setText(created.job.backup_job_id)
+    page.select_job(created.job.backup_job_id)
     page.refresh_candidates()
 
     assert page.candidates_table.rowCount() == 1
@@ -355,7 +415,7 @@ def test_restore_page_downloads_remote_archive_when_local_cache_is_missing(tmp_p
         cloud_api_base_url="https://backup.baichengedu.com",
         device_token="secret-device-token",
     )
-    page.job_id_input.setText(created.job.backup_job_id)
+    page.select_job(created.job.backup_job_id)
     page.refresh_candidates()
 
     assert page.candidates_table.item(0, 0).text() == "needs_download"
@@ -377,14 +437,7 @@ def test_restore_page_refresh_imports_device_history_before_listing(tmp_path, mo
     monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: None)
     store = SQLiteClientStore(tmp_path / "backup_state.sqlite3")
     store.migrate()
-    imported: list[int] = []
-
-    def fake_sync_device_backup_history(*, store, cloud, limit: int = 5000):  # type: ignore[no-untyped-def]
-        imported.append(limit)
-        return SimpleNamespace(imported_count=0, skipped_count=0)
-
-    monkeypatch.setattr(main_window, "sync_device_backup_history", fake_sync_device_backup_history)
-    monkeypatch.setattr(main_window, "BaiduCloudClient", _FakeCloudClient)
+    refresher = _FakeHistoryRefresher()
 
     page = RestorePage(
         store,
@@ -392,10 +445,11 @@ def test_restore_page_refresh_imports_device_history_before_listing(tmp_path, mo
         cache_root=str(tmp_path / "cache"),
         cloud_api_base_url="https://backup.baichengedu.com",
         device_token="secret-device-token",
+        history_refresher=refresher,
     )
     page.refresh_candidates()
 
-    assert imported == [5000, 5000]
+    assert refresher.calls == 2
 
 
 def test_source_cleanup_page_hides_permanent_delete_and_requires_selection(tmp_path, monkeypatch) -> None:
@@ -428,7 +482,7 @@ def test_source_cleanup_page_hides_permanent_delete_and_requires_selection(tmp_p
     page = SourceCleanupPage(store, device_id="device-1")
     status_messages: list[str] = []
     page.status_changed.connect(status_messages.append)
-    page.job_id_input.setText(created.job.backup_job_id)
+    page.select_job(created.job.backup_job_id)
     page.refresh_candidates()
 
     assert page.candidates_table.rowCount() == 1
@@ -472,7 +526,7 @@ def test_source_cleanup_page_shows_exact_confirmation_phrase(tmp_path, monkeypat
     page = SourceCleanupPage(store, device_id="device-1")
     status_messages: list[str] = []
     page.status_changed.connect(status_messages.append)
-    page.job_id_input.setText(created.job.backup_job_id)
+    page.select_job(created.job.backup_job_id)
     page.refresh_candidates()
 
     page.candidates_table.selectRow(0)
@@ -684,6 +738,16 @@ class _FakeCloudSummaryClient:
                 SimpleNamespace(apply_status="synced", data_version=1, revision_id="rev_" + "c" * 12),
             ),
         )
+
+
+class _FakeHistoryRefresher:
+    def __init__(self, result: DeviceBackupHistoryRefreshResult | None = None) -> None:
+        self.result = result or DeviceBackupHistoryRefreshResult(attempted=True, imported_count=1, skipped_count=0)
+        self.calls = 0
+
+    def refresh(self) -> DeviceBackupHistoryRefreshResult:
+        self.calls += 1
+        return self.result
 
 
 def _insert_remote_object(store: SQLiteClientStore, *, remote_path: str) -> None:

@@ -31,6 +31,57 @@ class BackupHistorySyncResult:
     skipped_count: int
 
 
+@dataclass(frozen=True)
+class DeviceBackupHistoryRefreshResult:
+    attempted: bool
+    imported_count: int = 0
+    skipped_count: int = 0
+    error_message: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return self.attempted and not self.error_message
+
+
+class DeviceBackupHistoryRefresher:
+    def __init__(
+        self,
+        *,
+        store: SQLiteClientStore,
+        cloud_api_base_url: str = "",
+        device_token: str = "",
+        device_id: str = "",
+        cloud_client_factory=None,
+        limit: int = 5000,
+    ) -> None:
+        self._store = store
+        self._cloud_api_base_url = cloud_api_base_url.strip().rstrip("/")
+        self._device_token = device_token.strip()
+        self._device_id = device_id.strip()
+        self._cloud_client_factory = cloud_client_factory
+        self._limit = limit
+
+    def refresh(self) -> DeviceBackupHistoryRefreshResult:
+        if not self._cloud_api_base_url or not self._device_token:
+            return DeviceBackupHistoryRefreshResult(attempted=False)
+        try:
+            factory = self._cloud_client_factory or _default_cloud_client_factory
+            with factory(
+                self._cloud_api_base_url,
+                self._device_token,
+                timeout=30.0,
+                device_id=self._device_id,
+            ) as cloud:
+                result = sync_device_backup_history(store=self._store, cloud=cloud, limit=self._limit)
+        except Exception as exc:
+            return DeviceBackupHistoryRefreshResult(attempted=True, error_message=_safe_history_error(exc))
+        return DeviceBackupHistoryRefreshResult(
+            attempted=True,
+            imported_count=result.imported_count,
+            skipped_count=result.skipped_count,
+        )
+
+
 def sync_device_backup_history(
     *,
     store: SQLiteClientStore,
@@ -135,3 +186,19 @@ def _upsert_raw(conn, table: str, row: dict[str, object], key_field: str) -> Non
         f"ON CONFLICT({key_field}) DO UPDATE SET {assignments}",
         tuple(row[column] for column in columns),
     )
+
+
+def _default_cloud_client_factory(*args, **kwargs):  # type: ignore[no-untyped-def]
+    from auto_backup_client.baidu.cloud_api import BaiduCloudClient
+
+    return BaiduCloudClient(*args, **kwargs)
+
+
+def _safe_history_error(exc: Exception) -> str:
+    text = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+    text = text.replace("\n", " ").replace("\r", " ")
+    if len(text) > 180:
+        text = text[:177] + "..."
+    if "\\" in text or ":/" in text:
+        return type(exc).__name__
+    return text

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, TypeVar
 
-from PySide6.QtCore import QMimeData, QObject, QRunnable, QThreadPool, Qt, Signal, Slot
+from PySide6.QtCore import QDir, QMimeData, QObject, QRunnable, QThreadPool, Qt, Signal, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QFileDialog,
+    QFileSystemModel,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -43,7 +45,7 @@ from auto_backup_client.baidu.reconcile_repair import (
 from auto_backup_client.baidu.upload import BaiduNetdiskClient
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient
-from auto_backup_client.backup_history_sync import sync_device_backup_history
+from auto_backup_client.backup_history_sync import DeviceBackupHistoryRefresher
 from auto_backup_client.backup_jobs import (
     BackupJobError,
     BackupJobManager,
@@ -79,6 +81,116 @@ class MainWindowConfig:
 class PendingSource:
     local_path: str
     source_type: BackupSourceType
+
+
+class BackupSourcePickerDialog(QWidget):
+    sources_selected = Signal(list)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent, Qt.WindowType.Dialog)
+        self.setWindowTitle("选择备份来源")
+        self.resize(820, 560)
+        self._model = QFileSystemModel(self)
+        self._model.setRootPath(QDir.rootPath())
+        self._model.setFilter(
+            QDir.Filter.AllEntries
+            | QDir.Filter.NoDotAndDotDot
+            | QDir.Filter.AllDirs
+            | QDir.Filter.Files
+            | QDir.Filter.Drives
+        )
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        self.path_input = QLineEdit(str(Path.home()))
+        self.path_input.returnPressed.connect(self._go_to_typed_path)
+        layout.addWidget(self.path_input)
+
+        self.view = QListView()
+        self.view.setModel(self._model)
+        self.view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.view.doubleClicked.connect(self._open_index)
+        layout.addWidget(self.view, stretch=1)
+
+        toolbar = QHBoxLayout()
+        self.up_button = QPushButton("上一级")
+        self.up_button.clicked.connect(self._go_up)
+        self.add_button = QPushButton("添加选中项")
+        self.add_button.clicked.connect(self._emit_selected_sources)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.clicked.connect(self.close)
+        toolbar.addWidget(self.up_button)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.add_button)
+        toolbar.addWidget(self.cancel_button)
+        layout.addLayout(toolbar)
+
+        self._set_directory(Path.home())
+
+    def _set_directory(self, path: Path) -> None:
+        target = path if path.exists() and path.is_dir() else Path.home()
+        index = self._model.index(str(target))
+        if index.isValid():
+            self.view.setRootIndex(index)
+            self.path_input.setText(str(target))
+
+    @Slot()
+    def _go_to_typed_path(self) -> None:
+        self._set_directory(Path(self.path_input.text()).expanduser())
+
+    @Slot()
+    def _go_up(self) -> None:
+        self._set_directory(Path(self.path_input.text()).expanduser().parent)
+
+    @Slot(object)
+    def _open_index(self, index) -> None:  # type: ignore[no-untyped-def]
+        path = Path(self._model.filePath(index))
+        if path.is_dir():
+            self._set_directory(path)
+
+    @Slot()
+    def _emit_selected_sources(self) -> None:
+        paths = [
+            self._model.filePath(index)
+            for index in self.view.selectedIndexes()
+            if index.column() == 0 and self._model.filePath(index)
+        ]
+        unique_paths = list(dict.fromkeys(paths))
+        if not unique_paths:
+            QMessageBox.warning(self, "提示", "请先选择要备份的文件或文件夹。")
+            return
+        self.sources_selected.emit(unique_paths)
+        self.close()
+
+
+class JobFilterCombo(QComboBox):
+    def __init__(self, store: SQLiteClientStore, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._store = store
+        self.setMinimumWidth(260)
+        self.refresh_jobs()
+
+    def refresh_jobs(self) -> None:
+        current = self.current_job_id()
+        self.blockSignals(True)
+        self.clear()
+        self.addItem("全部最近记录", "")
+        for row in self._store.list_backup_jobs(limit=100):
+            job_id = str(row["backup_job_id"])
+            label = _job_filter_label(row)
+            self.addItem(label, job_id)
+        if current:
+            index = self.findData(current)
+            if index >= 0:
+                self.setCurrentIndex(index)
+        self.blockSignals(False)
+
+    def current_job_id(self) -> str:
+        return str(self.currentData() or "")
 
 
 @dataclass(frozen=True)
@@ -123,16 +235,19 @@ class BackupTaskPage(QWidget):
         self,
         manager: BackupJobManager,
         config: BackupTaskPageConfig | None = None,
+        history_refresher: DeviceBackupHistoryRefresher | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._manager = manager
         self._config = config or BackupTaskPageConfig(device_id=manager.device_id)
+        self._history_refresher = history_refresher
         self._thread_pool = QThreadPool.globalInstance()
         self._workers: list[TaskWorker[object]] = []
         self._running_job_id = ""
         self._pending_sources: list[PendingSource] = []
         self._jobs: list[BackupJobWithSources] = []
+        self._source_picker: BackupSourcePickerDialog | None = None
         self.setAcceptDrops(True)
         self._build_ui()
         self.refresh_jobs()
@@ -264,13 +379,15 @@ class BackupTaskPage(QWidget):
 
     @Slot()
     def choose_sources(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "选择备份文件")
-        if files:
-            self.add_sources(files)
-            return
-        directory = QFileDialog.getExistingDirectory(self, "选择备份文件夹")
-        if directory:
-            self.add_sources([directory])
+        picker = BackupSourcePickerDialog(self)
+        picker.sources_selected.connect(self.add_sources)
+        picker.destroyed.connect(lambda: self._clear_source_picker(picker))
+        self._source_picker = picker
+        picker.show()
+
+    def _clear_source_picker(self, picker: BackupSourcePickerDialog) -> None:
+        if self._source_picker is picker:
+            self._source_picker = None
 
     def add_sources(self, paths: list[str]) -> None:
         changed = False
@@ -327,6 +444,7 @@ class BackupTaskPage(QWidget):
 
     @Slot()
     def refresh_jobs(self) -> None:
+        history_message = _refresh_history_message(self._history_refresher)
         self._jobs = self._manager.list_jobs()
         self.jobs_table.setRowCount(len(self._jobs))
         for row, item in enumerate(self._jobs):
@@ -347,6 +465,8 @@ class BackupTaskPage(QWidget):
                 table_item.setToolTip(value)
                 self.jobs_table.setItem(row, col, table_item)
         self._refresh_job_buttons()
+        if history_message:
+            self.status_changed.emit(history_message)
 
     @Slot()
     def start_selected_job(self) -> None:
@@ -513,9 +633,9 @@ class BackupTaskPage(QWidget):
         selected = 0 <= row < len(self._jobs)
         status = self._jobs[row].job.status if selected else ""
         running = bool(self._running_job_id)
-        self.start_button.setEnabled(not running and selected and status in {"queued", "running", "failed_retryable"})
+        self.start_button.setEnabled(not running and selected and status == "queued")
         self.pause_button.setEnabled(not running and selected and status == "running")
-        self.resume_button.setEnabled(not running and selected and status == "paused")
+        self.resume_button.setEnabled(not running and selected and status in {"running", "paused", "failed_retryable"})
         self.cancel_button.setEnabled(not running and selected and status in {"queued", "running", "paused", "failed_retryable"})
 
     def _warn(self, message: str) -> None:
@@ -526,9 +646,16 @@ class BackupTaskPage(QWidget):
 class SourceMappingPage(QWidget):
     status_changed = Signal(str)
 
-    def __init__(self, store: SQLiteClientStore, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        store: SQLiteClientStore,
+        history_refresher: DeviceBackupHistoryRefresher | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._store = store
         self._query = SourceMappingQuery(store)
+        self._history_refresher = history_refresher
         self._build_ui()
         self.refresh_mapping()
 
@@ -542,10 +669,9 @@ class SourceMappingPage(QWidget):
         layout.addWidget(title)
 
         filters = QHBoxLayout()
-        filters.addWidget(QLabel("任务 ID"))
-        self.job_id_input = QLineEdit()
-        self.job_id_input.setPlaceholderText("留空显示最近记录")
-        filters.addWidget(self.job_id_input, stretch=2)
+        filters.addWidget(QLabel("任务"))
+        self.job_filter = JobFilterCombo(self._store)
+        filters.addWidget(self.job_filter, stretch=2)
         filters.addWidget(QLabel("关键字"))
         self.keyword_input = QLineEdit()
         self.keyword_input.setPlaceholderText("任务名、文件名、relative path、content/archive hash")
@@ -585,9 +711,11 @@ class SourceMappingPage(QWidget):
 
     @Slot()
     def refresh_mapping(self) -> None:
+        history_message = _refresh_history_message(self._history_refresher)
+        self.job_filter.refresh_jobs()
         try:
             report = self._query.list_rows(
-                backup_job_id=self.job_id_input.text(),
+                backup_job_id=self.job_filter.current_job_id(),
                 keyword=self.keyword_input.text(),
                 limit=500,
             )
@@ -596,6 +724,14 @@ class SourceMappingPage(QWidget):
             return
         self._render_report(report)
         self.status_changed.emit(f"来源映射已刷新：{report.summary.total_rows} 行。")
+        if history_message:
+            self.status_changed.emit(history_message)
+
+    def select_job(self, backup_job_id: str) -> None:
+        self.job_filter.refresh_jobs()
+        index = self.job_filter.findData(backup_job_id)
+        if index >= 0:
+            self.job_filter.setCurrentIndex(index)
 
     def _render_report(self, report: SourceMappingReport) -> None:
         summary = report.summary
@@ -946,9 +1082,18 @@ class CloudSyncPage(QWidget):
 class SourceCleanupPage(QWidget):
     status_changed = Signal(str)
 
-    def __init__(self, store: SQLiteClientStore, *, device_id: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        store: SQLiteClientStore,
+        *,
+        device_id: str,
+        history_refresher: DeviceBackupHistoryRefresher | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._store = store
         self._service = SourceCleanupService(store, device_id=device_id or "current-device")
+        self._history_refresher = history_refresher
         self._candidates = []
         self._build_ui()
         self.refresh_candidates()
@@ -963,10 +1108,9 @@ class SourceCleanupPage(QWidget):
         layout.addWidget(title)
 
         filters = QHBoxLayout()
-        filters.addWidget(QLabel("任务 ID"))
-        self.job_id_input = QLineEdit()
-        self.job_id_input.setPlaceholderText("留空显示最近候选")
-        filters.addWidget(self.job_id_input, stretch=2)
+        filters.addWidget(QLabel("任务"))
+        self.job_filter = JobFilterCombo(self._store)
+        filters.addWidget(self.job_filter, stretch=2)
         filters.addWidget(QLabel("关键字"))
         self.keyword_input = QLineEdit()
         self.keyword_input.setPlaceholderText("任务名、来源名、archive 或远端路径")
@@ -1028,9 +1172,11 @@ class SourceCleanupPage(QWidget):
 
     @Slot()
     def refresh_candidates(self) -> None:
+        history_message = _refresh_history_message(self._history_refresher)
+        self.job_filter.refresh_jobs()
         try:
             report = self._service.list_candidates(
-                backup_job_id=self.job_id_input.text(),
+                backup_job_id=self.job_filter.current_job_id(),
                 keyword=self.keyword_input.text(),
                 limit=500,
             )
@@ -1060,6 +1206,8 @@ class SourceCleanupPage(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, candidate.content_reference_id)
                 self.candidates_table.setItem(row_index, col, item)
         self.status_changed.emit(f"清理候选已刷新：可清理 {report.eligible_count} 条。")
+        if history_message:
+            self.status_changed.emit(history_message)
 
     @Slot()
     def choose_quarantine_dir(self) -> None:
@@ -1090,7 +1238,7 @@ class SourceCleanupPage(QWidget):
             return
         try:
             result = self._service.apply(
-                backup_job_id=self.job_id_input.text(),
+                backup_job_id=self.job_filter.current_job_id(),
                 content_reference_ids=selected_ids,
                 method=self.method_combo.currentData(),
                 quarantine_dir=self.quarantine_input.text(),
@@ -1108,6 +1256,12 @@ class SourceCleanupPage(QWidget):
         self.status_changed.emit(f"清理完成：成功 {result.applied_count}，失败 {result.failed_count}。")
         self.refresh_candidates()
 
+    def select_job(self, backup_job_id: str) -> None:
+        self.job_filter.refresh_jobs()
+        index = self.job_filter.findData(backup_job_id)
+        if index >= 0:
+            self.job_filter.setCurrentIndex(index)
+
     def _warn(self, message: str) -> None:
         self.status_changed.emit(message)
         QMessageBox.warning(self, "提示", message)
@@ -1124,6 +1278,7 @@ class RestorePage(QWidget):
         cache_root: str,
         cloud_api_base_url: str = "",
         device_token: str = "",
+        history_refresher: DeviceBackupHistoryRefresher | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -1132,6 +1287,7 @@ class RestorePage(QWidget):
         self._cache_root = cache_root
         self._cloud_api_base_url = cloud_api_base_url
         self._device_token = device_token
+        self._history_refresher = history_refresher
         self._service = RestoreService(store, device_id=self._device_id, cache_root=cache_root)
         self._candidates = []
         self._build_ui()
@@ -1155,10 +1311,9 @@ class RestorePage(QWidget):
         layout.addWidget(title)
 
         filters = QHBoxLayout()
-        filters.addWidget(QLabel("任务 ID"))
-        self.job_id_input = QLineEdit()
-        self.job_id_input.setPlaceholderText("留空显示最近候选")
-        filters.addWidget(self.job_id_input, stretch=2)
+        filters.addWidget(QLabel("任务"))
+        self.job_filter = JobFilterCombo(self._store)
+        filters.addWidget(self.job_filter, stretch=2)
         filters.addWidget(QLabel("关键字"))
         self.keyword_input = QLineEdit()
         self.keyword_input.setPlaceholderText("任务名、文件名、relative path、content hash")
@@ -1223,10 +1378,11 @@ class RestorePage(QWidget):
 
     @Slot()
     def refresh_candidates(self) -> None:
+        history_message = _refresh_history_message(self._history_refresher)
+        self.job_filter.refresh_jobs()
         try:
-            self._sync_remote_history()
             report = self._service.list_candidates(
-                backup_job_id=self.job_id_input.text(),
+                backup_job_id=self.job_filter.current_job_id(),
                 keyword=self.keyword_input.text(),
                 limit=500,
             )
@@ -1258,15 +1414,8 @@ class RestorePage(QWidget):
                 item.setToolTip(value)
                 self.candidates_table.setItem(row_index, col, item)
         self.status_changed.emit(f"恢复候选已刷新：可恢复 {report.restorable_count} 条。")
-
-    def _sync_remote_history(self) -> None:
-        if not self._cloud_api_base_url or not self._device_token:
-            return
-        try:
-            with BaiduCloudClient(self._cloud_api_base_url, self._device_token, timeout=30.0, device_id=self._device_id) as cloud:
-                sync_device_backup_history(store=self._store, cloud=cloud, limit=5000)
-        except Exception:
-            return
+        if history_message:
+            self.status_changed.emit(history_message)
 
     @Slot()
     def choose_target_root(self) -> None:
@@ -1312,7 +1461,7 @@ class RestorePage(QWidget):
 
     def _restore_with_service(self, service: RestoreService, selected_ids: tuple[str, ...]):
         return service.restore(
-            backup_job_id=self.job_id_input.text(),
+            backup_job_id=self.job_filter.current_job_id(),
             content_reference_ids=selected_ids,
             target_mode=self.target_mode_combo.currentData(),
             target_root=self.target_root_input.text(),
@@ -1325,6 +1474,12 @@ class RestorePage(QWidget):
         candidates = self._candidates if not selected else [candidate for candidate in self._candidates if candidate.restore_candidate_id in selected]
         return any(candidate.remote_download_available for candidate in candidates)
 
+    def select_job(self, backup_job_id: str) -> None:
+        self.job_filter.refresh_jobs()
+        index = self.job_filter.findData(backup_job_id)
+        if index >= 0:
+            self.job_filter.setCurrentIndex(index)
+
     def _warn(self, message: str) -> None:
         self.status_changed.emit(message)
         QMessageBox.warning(self, "提示", message)
@@ -1336,6 +1491,13 @@ class MainWindow(QMainWindow):
         self._config = config
         self._store = SQLiteClientStore(config.sqlite_path)
         self._store.migrate()
+        history_refresher = DeviceBackupHistoryRefresher(
+            store=self._store,
+            cloud_api_base_url=config.cloud_api_base_url,
+            device_token=config.device_token,
+            device_id=config.device_id,
+            cloud_client_factory=BaiduCloudClient,
+        )
         self._backup_page = BackupTaskPage(
             BackupJobManager(self._store, device_id=config.device_id or "current-device"),
             BackupTaskPageConfig(
@@ -1344,6 +1506,7 @@ class MainWindow(QMainWindow):
                 device_id=config.device_id or "current-device",
                 cache_root=config.cache_root,
             ),
+            history_refresher=history_refresher,
         )
         self._baidu_page = BaiduSettingsPage(
             BaiduSettingsPageConfig(
@@ -1353,7 +1516,7 @@ class MainWindow(QMainWindow):
                 device_credential_source=config.device_credential_source,
             )
         )
-        self._source_mapping_page = SourceMappingPage(self._store)
+        self._source_mapping_page = SourceMappingPage(self._store, history_refresher=history_refresher)
         self._cloud_sync_page = CloudSyncPage(
             self._store,
             cloud_api_base_url=config.cloud_api_base_url,
@@ -1366,13 +1529,14 @@ class MainWindow(QMainWindow):
             device_token=config.device_token,
             device_id=config.device_id,
         )
-        self._cleanup_page = SourceCleanupPage(self._store, device_id=config.device_id)
+        self._cleanup_page = SourceCleanupPage(self._store, device_id=config.device_id, history_refresher=history_refresher)
         self._restore_page = RestorePage(
             self._store,
             device_id=config.device_id,
             cache_root=config.cache_root,
             cloud_api_base_url=config.cloud_api_base_url,
             device_token=config.device_token,
+            history_refresher=history_refresher,
         )
         self._build_ui()
 
@@ -1440,12 +1604,12 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _refresh_after_backup_finished(self, backup_job_id: str) -> None:
-        self._source_mapping_page.job_id_input.setText(backup_job_id)
+        self._source_mapping_page.select_job(backup_job_id)
         self._source_mapping_page.refresh_mapping()
         self._cloud_sync_page.refresh_local_status()
-        self._cleanup_page.job_id_input.setText(backup_job_id)
+        self._cleanup_page.select_job(backup_job_id)
         self._cleanup_page.refresh_candidates()
-        self._restore_page.job_id_input.setText(backup_job_id)
+        self._restore_page.select_job(backup_job_id)
         self._restore_page.refresh_candidates()
 
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
@@ -1491,6 +1655,25 @@ def _path_hash_for_display(local_path: str) -> str:
     from auto_backup_client.backup_jobs import path_sha256
 
     return path_sha256(local_path)[:12]
+
+
+def _job_filter_label(row: dict[str, object]) -> str:
+    name = str(row.get("job_name") or "未命名任务")
+    status = status_label(str(row.get("status") or ""))
+    updated_at = str(row.get("updated_at") or row.get("created_at") or "")
+    source_count = int(row.get("source_count") or 0)
+    return f"{name} / {status} / {updated_at[:19]} / 来源 {source_count}"
+
+
+def _refresh_history_message(refresher: DeviceBackupHistoryRefresher | None) -> str:
+    if refresher is None:
+        return ""
+    result = refresher.refresh()
+    if not result.attempted:
+        return ""
+    if result.error_message:
+        return f"云端历史刷新失败：{result.error_message}；已显示本地记录。"
+    return f"云端历史已刷新：导入 {result.imported_count}，跳过 {result.skipped_count}。"
 
 
 def _selected_account_id_for_ui(workflow: BaiduAuthWorkflow) -> str:

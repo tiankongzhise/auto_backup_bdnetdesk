@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from auto_backup_client.backup_history_sync import sync_device_backup_history
+from auto_backup_client.backup_history_sync import DeviceBackupHistoryRefresher, sync_device_backup_history
 from auto_backup_client.baidu.models import BackupHistoryEntity, BackupHistoryResponse
 from auto_backup_client.restore_flow import RestoreService
 from auto_backup_client.sqlite_store import LOCAL_ONLY_SYNC_FIELDS, SQLiteClientStore, sync_payload
@@ -43,6 +43,54 @@ def test_sync_device_backup_history_rebuilds_source_restore_candidates_from_clou
     assert archive_row["sync_status"] == "synced"
 
 
+def test_device_backup_history_refresher_skips_without_cloud_config(tmp_path) -> None:
+    store = SQLiteClientStore(tmp_path / "state.sqlite3")
+    store.migrate()
+
+    result = DeviceBackupHistoryRefresher(store=store).refresh()
+
+    assert result.attempted is False
+    assert result.succeeded is False
+
+
+def test_device_backup_history_refresher_imports_with_factory(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    original_store, job_id = _completed_job(tmp_path, source)
+    entities = _history_entities_from_store(original_store, job_id=job_id)
+    rebuilt_store = SQLiteClientStore(tmp_path / "rebuilt-refresh.sqlite3")
+    rebuilt_store.migrate()
+
+    result = DeviceBackupHistoryRefresher(
+        store=rebuilt_store,
+        cloud_api_base_url="https://backup.baichengedu.com",
+        device_token="secret-token",
+        device_id="device-1",
+        cloud_client_factory=lambda *args, **kwargs: _FakeContextHistoryCloud(entities),
+    ).refresh()
+
+    assert result.succeeded is True
+    assert result.imported_count == len(entities)
+    assert RestoreService(rebuilt_store, device_id="device-1", cache_root=tmp_path / "cache").list_candidates().candidates
+
+
+def test_device_backup_history_refresher_returns_sanitized_error(tmp_path) -> None:
+    store = SQLiteClientStore(tmp_path / "state.sqlite3")
+    store.migrate()
+
+    result = DeviceBackupHistoryRefresher(
+        store=store,
+        cloud_api_base_url="https://backup.baichengedu.com",
+        device_token="secret-token",
+        device_id="device-1",
+        cloud_client_factory=lambda *args, **kwargs: _FailingHistoryCloud(),
+    ).refresh()
+
+    assert result.attempted is True
+    assert result.succeeded is False
+    assert result.error_message == "RuntimeError"
+
+
 class _FakeHistoryCloud:
     def __init__(self, entities: tuple[BackupHistoryEntity, ...]) -> None:
         self.entities = entities
@@ -51,6 +99,25 @@ class _FakeHistoryCloud:
     def list_backup_history(self, *, limit: int = 5000) -> BackupHistoryResponse:
         self.limits.append(limit)
         return BackupHistoryResponse(device_id="device-1", entities=self.entities)
+
+
+class _FakeContextHistoryCloud(_FakeHistoryCloud):
+    def __enter__(self) -> "_FakeContextHistoryCloud":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
+
+
+class _FailingHistoryCloud:
+    def __enter__(self) -> "_FailingHistoryCloud":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        pass
+
+    def list_backup_history(self, *, limit: int = 5000) -> BackupHistoryResponse:
+        raise RuntimeError("E:\\secret\\state.sqlite3")
 
 
 def _history_entities_from_store(store: SQLiteClientStore, *, job_id: str) -> tuple[BackupHistoryEntity, ...]:
