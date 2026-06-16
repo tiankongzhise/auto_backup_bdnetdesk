@@ -37,12 +37,12 @@ export async function renderRestore(root, context) {
             onClick: async () => {
               const accounts = (state.appState.dashboard.accounts && state.appState.dashboard.accounts.selected_account_id) || "";
               const op = await context.call("apply_restore", [...state.selectedRestore], {
-                target_mode: "manual_path",
+                target_mode: "manual_root",
                 target_root: targetRoot.value,
                 archive_password: archivePassword.value,
                 authorization_password: authPassword.value,
                 account_id: accounts,
-                conflict_strategy: conflict.value,
+                conflict_policy: conflict.value,
               });
               upsertOperation(op.operation);
               context.showToast("恢复操作已提交");

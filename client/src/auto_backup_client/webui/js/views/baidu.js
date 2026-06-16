@@ -1,4 +1,4 @@
-import { badge, button, el, field, input, statusTone, table } from "../render.js";
+import { badge, button, el, field, input, table } from "../render.js";
 
 export async function renderBaidu(root, context) {
   const accountsData = await context.call("list_baidu_accounts").catch(() => ({ accounts: [], selected_account_id: "" }));
@@ -40,6 +40,7 @@ function authFlow(context) {
       button("完成授权", {
         onClick: async () => {
           await context.call("complete_baidu_authorization", password.value);
+          password.value = "";
           context.showToast("百度授权已完成");
         },
       }),
@@ -51,19 +52,30 @@ function accountTable(accounts, context) {
   return table(
     [
       { label: "账号", render: (row) => el("strong", { text: row.display_name || row.baidu_uk || row.account_id }) },
+      { label: "设备", render: (row) => el("span", { class: "mono", text: row.device_hint || "-" }) },
+      { label: "UID", render: (row) => el("span", { class: "mono", text: row.uid_hint || "-" }) },
       { label: "状态", render: (row) => badge(row.token_valid ? "有效" : "失效", row.token_valid ? "green" : "red") },
       { label: "选中", render: (row) => (row.selected ? badge("当前", "blue") : "-") },
       { label: "到期", key: "token_expires_at" },
       {
         label: "操作",
         render: (row) =>
-          button("设为当前", {
-            disabled: row.selected,
-            onClick: async () => {
-              await context.call("select_baidu_account", row.account_id);
-              context.showToast("已选择百度账号");
-            },
-          }),
+          el("div", { class: "toolbar" }, [
+            button("设为当前", {
+              disabled: row.selected,
+              onClick: async () => {
+                await context.call("select_baidu_account", row.account_id);
+                context.showToast("已选择百度账号");
+              },
+            }),
+            button("验证", {
+              onClick: async () => {
+                const password = window.prompt("输入百度授权密码") || "";
+                const data = await context.call("verify_baidu_token", row.account_id, password);
+                context.showToast(data.verification.valid ? "token 解密验证通过" : data.verification.message);
+              },
+            }),
+          ]),
       },
     ],
     accounts,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.sqlite_store import SQLiteClientStore
@@ -92,6 +93,36 @@ def test_choose_sources_detects_file_and_directory_with_stub_window(tmp_path, mo
     assert str(source_dir) not in dumped
 
 
+def test_choose_sources_mixed_combines_file_and_directory_dialogs(tmp_path, monkeypatch) -> None:
+    source_file = tmp_path / "a.txt"
+    source_file.write_text("demo", encoding="utf-8")
+    source_dir = tmp_path / "folder"
+    source_dir.mkdir()
+
+    class StubWindow:
+        def create_file_dialog(self, **kwargs):
+            if kwargs["dialog_type"] is StubWebview.OPEN_DIALOG:
+                return [str(source_file)]
+            if kwargs["dialog_type"] is StubWebview.FOLDER_DIALOG:
+                return [str(source_dir)]
+            return []
+
+    class StubWebview:
+        OPEN_DIALOG = object()
+        FOLDER_DIALOG = object()
+
+    monkeypatch.setitem(__import__("sys").modules, "webview", StubWebview())
+    bridge = _bridge(tmp_path)
+    bridge.set_window(StubWindow())
+
+    response = bridge.choose_sources("mixed")
+
+    assert response["ok"] is True
+    sources = response["data"]["sources"]
+    assert [item["source_type"] for item in sources] == ["file", "directory"]
+    assert all("source_token" in item for item in sources)
+
+
 def test_cleanup_confirmation_error_is_exposed_as_redacted_operation(tmp_path) -> None:
     bridge = _bridge(tmp_path, run_operations_inline=True)
 
@@ -103,6 +134,25 @@ def test_cleanup_confirmation_error_is_exposed_as_redacted_operation(tmp_path) -
     assert "cleanup" in operation["error"]["type"].lower()
 
 
+def test_cleanup_permanent_delete_requires_advanced_enabled(tmp_path) -> None:
+    bridge = _bridge(tmp_path, run_operations_inline=True)
+
+    response = bridge.apply_cleanup(
+        ["missing"],
+        {
+            "dry_run": False,
+            "method": "permanent_delete",
+            "confirm_text": "CLEANUP_SOURCES",
+            "permanent_confirm_text": "PERMANENT_DELETE_SOURCES",
+        },
+    )
+
+    assert response["ok"] is True
+    operation = response["data"]["operation"]
+    assert operation["status"] == "failed"
+    assert "ValueError" in operation["error"]["type"]
+
+
 def test_get_operation_reports_missing_operation_as_safe_error(tmp_path) -> None:
     bridge = _bridge(tmp_path)
 
@@ -110,3 +160,47 @@ def test_get_operation_reports_missing_operation_as_safe_error(tmp_path) -> None
 
     assert response["ok"] is False
     assert "\\" not in response["error"]["message"]
+
+
+def test_baidu_account_dto_uses_summaries_not_full_device_or_uid(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+    account = SimpleNamespace(
+        account_id="account-1",
+        baidu_uk="1234567890123456",
+        baidu_uid="uid-secret-abcdef",
+        device_id="device-secret-abcdef",
+        current_device=True,
+        display_name="测试账号",
+        selected=True,
+        token_valid=True,
+        token_expires_at=SimpleNamespace(isoformat=lambda: "2026-06-16T00:00:00+00:00"),
+        last_verify_status="valid",
+    )
+
+    dto = bridge._baidu_account_to_dto(account)
+
+    assert dto["device_hint"] == "devi...cdef"
+    assert dto["uid_hint"] == "uid-...cdef"
+    dumped = json.dumps(dto, ensure_ascii=False)
+    assert "device-secret-abcdef" not in dumped
+    assert "uid-secret-abcdef" not in dumped
+
+
+def test_verify_baidu_token_returns_safe_success_dto(tmp_path, monkeypatch) -> None:
+    bridge = _bridge(tmp_path)
+    decrypted = SimpleNamespace(
+        encrypted=SimpleNamespace(
+            token_version=7,
+            token_expires_at=SimpleNamespace(isoformat=lambda: "2026-06-16T00:00:00+00:00"),
+        )
+    )
+
+    monkeypatch.setattr(bridge, "_with_auth_workflow", lambda func: func(SimpleNamespace(decrypt_password_token=lambda **_kwargs: decrypted)))
+
+    response = bridge.verify_baidu_token("account-1", "secret-password")
+
+    assert response["ok"] is True
+    verification = response["data"]["verification"]
+    assert verification["valid"] is True
+    dumped = json.dumps(verification, ensure_ascii=False)
+    assert "secret-password" not in dumped

@@ -11,18 +11,19 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 pywebview UI 重构第三步，实现 pywebview + 原生静态 UI 替换，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划新增 `webview_app.py`、`webview_bridge.py` 和 `webui/` 静态工作台，替换 `app.py` 入口，调整依赖、测试、打包脚本和相关文档。
-- 本轮完成后回到干净 Windows R04-R14 发布候选验收、安装/升级/卸载验证和真实链路复验。
+- 本轮工作：P3 阶段 14 干净 Windows R04-R14 发布候选验收准备与执行。
+- 当前代码 review 结论：pywebview UI 替换与本轮 review fix 已完成，开发机自动化验收通过；项目仍未完成干净 Windows R04-R14 真实矩阵，不能标记为 v1.3 最终可交付。
+- 本轮计划按 `docs/release_acceptance_matrix.md` 执行或补齐 R04-R14：首次启动、百度授权、真实备份、校对、清理、恢复、断网补偿、升级/卸载、云同步真实性复验和敏感信息审计。
+- 若 R04-R14 发现真实环境阻塞，必须先按阻塞项修复并复跑对应开发机/干净机验收，再继续矩阵。
 
 ## 本次验收标准
 
-- `auto_backup_client.app` 必须启动 pywebview 主窗口，并加载打包内置的原生静态 `webui`。
-- `webview_bridge.py` 必须覆盖备份、百度授权、来源映射/远端校对、清理、恢复和 operation 轮询接口，写操作串行化。
-- 前端只通过 `api.js` 调用 `window.pywebview.api`，不使用浏览器持久化存储保存敏感状态。
-- bridge DTO 默认脱敏，不返回 token、密码、wrapping key、完整本地路径或完整远端路径；原生文件选择结果通过临时 source token 回传。
-- 依赖必须由 uv 从 PySide6 切换为 pywebview；移除旧 PySide6 UI 模块和对应 GUI 测试，新增 bridge/static 测试。
-- PyInstaller dry-run 必须包含 SQLite migrations 和 `webui` 静态目录；客户端 pytest、compileall、Go 测试和 `git diff --check` 必须通过。
+- R04：干净 Windows 双击发布包可启动 pywebview UI，不要求已有 Device Token，WebView2 可用性或缺失提示明确。
+- R05-R06：真实百度授权和真实备份通过，单一添加来源入口可覆盖文件/文件夹，任务完成扫描、归档、上传、Cloud Sync、远端校对和 completed final sync。
+- R07-R09：来源映射/远端校对、原始数据清理和来源级恢复可用，UI 不要求普通用户输入内部 job_id，不显示完整敏感路径、token、密码或 wrapping key。
+- R10-R12：断网补偿、升级和卸载/清理边界明确，本地 SQLite/DPAPI 凭据/缓存行为符合矩阵。
+- R13-R14：真实 Cloud Sync 审计 summary 回读和 duplicate 复验通过；dist、日志、SQLite outbox 和 UI 输出敏感信息审计通过。
+- 每个阻塞修复完成后必须更新本文件完成记录和发布矩阵，再纳入同一 commit。
 
 ## 开发排期
 
@@ -43,7 +44,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复和百度授权设备标识修复已完成，P3 阶段 14 尚未整体完成 | 干净 Windows 环境完成安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复和百度授权设备标识修复已完成，P3 阶段 14 尚未整体完成 | 当前进入干净 Windows R04-R14：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
 
 ## 进度差异审计
 
@@ -55,6 +56,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-16：P3-14 pywebview UI code review 与发布候选体验补齐
+
+变更原因：用户要求进行 code review，定位目前开发进度，并在不能进入下一阶段时先 fix 再进入下一阶段；审查确认 pywebview UI 替换构建级验收通过，但存在少量前端安全 helper、spec 参数一致性和发布候选体验缺口。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于进入干净 Windows R04-R14 前的发布候选阻塞收口。
+
+验收标准：移除前端 `innerHTML` helper；备份页恢复单一“添加来源”；bridge 补齐 token 自检和 DTO 摘要；恢复/清理参数兼容前端 spec；永久删除进入高级开关；客户端 pytest、compileall、Go 测试、发布 dry-run 和 `git diff --check` 通过。
+
+回到主排期条件：本轮 review fix、测试和提交完成后，进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收、安装/升级/卸载验证和真实链路复验。
 
 ### 2026-06-16：P3-14 pywebview UI 替换实现
 
@@ -217,6 +228,28 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：pywebview UI code review 与发布候选体验补齐
+
+- P3 阶段 14 pywebview UI code review 与发布候选体验补齐开发完成；下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- Review 结论：当前代码已经完成 pywebview UI 替换和开发机自动化验收，但干净 Windows R04-R14 真实矩阵尚未执行，不能进入 v1.3 最终可交付状态；可以进入下一阶段发布候选验收。
+- 移除 `render.js` 的 `innerHTML` 写入口，新增静态测试禁止前端 JS 使用 `innerHTML`，保持动态文本统一走 `textContent` 或节点创建。
+- 备份页恢复单一“添加来源”按钮，调用 `choose_sources("mixed")`；bridge 在 pywebview 文件/目录选择器限制下合并文件与目录结果，并继续通过临时 source token 回传。
+- 新增 `verify_baidu_token` bridge API，百度账号页增加 token 解密验证按钮；账号 DTO 改为显示设备/UID 摘要，不返回完整设备 ID、UID、token、密码或 wrapping key。
+- 恢复页按前端 spec 使用 `manual_root` 与 `conflict_policy` 参数，bridge 兼容映射到既有恢复服务的 `manual_path` 与 `conflict_strategy`。
+- 清理页将永久删除移入默认隐藏的高级区域；bridge 要求 `advanced_enabled=true` 后才允许 `permanent_delete`，避免普通清理入口直接暴露永久删除。
+- 新增和扩展 `tests/test_webview_bridge.py`、`tests/test_webui_static.py`，覆盖混合来源选择、token 自检 DTO、账号摘要脱敏、永久删除高级门槛、前端 `innerHTML` 禁用、单一添加来源和永久删除默认隐藏。
+- 已验证完整客户端测试：`uv run python -m pytest -p no:cacheprovider --basetemp E:\python_code_object\auto_backup_bdnetdesk\.cache\pytest-basetemp-review-full`，173 项通过。
+- 已验证 `uv run python -m compileall src tests` 通过，`cloud-api/` 下 `go test -p=1 ./...` 通过，`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun -BuildId review-fix-dry-run` 输出包含 `webui;webui`。
+- 已验证 `node --check` 检查全部 `client/src/auto_backup_client/webui/**/*.js` 通过，`git diff --check` 通过。
+- 尝试使用内置浏览器执行静态 UI smoke 时，当前沙箱启动浏览器进程失败：`CreateProcessAsUserW failed: 5`；本轮未将浏览器 smoke 记为通过，后续应在干净 Windows R04/R14 中用打包 exe 补做真实 UI smoke。
+
+提交摘要：本次提交完成 pywebview UI 替换后的 code review 阻塞修复，收紧前端 DOM 写入和永久删除入口，恢复单一添加来源体验，补齐百度 token 自检与 DTO 摘要脱敏，并将恢复/清理参数与前端 spec 对齐；开发机自动化和构建 dry-run 通过后，当前工作项推进到干净 Windows R04-R14 发布候选验收。
+
+后续待办：
+
+- 按 `docs/release_acceptance_matrix.md` 在干净 Windows 执行 R04-R14，特别是 pywebview/WebView2 首次启动、真实百度授权、真实备份、远端校对、回收站清理、来源级恢复、升级/卸载和敏感信息审计。
+- 若 R04-R14 任一项失败，先作为 P3 阶段 14 发布候选阻塞修复记录到本文件，再修复、复测并提交。
 
 ### P3 阶段 14 打包发布与最终验收：pywebview UI 替换实现
 

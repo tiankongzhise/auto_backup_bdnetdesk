@@ -13,10 +13,22 @@ export async function renderCleanup(root, context) {
     options: [
       { value: "recycle_bin", label: "回收站" },
       { value: "quarantine", label: "隔离目录" },
-      { value: "permanent_delete", label: "永久删除" },
     ],
   });
+  const advanced = input("cleanup-advanced", { type: "checkbox" });
+  const permanentDelete = input("cleanup-permanent-method", { type: "checkbox" });
   const quarantine = input("cleanup-quarantine", { placeholder: "隔离目录" });
+  const advancedBox = el("div", { class: "advanced-cleanup", style: "display:none" }, [
+    field("永久删除", permanentDelete),
+    field("永久删除确认词", permanent),
+  ]);
+  advanced.addEventListener("change", () => {
+    advancedBox.style.display = advanced.checked ? "" : "none";
+    if (!advanced.checked) {
+      permanentDelete.checked = false;
+      permanent.value = "";
+    }
+  });
   root.appendChild(
     el("div", { class: "grid two" }, [
       el("section", { class: "panel" }, [
@@ -24,11 +36,12 @@ export async function renderCleanup(root, context) {
         summary(data.summary),
         field("清理方式", method),
         field("确认词", confirm),
-        field("永久删除确认词", permanent),
+        field("高级清理", advanced),
+        advancedBox,
         field("隔离目录", quarantine),
         el("div", { class: "toolbar" }, [
-          button("预演", { onClick: () => submit(context, true, method, confirm, permanent, quarantine) }),
-          button("执行清理", { variant: "danger", onClick: () => submit(context, false, method, confirm, permanent, quarantine) }),
+          button("预演", { onClick: () => submit(context, true, method, confirm, permanent, quarantine, advanced, permanentDelete) }),
+          button("执行清理", { variant: "danger", onClick: () => submit(context, false, method, confirm, permanent, quarantine, advanced, permanentDelete) }),
         ]),
       ]),
       el("section", { class: "panel" }, [
@@ -77,11 +90,13 @@ function candidatesTable(candidates) {
   );
 }
 
-async function submit(context, dryRun, method, confirm, permanent, quarantine) {
+async function submit(context, dryRun, method, confirm, permanent, quarantine, advanced, permanentDelete) {
   const selection = [...state.selectedCleanup];
+  const selectedMethod = advanced.checked && permanentDelete.checked ? "permanent_delete" : method.value;
   const data = await context.call("apply_cleanup", selection, {
     dry_run: dryRun,
-    method: method.value,
+    method: selectedMethod,
+    advanced_enabled: advanced.checked,
     confirm_text: confirm.value,
     permanent_confirm_text: permanent.value,
     quarantine_dir: quarantine.value,

@@ -19,8 +19,6 @@ export function el(tag, options = {}, children = []) {
       node.className = value;
     } else if (key === "text") {
       node.textContent = text(value);
-    } else if (key === "html") {
-      node.innerHTML = value;
     } else if (key.startsWith("on") && typeof value === "function") {
       node.addEventListener(key.slice(2), value);
     } else if (value !== false && value !== null && value !== undefined) {

@@ -60,16 +60,9 @@ function jobForm(context) {
           redrawSources();
         },
       }),
-      button("选择文件", {
+      button("添加来源", {
         onClick: async () => {
-          const data = await context.call("choose_sources", "file");
-          addSources(data.sources || []);
-          redrawSources();
-        },
-      }),
-      button("选择目录", {
-        onClick: async () => {
-          const data = await context.call("choose_sources", "directory");
+          const data = await context.call("choose_sources", "mixed");
           addSources(data.sources || []);
           redrawSources();
         },

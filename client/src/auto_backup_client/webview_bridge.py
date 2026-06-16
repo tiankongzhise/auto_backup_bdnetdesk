@@ -51,6 +51,15 @@ def _short_digest(value: str | None, *, length: int = 12) -> str | None:
     return value[:length]
 
 
+def _edge_hint(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = str(value)
+    if len(normalized) <= 8:
+        return _short_digest(path_sha256(normalized), length=8) or ""
+    return f"{normalized[:4]}...{normalized[-4:]}"
+
+
 def _status_label(status: str) -> str:
     labels = {
         "queued": "待开始",
@@ -355,6 +364,36 @@ class AutoBackupWebviewBridge:
 
         return self._guard_write(work)
 
+    def verify_baidu_token(self, account_id: str, password: str) -> dict[str, Any]:
+        def work() -> dict[str, Any]:
+            try:
+                decrypted = self._with_auth_workflow(
+                    lambda workflow: workflow.decrypt_password_token(
+                        account_id=account_id,
+                        authorization_password=password,
+                    )
+                )
+                return {
+                    "verification": {
+                        "account_id": account_id,
+                        "valid": True,
+                        "message": "百度 token 可解密",
+                        "token_version": decrypted.encrypted.token_version,
+                        "token_expires_at": decrypted.encrypted.token_expires_at.isoformat(),
+                    }
+                }
+            except BaseException as exc:  # noqa: BLE001 - token self-test must stay in safe DTO shape.
+                error = _safe_error(exc)
+                return {
+                    "verification": {
+                        "account_id": account_id,
+                        "valid": False,
+                        "message": error["message"],
+                    }
+                }
+
+        return self._guard(work)
+
     def list_source_mappings(self, filter: dict[str, Any] | None = None) -> dict[str, Any]:  # noqa: A002 - API name.
         return self._guard(lambda: self._list_source_mappings(filter or {}))
 
@@ -553,8 +592,13 @@ class AutoBackupWebviewBridge:
             import webview  # type: ignore[import-not-found]
         except ImportError as exc:  # pragma: no cover - exercised only without runtime dependency.
             raise RuntimeError("pywebview 未安装，无法打开原生文件选择器") from exc
-        dialog_type = webview.FOLDER_DIALOG if kind == "directory" else webview.OPEN_DIALOG
-        selected = self._window.create_file_dialog(dialog_type=dialog_type, allow_multiple=True)
+        selected: list[str] = []
+        if kind == "mixed":
+            selected.extend(str(path) for path in (self._window.create_file_dialog(dialog_type=webview.OPEN_DIALOG, allow_multiple=True) or []))
+            selected.extend(str(path) for path in (self._window.create_file_dialog(dialog_type=webview.FOLDER_DIALOG, allow_multiple=True) or []))
+        else:
+            dialog_type = webview.FOLDER_DIALOG if kind == "directory" else webview.OPEN_DIALOG
+            selected.extend(str(path) for path in (self._window.create_file_dialog(dialog_type=dialog_type, allow_multiple=True) or []))
         if not selected:
             return []
         source_inputs = normalize_sources([BackupSourceInput(local_path=str(path), source_type=detect_source_type(str(path))) for path in selected])
@@ -607,9 +651,15 @@ class AutoBackupWebviewBridge:
         }
 
     def _baidu_account_to_dto(self, account: Any) -> dict[str, Any]:
+        baidu_uk = str(getattr(account, "baidu_uk", "") or "")
+        baidu_uid = str(getattr(account, "baidu_uid", "") or "")
+        device_id = str(getattr(account, "device_id", "") or "")
         return {
             "account_id": account.account_id,
-            "baidu_uk": account.baidu_uk,
+            "baidu_uk": _edge_hint(baidu_uk),
+            "uid_hint": _edge_hint(baidu_uid or baidu_uk),
+            "device_hint": _edge_hint(device_id),
+            "current_device": bool(getattr(account, "current_device", False)),
             "display_name": account.display_name,
             "selected": bool(getattr(account, "selected", False)),
             "token_valid": bool(account.token_valid),
@@ -792,10 +842,13 @@ class AutoBackupWebviewBridge:
         operation.update(stage="preflight", message="正在校验清理确认词", progress=0.12)
         if not selection:
             raise ValueError("请先选择需要清理的候选")
+        method = str(options.get("method") or "recycle_bin")
+        if method == "permanent_delete" and not bool(options.get("advanced_enabled", False)):
+            raise ValueError("永久删除需要先启用高级清理选项")
         service = SourceCleanupService(self.store, device_id=self.device_id)
         result = service.apply(
             content_reference_ids=tuple(selection),
-            method=str(options.get("method") or "recycle_bin"),
+            method=method,
             dry_run=bool(options.get("dry_run", True)),
             quarantine_dir=options.get("quarantine_dir") or None,
             confirm_text=str(options.get("confirm_text") or ""),
@@ -872,9 +925,9 @@ class AutoBackupWebviewBridge:
             result = service.restore(
                 content_reference_ids=tuple(selection),
                 password=str(options.get("archive_password") or ""),
-                target_mode=str(options.get("target_mode") or "manual_path"),
+                target_mode=self._restore_target_mode(options),
                 target_root=options.get("target_root") or None,
-                conflict_strategy=str(options.get("conflict_strategy") or "keep_both"),
+                conflict_strategy=str(options.get("conflict_strategy") or options.get("conflict_policy") or "keep_both"),
             )
         finally:
             if baidu_client is not None:
@@ -896,6 +949,15 @@ class AutoBackupWebviewBridge:
                 for item in result.results
             ],
         }
+
+    def _restore_target_mode(self, options: dict[str, Any]) -> str:
+        target_mode = str(options.get("target_mode") or "manual_root")
+        aliases = {
+            "manual_root": "manual_path",
+            "manual_path": "manual_path",
+            "original_path": "original_path",
+        }
+        return aliases.get(target_mode, target_mode)
 
     def _run_remote_reconcile(self, operation: OperationHandle, scope_data: dict[str, Any]) -> dict[str, Any]:
         operation.update(stage="authorization", message="正在准备远端校对", progress=0.12)
