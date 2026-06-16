@@ -110,7 +110,28 @@ def test_bridge_reports_device_credential_recovery_error_without_blocking_ui(tmp
     state = bridge.get_app_state()["data"]
     assert state["app"]["device_token_available"] is False
     assert state["app"]["device_credential_source"] == "加载失败"
+    assert state["app"]["device_id_resolved"] is False
     assert "local credential store unavailable" in state["app"]["device_credential_error"]
+
+
+def test_bridge_rejects_write_operations_when_device_id_is_unresolved(tmp_path) -> None:
+    settings = ClientSettings(
+        cloud_api_base_url="https://backup.example.test",
+        device_token="",
+        local_data_dir=str(tmp_path / "data"),
+        local_sqlite_path=str(tmp_path / "data" / "state.sqlite3"),
+        local_cache_dir=str(tmp_path / "cache"),
+    )
+
+    def resolver(**_kwargs):
+        raise RuntimeError("device id unavailable")
+
+    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver)
+
+    response = bridge.create_job("blocked", [{"path": str(tmp_path)}])
+
+    assert response["ok"] is False
+    assert "Device ID" in response["error"]["message"]
 
 
 def test_pipeline_options_from_api_preserves_upload_parameters(tmp_path) -> None:

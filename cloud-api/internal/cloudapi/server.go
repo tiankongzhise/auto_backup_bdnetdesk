@@ -72,6 +72,7 @@ func (s *Server) routes() http.Handler {
 
 		r.Group(func(authed chi.Router) {
 			authed.Use(s.requireDevice)
+			authed.Get("/devices/current", s.handleCurrentDevice)
 			authed.Post("/sync/revisions", s.handleSyncRevisions)
 			authed.Get("/contents/{content_id}", s.handleGetContent)
 			authed.Get("/archives/{archive_sha256}", s.handleGetArchive)
@@ -98,16 +99,36 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
+	req.DeviceFingerprintHash = strings.TrimSpace(strings.ToLower(req.DeviceFingerprintHash))
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
+	if req.DeviceID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_device_id", "device_id is required")
+		return
+	}
+	if !isHexSHA256(req.DeviceFingerprintHash) {
+		writeError(w, http.StatusBadRequest, "invalid_device_fingerprint_hash", "device_fingerprint_hash must be 64 lowercase hex characters")
+		return
+	}
+	if req.DeviceID != deviceIDFromFingerprintHash(req.DeviceFingerprintHash) {
+		writeError(w, http.StatusBadRequest, "invalid_device_id", "device_id must match device_fingerprint_hash")
+		return
+	}
 	if req.DeviceName == "" {
 		writeError(w, http.StatusBadRequest, "invalid_device_name", "device_name is required")
 		return
 	}
-
-	deviceID, err := newDeviceID()
+	existing, ok, err := s.store.DeviceByID(r.Context(), req.DeviceID)
 	if err != nil {
-		s.logger.Error("failed to generate device id", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "failed to register device")
+		writeError(w, http.StatusServiceUnavailable, "retryable_error", "cloud store is unavailable")
+		return
+	}
+	if ok && existing.Revoked {
+		writeError(w, http.StatusForbidden, "device_revoked", "device is revoked")
+		return
+	}
+	if ok && existing.DeviceFingerprintHash != "" && existing.DeviceFingerprintHash != req.DeviceFingerprintHash {
+		writeError(w, http.StatusConflict, "device_fingerprint_conflict", "device_id is already bound to another fingerprint")
 		return
 	}
 	token, err := newDeviceToken()
@@ -118,11 +139,12 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	device := Device{
-		DeviceID:      deviceID,
-		DeviceName:    req.DeviceName,
-		Hostname:      strings.TrimSpace(req.Hostname),
-		OSVersion:     strings.TrimSpace(req.OSVersion),
-		ClientVersion: strings.TrimSpace(req.ClientVersion),
+		DeviceID:              req.DeviceID,
+		DeviceFingerprintHash: req.DeviceFingerprintHash,
+		DeviceName:            req.DeviceName,
+		Hostname:              strings.TrimSpace(req.Hostname),
+		OSVersion:             strings.TrimSpace(req.OSVersion),
+		ClientVersion:         strings.TrimSpace(req.ClientVersion),
 	}
 	if err := s.store.RegisterDevice(r.Context(), device, hashToken(token)); err != nil {
 		s.logger.Error("failed to persist device", "err", err)
@@ -131,8 +153,19 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, RegisterDeviceResponse{
-		DeviceID:    deviceID,
+		DeviceID:    req.DeviceID,
 		DeviceToken: token,
+	})
+}
+
+func (s *Server) handleCurrentDevice(w http.ResponseWriter, r *http.Request) {
+	device := deviceFromContext(r.Context())
+	writeJSON(w, http.StatusOK, DeviceResponse{
+		DeviceID:      device.DeviceID,
+		DeviceName:    device.DeviceName,
+		Hostname:      device.Hostname,
+		OSVersion:     device.OSVersion,
+		ClientVersion: device.ClientVersion,
 	})
 }
 

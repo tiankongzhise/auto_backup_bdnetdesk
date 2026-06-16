@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import getpass
 import os
 import platform
@@ -14,7 +15,7 @@ import httpx
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow, generate_ephemeral_device_name
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError, register_device
 from auto_backup_client.baidu.models import DeviceRegistration
-from auto_backup_client.device_credentials import resolve_or_register_device_credentials
+from auto_backup_client.device_credentials import derive_stable_device_identity, resolve_or_register_device_credentials
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -97,7 +98,9 @@ def _resolve_device_token(args: argparse.Namespace, *, allow_empty: bool = False
 def _resolve_device(args: argparse.Namespace, *, allow_empty: bool = False, allow_store: bool = True) -> tuple[str, str]:
     token = os.environ.get(args.device_token_env, "").strip()
     if token:
-        return token, ""
+        credentials, source = resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
+        _print(f"Device Token 来源: {source}")
+        return credentials.device_token, _require_device_id(credentials)
     if allow_store:
         credentials, source = resolve_or_register_device_credentials(cloud_api_base_url=args.base_url)
         _print(f"Device Token 来源: {source}")
@@ -139,8 +142,12 @@ def _select(base_url: str, device_token: str, account_id: str, *, device_id: str
 
 
 def _register_ephemeral(base_url: str, device_name: str) -> DeviceRegistration:
+    fingerprint = hashlib.sha256(os.urandom(32)).hexdigest()
+    identity = derive_stable_device_identity({"ephemeral_random": fingerprint})
     registration = register_device(
         base_url,
+        device_id=identity.device_id,
+        device_fingerprint_hash=identity.fingerprint_hash,
         device_name=device_name.strip() or generate_ephemeral_device_name(),
         hostname=socket.gethostname(),
         os_version=platform.platform(),
@@ -149,6 +156,13 @@ def _register_ephemeral(base_url: str, device_name: str) -> DeviceRegistration:
     _print(f"已注册临时设备: {registration.device_id}")
     _print("Device Token 只在当前进程内使用，脚本不会写入文件。")
     return registration
+
+
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise SystemExit("device_id is required")
+    return device_id
 
 
 def _device_code(

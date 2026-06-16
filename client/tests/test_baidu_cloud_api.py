@@ -67,6 +67,59 @@ def test_cloud_client_raises_structured_api_error() -> None:
         raise AssertionError("expected CloudAPIError")
 
 
+def test_current_device_parses_authenticated_device() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer fake-device-token"
+        assert request.method == "GET"
+        assert request.url.path == "/v1/devices/current"
+        return httpx.Response(
+            200,
+            json={
+                "device_id": "dev_current",
+                "device_name": "Workstation",
+                "hostname": "host-a",
+                "os_version": "Windows",
+                "client_version": "v1.3",
+            },
+        )
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    device = cloud.current_device()
+
+    assert device.device_id == "dev_current"
+    assert device.hostname == "host-a"
+
+
+def test_current_device_falls_back_to_backup_history_for_older_server() -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == "/v1/devices/current":
+            return httpx.Response(404, json={"error": "not_found", "message": "missing"})
+        if request.url.path == "/v1/backups":
+            assert request.url.params["device_id"] == "current"
+            assert request.url.params["limit"] == "1"
+            return httpx.Response(200, json={"device_id": "dev_from_history", "entities": []})
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    device = cloud.current_device()
+
+    assert device.device_id == "dev_from_history"
+    assert paths == ["/v1/devices/current", "/v1/backups"]
+
+
 def test_refresh_lease_conflict_is_parsed_as_business_result() -> None:
     cloud = BaiduCloudClient(
         "https://backup.baichengedu.com",

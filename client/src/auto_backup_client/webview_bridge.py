@@ -289,7 +289,7 @@ class AutoBackupWebviewBridge:
         self.store.migrate()
         self.device_credential_source = "未加载"
         self.device_credential_error = ""
-        resolved_device_id = device_id or os.environ.get("AUTO_BACKUP_DEVICE_ID") or ""
+        resolved_device_id = device_id or ""
         if auto_resolve_device_credentials:
             resolver = device_credentials_resolver or resolve_or_register_device_credentials
             try:
@@ -307,7 +307,8 @@ class AutoBackupWebviewBridge:
                 self.device_credential_error = _safe_error(exc)["message"]
         else:
             self.device_credential_source = "已跳过"
-        self.device_id = resolved_device_id or "current-device"
+        self._device_id_resolved = bool(resolved_device_id)
+        self.device_id = resolved_device_id or "device-unresolved"
         self._write_lock = threading.RLock()
         self._window: Any | None = None
         self._operations = OperationRegistry(inline=run_operations_inline)
@@ -519,12 +520,14 @@ class AutoBackupWebviewBridge:
 
     def _guard_write(self, func: BridgeCallable) -> dict[str, Any]:
         def wrapped() -> dict[str, Any]:
+            self._require_device_ready()
             with self._write_lock:
                 return func()
 
         return self._guard(wrapped)
 
     def _serialized_operation(self, func: OperationCallable, operation: OperationHandle) -> dict[str, Any]:
+        self._require_device_ready()
         with self._write_lock:
             if operation.cancel_requested:
                 raise RuntimeError("操作已取消")
@@ -536,6 +539,10 @@ class AutoBackupWebviewBridge:
     def _err(self, exc: BaseException) -> dict[str, Any]:
         return {"ok": False, "error": _safe_error(exc)}
 
+    def _require_device_ready(self) -> None:
+        if not self._device_id_resolved:
+            raise RuntimeError("设备凭据未就绪，无法确认本机真实 Device ID")
+
     def _get_app_state(self) -> dict[str, Any]:
         jobs = self._list_jobs_dto(limit=8)
         status_counts: dict[str, int] = {}
@@ -544,6 +551,8 @@ class AutoBackupWebviewBridge:
         risks: list[dict[str, str]] = []
         if not self.settings.device_token:
             risks.append({"level": "warning", "title": "设备未注册", "message": "云端授权和同步需要先恢复或注册 Device Token"})
+        if not self._device_id_resolved:
+            risks.append({"level": "danger", "title": "设备 ID 未确认", "message": "写入类操作已暂停，避免用临时设备 ID 污染备份记录"})
         if self.device_credential_error:
             risks.append({"level": "warning", "title": "设备凭据加载失败", "message": self.device_credential_error})
         if not any(job["status"] == "completed" for job in jobs):
@@ -561,6 +570,7 @@ class AutoBackupWebviewBridge:
                 "device_credential_source": self.device_credential_source,
                 "device_credential_error": self.device_credential_error,
                 "device_token_available": bool(self.settings.device_token),
+                "device_id_resolved": self._device_id_resolved,
             },
             "dashboard": {
                 "jobs": jobs,

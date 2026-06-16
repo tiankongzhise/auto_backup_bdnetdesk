@@ -110,7 +110,7 @@ def _run_resumable(args: argparse.Namespace) -> int:
     store = SQLiteClientStore(sqlite_path)
     store.migrate()
     job_id = args.job_id.strip() or f"integration-resumable-{uuid.uuid4().hex[:12]}"
-    device_id = args.device_id.strip() or credentials.device_id or "unknown-device"
+    device_id = _device_id_arg(args.device_id, credentials)
 
     temp_parent = Path(args.work_dir) if args.work_dir else None
     if temp_parent is not None:
@@ -275,6 +275,18 @@ def _resolve_credentials(args: argparse.Namespace) -> tuple[object, str]:
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
 
 
+def _device_id_arg(value: str, credentials: object) -> str:
+    explicit = value.strip()
+    return explicit or _require_device_id(credentials)
+
+
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
+
+
 def _read_authorization_password(password_env: str) -> str:
     password = os.environ.get(password_env, "") if password_env else ""
     if not password:
@@ -315,6 +327,7 @@ def _safe_error_summary(exc: Exception) -> str:
             "archive_size_bytes must be >= 1",
             "authorization password is required",
             "batch_size must be between 1 and 100",
+            "device_id is required",
             "exactly one of job_id or upload_session_id is required",
             "verify_limit must be >= 0",
         }

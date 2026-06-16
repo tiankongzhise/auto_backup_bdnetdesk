@@ -357,6 +357,9 @@ uv run python -m auto_backup_client.cloud_sync_audit_cli
 
 当前设备的 Device Token 只用于云端 API Bearer 认证，不得写入仓库文件。
 
+- `device_id` 由客户端基于本机固定特征派生后注册到云端，`client_version` 不参与生成；同一 Windows 设备在不同 client 版本下应保持同一个 `device_id`。
+- 云端注册接口会校验 `device_id` 与本机指纹 hash 的派生关系，并为同一 `device_id` 的重复注册签发新的 Device Token，旧 token 继续可用于升级/回滚。
+- 运行时只提供 `CLOUD_API_DEVICE_TOKEN` 时，客户端会先复用本机凭据中的 `device_id`，否则用真实云端 `GET /v1/devices/current` 回读当前设备；失败时不会用占位设备 ID 写入业务数据。
 - 默认路径：`%LOCALAPPDATA%\auto_backup_bdnetdesk\credentials\device_credentials.json`。
 - Windows 默认保护方式：当前用户 DPAPI。
 - 可通过 `AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_PATH` 指定本机凭据文件路径。

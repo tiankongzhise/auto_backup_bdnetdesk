@@ -14,7 +14,7 @@ from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineErr
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError
 from auto_backup_client.baidu.upload import DEFAULT_BACKUP_ROOT_DIR, DEFAULT_PART_SIZE, BaiduNetdiskClient, BaiduNetdiskError
-from auto_backup_client.device_credentials import resolve_or_register_device_credentials
+from auto_backup_client.device_credentials import current_machine_device_identity, resolve_or_register_device_credentials
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.sqlite_store import SQLiteClientStore
 
@@ -67,7 +67,7 @@ def _run(args: argparse.Namespace) -> int:
     store = SQLiteClientStore(sqlite_path)
     store.migrate()
     credentials, source = _resolve_credentials(args) if _needs_cloud_or_upload(args) else (None, "not_required")
-    device_id = getattr(credentials, "device_id", "") or "current-device"
+    device_id = _require_device_id(credentials) if credentials is not None else _offline_device_id()
     job_id = args.job_id.strip() or _create_job(store, device_id=device_id, sources=args.source, job_name=args.job_name)
     password = _read_archive_password(args.password_env)
 
@@ -185,6 +185,17 @@ def _resolve_credentials(args: argparse.Namespace):
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
 
 
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
+
+
+def _offline_device_id() -> str:
+    return current_machine_device_identity().device_id
+
+
 def _decrypt_selected_token(cloud: BaiduCloudClient, account_id: str, password: str):
     workflow = BaiduAuthWorkflow(cloud)
     actual_account_id = account_id.strip() or _selected_account_id(workflow)
@@ -230,6 +241,7 @@ def _safe_error_summary(exc: Exception) -> str:
         allowed = {
             "account_id is required because current device has no selected Baidu account",
             "archive password is required",
+            "device_id is required",
             "GiB value must be >= 0",
             "source is required when job_id is not provided",
         }

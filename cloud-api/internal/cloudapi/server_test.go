@@ -6,11 +6,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 const testSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const secondSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+const testFingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const secondFingerprint = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 
 func TestRegisterDeviceAndAuth(t *testing.T) {
 	store := newMemoryStore()
@@ -37,6 +40,62 @@ func TestRegisterDeviceAndAuth(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected authenticated 404 for missing content, got %d", rec.Code)
+	}
+}
+
+func TestCurrentDeviceReturnsAuthenticatedDeviceWithoutToken(t *testing.T) {
+	store := newMemoryStore()
+	handler := NewServer(store, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
+	registerResp := registerDevice(t, handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/devices/current", nil)
+	req.Header.Set("Authorization", "Bearer "+registerResp.DeviceToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected current device 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp DeviceResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode current device response: %v", err)
+	}
+	if resp.DeviceID != registerResp.DeviceID {
+		t.Fatalf("expected registered device id, got %s", resp.DeviceID)
+	}
+	if strings.Contains(rec.Body.String(), registerResp.DeviceToken) {
+		t.Fatalf("current device response leaked device token: %s", rec.Body.String())
+	}
+}
+
+func TestStableDeviceRegistrationIsIdempotentAcrossClientVersions(t *testing.T) {
+	store := newMemoryStore()
+	handler := NewServer(store, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
+
+	first := registerDeviceWithFingerprint(t, handler, testFingerprint, "v1.0")
+	second := registerDeviceWithFingerprint(t, handler, testFingerprint, "v2.0")
+	if first.DeviceID != second.DeviceID {
+		t.Fatalf("expected same stable device id, got %s and %s", first.DeviceID, second.DeviceID)
+	}
+	if first.DeviceToken == second.DeviceToken {
+		t.Fatal("expected each registration to issue a fresh token")
+	}
+
+	for _, token := range []string{first.DeviceToken, second.DeviceToken} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/devices/current", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected token to remain valid, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp DeviceResponse
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode current device response: %v", err)
+		}
+		if resp.DeviceID != first.DeviceID {
+			t.Fatalf("expected stable device id %s, got %s", first.DeviceID, resp.DeviceID)
+		}
 	}
 }
 
@@ -181,7 +240,7 @@ func TestListBackupsReturnsOnlyAuthenticatedDeviceHistory(t *testing.T) {
 	store := newMemoryStore()
 	handler := NewServer(store, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
 	first := registerDevice(t, handler)
-	second := registerDevice(t, handler)
+	second := registerDeviceWithFingerprint(t, handler, secondFingerprint, "v1.3-test")
 
 	firstEvent := RevisionEvent{
 		EventID:               "evt-history-first",
@@ -241,12 +300,19 @@ func TestListBackupsReturnsOnlyAuthenticatedDeviceHistory(t *testing.T) {
 
 func registerDevice(t *testing.T, handler http.Handler) RegisterDeviceResponse {
 	t.Helper()
+	return registerDeviceWithFingerprint(t, handler, testFingerprint, "v1.3-test")
+}
+
+func registerDeviceWithFingerprint(t *testing.T, handler http.Handler, fingerprintHash string, clientVersion string) RegisterDeviceResponse {
+	t.Helper()
 
 	body := bytes.NewBufferString(`{
+		"device_id":"` + deviceIDFromFingerprintHash(fingerprintHash) + `",
+		"device_fingerprint_hash":"` + fingerprintHash + `",
 		"device_name":"dev box",
 		"hostname":"host",
 		"os_version":"Windows",
-		"client_version":"v1.3-test"
+		"client_version":"` + clientVersion + `"
 	}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/devices/register", body)
 	rec := httptest.NewRecorder()

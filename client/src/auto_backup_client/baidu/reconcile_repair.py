@@ -83,7 +83,9 @@ class RemoteRepairResult:
 class RemoteObjectRepairer:
     def __init__(self, *, store: SQLiteClientStore, updated_by_device_id: str) -> None:
         self._store = store
-        self._updated_by_device_id = updated_by_device_id.strip() or "unknown-device"
+        self._updated_by_device_id = updated_by_device_id.strip()
+        if not self._updated_by_device_id:
+            raise ValueError("updated_by_device_id is required")
 
     def apply(self, plan: RemoteRepairPlan, *, dry_run: bool, now: str | None = None) -> RemoteRepairResult:
         selected = plan.selected_writable_candidates

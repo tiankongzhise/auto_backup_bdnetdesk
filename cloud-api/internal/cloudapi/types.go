@@ -13,10 +13,12 @@ const (
 )
 
 type RegisterDeviceRequest struct {
-	DeviceName    string `json:"device_name"`
-	Hostname      string `json:"hostname"`
-	OSVersion     string `json:"os_version"`
-	ClientVersion string `json:"client_version"`
+	DeviceID              string `json:"device_id"`
+	DeviceFingerprintHash string `json:"device_fingerprint_hash"`
+	DeviceName            string `json:"device_name"`
+	Hostname              string `json:"hostname"`
+	OSVersion             string `json:"os_version"`
+	ClientVersion         string `json:"client_version"`
 }
 
 type RegisterDeviceResponse struct {
@@ -24,13 +26,22 @@ type RegisterDeviceResponse struct {
 	DeviceToken string `json:"device_token"`
 }
 
+type DeviceResponse struct {
+	DeviceID      string `json:"device_id"`
+	DeviceName    string `json:"device_name"`
+	Hostname      string `json:"hostname"`
+	OSVersion     string `json:"os_version"`
+	ClientVersion string `json:"client_version"`
+}
+
 type Device struct {
-	DeviceID      string
-	DeviceName    string
-	Hostname      string
-	OSVersion     string
-	ClientVersion string
-	Revoked       bool
+	DeviceID              string
+	DeviceFingerprintHash string
+	DeviceName            string
+	Hostname              string
+	OSVersion             string
+	ClientVersion         string
+	Revoked               bool
 }
 
 type RevisionEvent struct {

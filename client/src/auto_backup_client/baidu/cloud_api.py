@@ -15,6 +15,7 @@ from auto_backup_client.baidu.models import (
     CompleteAuthResult,
     ContentObject,
     DeviceRegistration,
+    DeviceInfo,
     EntitySummary,
     SyncRevisionEvent,
     SyncRevisionResult,
@@ -59,6 +60,18 @@ class BaiduCloudClient:
     def list_accounts(self) -> list[BaiduAccount]:
         data = self._request("GET", "/v1/baidu/accounts")
         return [BaiduAccount.from_json(item) for item in data.get("accounts", [])]
+
+    def current_device(self) -> DeviceInfo:
+        try:
+            data = self._request("GET", "/v1/devices/current")
+            return DeviceInfo.from_json(data)
+        except CloudAPIError as exc:
+            if exc.status_code not in {404, 405}:
+                raise
+            history = self.list_backup_history(limit=1)
+            if not history.device_id:
+                raise
+            return DeviceInfo(device_id=history.device_id)
 
     def select_account(self, account_id: str) -> BaiduAccount:
         data = self._request("POST", f"/v1/baidu/accounts/{account_id}/select", json={})
@@ -220,6 +233,8 @@ class BaiduCloudClient:
 def register_device(
     base_url: str,
     *,
+    device_id: str,
+    device_fingerprint_hash: str,
     device_name: str,
     hostname: str = "",
     os_version: str = "",
@@ -233,6 +248,8 @@ def register_device(
         response = client.post(
             base_url.rstrip("/") + "/v1/devices/register",
             json={
+                "device_id": device_id,
+                "device_fingerprint_hash": device_fingerprint_hash,
                 "device_name": device_name,
                 "hostname": hostname,
                 "os_version": os_version,

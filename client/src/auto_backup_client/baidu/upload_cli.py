@@ -117,7 +117,7 @@ def _uinfo(args: argparse.Namespace) -> int:
     with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
     with BaiduNetdiskClient(decrypted.token.access_token, timeout=30.0) as baidu:
-        info = baidu.get_user_info(device_id=credentials.device_id or "auto_backup_bdnetdesk")
+        info = baidu.get_user_info(device_id=_require_device_id(credentials))
     _print(f"Device Token 来源: {source}")
     _print(f"account_id: {decrypted.encrypted.account_id}")
     _print(f"token_version: {decrypted.encrypted.token_version}")
@@ -137,7 +137,7 @@ def _upload_file(args: argparse.Namespace) -> int:
     remote_path = build_archive_remote_path(
         root_dir=args.root_dir,
         job_created_at=datetime.now(timezone.utc),
-        device_id=args.device_id.strip() or credentials.device_id or "unknown-device",
+        device_id=_device_id_arg(args.device_id, credentials),
         job_id=args.job_id.strip() or f"upload-cli-{uuid.uuid4().hex[:12]}",
         archive_seq=args.archive_seq,
         archive_sha256=archive_sha256,
@@ -179,7 +179,7 @@ def _upload_resumable(args: argparse.Namespace) -> int:
     local_path = Path(args.local_path)
     plan = compute_file_block_plan(local_path, part_size=args.part_size_mib * 1024 * 1024)
     job_id = args.job_id.strip() or f"upload-resumable-{uuid.uuid4().hex[:12]}"
-    device_id = args.device_id.strip() or credentials.device_id or "unknown-device"
+    device_id = _device_id_arg(args.device_id, credentials)
 
     with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=credentials.device_id) as cloud:
         decrypted = _decrypt_selected_token(cloud, args.account_id, password)
@@ -224,7 +224,7 @@ def _upload_resumable(args: argparse.Namespace) -> int:
 def _real_batch(args: argparse.Namespace) -> int:
     password = _read_authorization_password(args.password_env)
     credentials, source = _resolve_credentials(args)
-    device_id = args.device_id.strip() or credentials.device_id or "unknown-device"
+    device_id = _device_id_arg(args.device_id, credentials)
     job_id = args.job_id.strip() or f"upload-realtest-{uuid.uuid4().hex[:12]}"
     root_dir = args.root_dir
     remote_paths: list[str] = []
@@ -308,6 +308,18 @@ def _real_batch(args: argparse.Namespace) -> int:
 def _resolve_credentials(args: argparse.Namespace) -> tuple[object, str]:
     token = os.environ.get(args.device_token_env, "").strip()
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
+
+
+def _device_id_arg(value: str, credentials: object) -> str:
+    explicit = value.strip()
+    return explicit or _require_device_id(credentials)
+
+
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
 
 
 def _decrypt_selected_token(cloud: BaiduCloudClient, account_id: str, password: str):

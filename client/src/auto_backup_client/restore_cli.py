@@ -12,7 +12,7 @@ from pathlib import Path
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError
 from auto_backup_client.baidu.upload import BaiduNetdiskClient, BaiduNetdiskError
-from auto_backup_client.device_credentials import DeviceCredentialStoreError, resolve_or_register_device_credentials
+from auto_backup_client.device_credentials import DeviceCredentialStoreError, current_machine_device_identity, resolve_or_register_device_credentials
 from auto_backup_client.restore_flow import BaiduArchiveDownloader, RestoreFlowError, RestoreService
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.sqlite_store import SQLiteClientStore
@@ -22,7 +22,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="恢复流程入口。输出只展示数量、hash 和状态，不打印完整路径。")
     parser.add_argument("--sqlite-path", default="", help="本地 SQLite 路径；默认读取 LOCAL_SQLITE_PATH。")
     parser.add_argument("--cache-root", default="", help="缓存目录；默认读取 LOCAL_CACHE_DIR。")
-    parser.add_argument("--device-id", default="current-device")
+    parser.add_argument("--device-id", default="", help="覆盖恢复记录中的设备 ID；默认使用本机稳定设备 ID。")
     parser.add_argument("--job-id", default="")
     parser.add_argument("--keyword", default="")
     parser.add_argument("--password-env", default="", help="从指定环境变量读取归档密码；未指定时交互读取。")
@@ -119,12 +119,12 @@ def _build_restore_service(
     cache_root: Path,
 ) -> tuple[RestoreService, BaiduNetdiskClient | None]:
     if not args.enable_remote_download or args.command != "restore":
-        return RestoreService(store, device_id=args.device_id or "current-device", cache_root=cache_root), None
+        return RestoreService(store, device_id=args.device_id.strip() or current_machine_device_identity().device_id, cache_root=cache_root), None
     base_url = args.cloud_api_base_url.strip() or settings.cloud_api_base_url
     token = os.environ.get(args.device_token_env, "").strip()
     credentials, _source = resolve_or_register_device_credentials(cloud_api_base_url=base_url, provided_device_token=token)
     authorization_password = _read_authorization_password(args.authorization_password_env)
-    device_id = args.device_id or credentials.device_id or "current-device"
+    device_id = args.device_id.strip() or _require_device_id(credentials)
     with BaiduCloudClient(base_url, credentials.device_token, timeout=30.0, device_id=device_id) as cloud:
         workflow = BaiduAuthWorkflow(cloud, device_id=device_id)
         account_id = args.account_id.strip() or _selected_account_id_for_cli(workflow)
@@ -136,6 +136,13 @@ def _build_restore_service(
         cache_root=cache_root,
         downloader=BaiduArchiveDownloader(baidu),
     ), baidu
+
+
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
 
 
 def _read_archive_password(password_env: str) -> str:
@@ -175,6 +182,7 @@ def _safe_error_summary(exc: Exception) -> str:
             "archive password is required",
             "authorization password is required for remote archive download",
             "account_id is required because current device has no selected Baidu account",
+            "device_id is required",
             "target_root is required for manual_path restore",
             "unsupported restore conflict strategy",
             "unsupported restore target mode",

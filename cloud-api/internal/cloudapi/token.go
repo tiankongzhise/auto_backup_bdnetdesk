@@ -5,22 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"fmt"
 )
 
-func newDeviceID() (string, error) {
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(
-		"dev_%x-%x-%x-%x-%x",
-		raw[0:4],
-		raw[4:6],
-		raw[6:8],
-		raw[8:10],
-		raw[10:16],
-	), nil
+func deviceIDFromFingerprintHash(fingerprintHash string) string {
+	return "dev_" +
+		fingerprintHash[0:8] + "-" +
+		fingerprintHash[8:12] + "-" +
+		fingerprintHash[12:16] + "-" +
+		fingerprintHash[16:20] + "-" +
+		fingerprintHash[20:32]
 }
 
 func newDeviceToken() (string, error) {

@@ -467,15 +467,17 @@ POST /v1/baidu/accounts/{account_id}/select
 GET /v1/baidu/accounts/{account_id}/token
 PUT /v1/baidu/accounts/{account_id}/token
 POST /v1/baidu/accounts/{account_id}/refresh-lease
+GET /v1/devices/current
 GET /v1/healthz
 GET /v1/readyz
 ```
 
 认证规则：
 
-- 设备注册后由云端生成 `device_id` 和 Device Token。
-- 后续请求使用 `Authorization: Bearer <device_token>`。
-- 云端只保存 token 哈希，支持按设备吊销。
+- 客户端基于本机固定特征派生稳定 `device_id` 和 `device_fingerprint_hash`，注册时提交给云端；`client_version` 只作为元数据上报，不参与 `device_id` 生成。
+- 云端校验 `device_id` 必须与 `device_fingerprint_hash` 匹配，同一 `device_id` 重复注册保持幂等，并为每次注册签发新的 Device Token。
+- 后续请求使用 `Authorization: Bearer <device_token>`；`GET /v1/devices/current` 可用 token 回读真实当前 `device_id`。
+- 云端只保存 token 哈希，支持同一设备多个有效 token 和按 token/设备吊销。
 - 客户端不得保存 PostgreSQL 连接串，不得直连云端数据库。
 - 除 `GET /v1/baidu/oauth/callback` 外，百度账号授权管理接口都必须要求 Device Token 认证。
 
@@ -598,6 +600,8 @@ POST /v1/devices/register
 请求字段：
 
 ```text
+device_id
+device_fingerprint_hash
 device_name
 hostname
 os_version
@@ -613,9 +617,12 @@ device_token
 
 规则：
 
+- `device_id` 必填，由客户端基于本机固定特征派生，格式为 `dev_` 前缀的稳定摘要 ID。
+- `device_fingerprint_hash` 必填，必须是 64 位小写 SHA256 十六进制；云端会校验它与 `device_id` 的派生关系。
 - `device_name` 必填。
 - `device_token` 只在注册响应中返回一次。
-- 云端只保存 `device_token` 的 SHA256 哈希。
+- 同一 `device_id` 可重复注册并获得新的 Device Token，旧 token 继续有效，便于不同 client 版本升级/回滚。
+- 云端只保存 `device_token` 的 SHA256 哈希，并通过 `GET /v1/devices/current` 支持用 token 回读真实当前设备。
 - token 被吊销后，所有需要认证的接口必须返回 401。
 
 批量 revision 同步接口：

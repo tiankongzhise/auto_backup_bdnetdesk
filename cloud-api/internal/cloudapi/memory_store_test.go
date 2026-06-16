@@ -73,7 +73,21 @@ func (s *memoryStore) RegisterDevice(_ context.Context, device Device, tokenHash
 	if s.err != nil {
 		return s.err
 	}
-	s.devices[device.DeviceID] = device
+	existing, ok := s.devices[device.DeviceID]
+	if ok {
+		if existing.DeviceFingerprintHash == "" && device.DeviceFingerprintHash != "" {
+			existing.DeviceFingerprintHash = device.DeviceFingerprintHash
+		}
+		if device.DeviceName != "" {
+			existing.DeviceName = device.DeviceName
+		}
+		existing.Hostname = device.Hostname
+		existing.OSVersion = device.OSVersion
+		existing.ClientVersion = device.ClientVersion
+		s.devices[device.DeviceID] = existing
+	} else {
+		s.devices[device.DeviceID] = device
+	}
 	s.tokenHashes[tokenHash] = device.DeviceID
 	return nil
 }
@@ -88,6 +102,17 @@ func (s *memoryStore) DeviceByTokenHash(_ context.Context, tokenHash string) (De
 	deviceID, ok := s.tokenHashes[tokenHash]
 	if !ok {
 		return Device{}, false, nil
+	}
+	device, ok := s.devices[deviceID]
+	return device, ok, nil
+}
+
+func (s *memoryStore) DeviceByID(_ context.Context, deviceID string) (Device, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.err != nil {
+		return Device{}, false, s.err
 	}
 	device, ok := s.devices[deviceID]
 	return device, ok, nil

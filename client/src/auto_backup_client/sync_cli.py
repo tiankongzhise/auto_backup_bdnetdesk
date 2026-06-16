@@ -52,7 +52,7 @@ def _sync_outbox(args: argparse.Namespace) -> int:
     store.migrate()
 
     selected_before = store.list_outbox_events_for_sync(limit=args.batch_size, now=utc_now_iso())
-    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0) as cloud:
+    with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=_require_device_id(credentials)) as cloud:
         worker = SyncOutboxWorker(store=store, cloud=cloud, batch_size=args.batch_size)
         result = worker.run_once()
         verified = (
@@ -103,6 +103,13 @@ def _resolve_credentials(args: argparse.Namespace) -> tuple[object, str]:
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
 
 
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
+
+
 def _print(message: str) -> None:
     print(message, flush=True)
 
@@ -114,6 +121,7 @@ def _safe_error_summary(exc: Exception) -> str:
         message = str(exc)
         allowed = {
             "batch_size must be between 1 and 100",
+            "device_id is required",
             "verify_limit must be >= 0",
             "entity_id is required",
         }

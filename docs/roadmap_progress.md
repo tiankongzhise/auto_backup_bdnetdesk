@@ -11,18 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：P3 阶段 14 pywebview 发布候选 UI 阻塞修复，挂靠干净 Windows R04-R14 发布候选验收，不改变主排期。
-- 用户反馈阻塞：百度授权页未读取本机已存在 DPAPI Device Token/KDF 记录，也未读取真实云端账号列表，不能验证解密；百度上传参数设置丢失；备份来源添加仍不能在单入口中混合选择文件和文件夹。
-- 本轮计划恢复 pywebview bridge 的本机设备凭据解析、账号列表/解密验证链路、上传参数表单到 `BackupPipelineOptions` 的传递，以及真正单入口的混合来源选择体验。
+- 本轮工作：P3 阶段 14 同设备跨 client 版本 Device ID 不一致阻塞修复，挂靠干净 Windows R04-R14 发布候选验收，不改变主排期。
+- 用户反馈阻塞：同一台设备在不同 client 版本或不同启动入口下显示/使用的设备 ID 不同，导致百度授权、KDF 解密材料、远端目录、云端历史和本地任务归属看起来像不同设备。
+- 本轮计划修复当前设备身份根因：首次注册时由客户端基于本机固定特征派生稳定 `device_id` 并注册到云端，`client_version` 不参与生成；运行时 `CLOUD_API_DEVICE_TOKEN` 只携带 token 不携带真实 `device_id` 时，优先复用本机 DPAPI 凭据中的 device_id，必要时用真实云端当前设备接口回读 device_id，并消除 `current-device`、`environment`、`unknown-device` 这类会进入真实业务数据的 fallback。
 - 本轮完成后继续回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ## 本次验收标准
 
-- pywebview bridge 初始化必须复用或注册本机 Device Token，优先读取本机 DPAPI 凭据；账号列表必须能走真实云端 API，且 UI 展示凭据来源/设备摘要。
-- 百度授权页必须可读取远端账号记录，选择账号后可用本机 KDF 记录和授权密码验证云端密文 token 解密；验证结果不泄露 token、密码、wrapping key 或完整设备 ID。
-- 备份页必须恢复上传参数设置：备份根目录、分片大小、最大压缩包大小、上传开关、Cloud Sync、远端校对和缓存 artifact 清理选项，并传入 `start_job`。
-- 备份来源添加必须对用户表现为单一“添加来源”入口，可在一个自定义选择流程中合并文件和文件夹，由后端统一判断类型；前端不要求用户分别点击文件/目录。
-- 新增/更新自动化测试覆盖设备凭据解析、账号读取/验证解密、上传参数传递和混合来源添加；客户端 pytest、compileall、Go 测试、发布 dry-run 和 `git diff --check` 必须通过。
+- 同一台新设备在没有云端 ID 但本机固定特征一致时，不同 client 版本必须派生同一个 `device_id`；云端注册接口必须校验 `device_id` 与指纹 hash 的派生关系，同一 `device_id` 重复注册不改变设备 ID。
+- 运行时提供 `CLOUD_API_DEVICE_TOKEN` 且本机 DPAPI store 中存在同一 token 时，客户端必须复用 store 中的真实 `device_id`，不得退化为 `current-device`、`environment` 或 `unknown-device`。
+- 运行时提供 `CLOUD_API_DEVICE_TOKEN` 但本机 store 不存在或 token 不一致时，客户端必须通过真实云端认证 token 回读当前 `device_id`；回读失败时真实备份/同步/授权入口必须给出安全错误，不得用假 device_id 写入业务记录。
+- pywebview bridge、真实备份测试 CLI、备份 pipeline CLI、上传 CLI、Cloud Sync 审计 CLI 和远端校对 CLI 必须使用同一套凭据解析结果，保证同一设备跨版本/入口的 `device_id` 一致。
+- 新增/更新自动化测试覆盖稳定设备 ID 派生不依赖 client version、运行时 token + 本机凭据复用、运行时 token + 云端回读 device_id、回读失败不使用假 device_id，以及关键 CLI 不再 fallback 到假设备 ID；客户端 pytest、compileall、Go 测试、发布 dry-run 和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -43,7 +43,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复和百度授权设备标识修复已完成，P3 阶段 14 尚未整体完成 | 当前进入干净 Windows R04-R14：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复和稳定 Device ID 修复已完成，P3 阶段 14 尚未整体完成 | 当前进入干净 Windows R04-R14：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
 
 ## 进度差异审计
 
@@ -55,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-16：P3-14 稳定 Device ID 阻塞修复
+
+变更原因：用户指出同一台设备不同 client 版本出现不同 Device ID，且当前逻辑把设备 ID 交给云端随机生成，违背“本机 ID 应由本机固定特征生成并注册到云端”的产品预期。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于百度授权、KDF 解密、远端目录、云端历史恢复和干净 Windows 升级验收的身份一致性阻塞。
+
+验收标准：同一组本机固定特征在不同 client version 下派生相同 `device_id`；云端注册校验 `device_id` 与 fingerprint hash 的派生关系，同一 `device_id` 重复注册不改变设备 ID 且多个 token 可继续鉴权；运行时 token-only 入口必须复用本机 store 或云端 current-device 回读真实 `device_id`；真实写路径不得落入 `current-device`、`environment` 或 `unknown-device`。
+
+回到主排期条件：本轮稳定设备 ID 修复、文档、测试和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-16：P3-14 pywebview 发布候选 UI 阻塞修复
 
@@ -237,6 +247,27 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：稳定 Device ID 阻塞修复
+
+- P3 阶段 14 稳定 Device ID 阻塞修复开发完成；下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 根因修复：旧逻辑由云端 `/v1/devices/register` 随机生成 `device_id`，同一机器只要没有读到同一份本机凭据或运行时只有 Device Token，就可能被不同 client 版本注册成不同设备；本轮改为客户端基于本机固定特征派生稳定 `device_id` 和 fingerprint hash，`client_version` 只作为元数据上报。
+- 云端注册协议升级：`POST /v1/devices/register` 现在要求 `device_id` 和 `device_fingerprint_hash`，服务端校验二者派生关系；新增 `GET /v1/devices/current` 用于 token-only 场景回读真实当前设备。
+- 云端 PostgreSQL 新增 `device_tokens` 表和 `devices.device_fingerprint_hash` 迁移，保留旧 `devices.device_token_hash` 兼容字段；同一 `device_id` 重复注册可签发新的 Device Token，旧 token 继续可鉴权，支持升级/回滚。
+- 客户端凭据解析升级：无本机凭据首次注册时先派生稳定 Device ID；运行时 token 与本机 store 匹配时复用 store 中的真实 `device_id`，不匹配或无 store 时调用云端 current-device 回读；回读失败时给出安全错误。
+- 清理关键入口占位 ID：pywebview、备份 pipeline CLI、真实备份测试 CLI、上传 CLI、integration CLI、sync CLI、Cloud Sync 审计 CLI、远端校对修复 CLI 和远端恢复 CLI 不再默认把 `current-device`、`environment`、`unknown-device` 写入真实业务数据。
+- 更新 `docs/product_spec_v1.3.md`、`client/README.md`、`client/docs/baidu_auth_manual_validation.md` 和 `docs/user_guide.md`，把设备注册说明改为本机固定特征派生后注册到云端，并说明 token-only 入口必须回读真实设备 ID。
+- 新增和扩展自动化测试覆盖稳定 Device ID 派生不依赖 client version、首次注册向云端提交稳定 ID、同一设备重复注册 token 并存、current-device 回读、token-only 审计和关键 CLI 不再使用假设备 ID。
+- 已验证客户端全量测试：`uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-full`，185 项通过。
+- 已验证 `uv run python -m compileall src tests` 通过，`cloud-api/` 下 `go test ./...` 通过，`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun` 通过，`git diff --check` 通过。
+- 验证备注：客户端 pytest/compileall 和发布 dry-run 因 uv 受管 Python/venv 权限按既有项目约束使用提升权限运行；Go 测试使用仓库内 `GOCACHE` 和 `GOMODCACHE`。
+
+提交摘要：本次提交将 Device ID 生成从云端随机分配改为客户端本机固定特征稳定派生，并升级云端注册、token 表和 current-device 回读能力；同时修复 token-only 与各真实写入口使用占位设备 ID 的问题，保证同一设备跨 client 版本、入口和升级/回滚场景下保持一致设备身份。
+
+后续待办：
+
+- 部署新版云端服务后，在真实 `https://backup.baichengedu.com` 上执行一次 current-device 回读和同设备重复注册只读/低风险验证，确认迁移 `004_stable_device_identity.sql` 已应用且旧 token 未失效。
+- 回到 P3 阶段 14 干净 Windows R04-R14，重点复验首次启动、升级覆盖、百度授权账号列表、KDF 解密验证、云端历史拉取和远端恢复候选是否都显示同一稳定 Device ID。
 
 ### P3 阶段 14 打包发布与最终验收：pywebview 发布候选 UI 阻塞修复
 

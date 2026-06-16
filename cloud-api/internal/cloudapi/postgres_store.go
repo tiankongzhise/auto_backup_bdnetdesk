@@ -21,17 +21,51 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 }
 
 func (s *PostgresStore) RegisterDevice(ctx context.Context, device Device, tokenHash string) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	_, err = tx.Exec(ctx, `
 INSERT INTO devices (
     device_id,
     device_token_hash,
+    device_fingerprint_hash,
     device_name,
     hostname,
     os_version,
     client_version
-) VALUES ($1, $2, $3, $4, $5, $6)
-`, device.DeviceID, tokenHash, device.DeviceName, device.Hostname, device.OSVersion, device.ClientVersion)
-	return err
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (device_id) DO UPDATE SET
+    device_token_hash = EXCLUDED.device_token_hash,
+    device_fingerprint_hash = COALESCE(NULLIF(devices.device_fingerprint_hash, ''), EXCLUDED.device_fingerprint_hash),
+    device_name = EXCLUDED.device_name,
+    hostname = EXCLUDED.hostname,
+    os_version = EXCLUDED.os_version,
+    client_version = EXCLUDED.client_version,
+    last_seen_at = now()
+`, device.DeviceID, tokenHash, device.DeviceFingerprintHash, device.DeviceName, device.Hostname, device.OSVersion, device.ClientVersion)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `
+INSERT INTO device_tokens (
+    device_token_hash,
+    device_id
+) VALUES ($1, $2)
+ON CONFLICT (device_token_hash) DO UPDATE SET
+    device_id = EXCLUDED.device_id,
+    revoked_at = NULL,
+    last_seen_at = now()
+`, tokenHash, device.DeviceID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) DeviceByTokenHash(ctx context.Context, tokenHash string) (Device, bool, error) {
@@ -39,16 +73,19 @@ func (s *PostgresStore) DeviceByTokenHash(ctx context.Context, tokenHash string)
 	var revoked bool
 	err := s.pool.QueryRow(ctx, `
 SELECT
-    device_id,
-    device_name,
-    hostname,
-    os_version,
-    client_version,
-    revoked_at IS NOT NULL
-FROM devices
-WHERE device_token_hash = $1
+    d.device_id,
+    d.device_fingerprint_hash,
+    d.device_name,
+    d.hostname,
+    d.os_version,
+    d.client_version,
+    d.revoked_at IS NOT NULL OR dt.revoked_at IS NOT NULL
+FROM device_tokens dt
+JOIN devices d ON d.device_id = dt.device_id
+WHERE dt.device_token_hash = $1
 `, tokenHash).Scan(
 		&device.DeviceID,
+		&device.DeviceFingerprintHash,
 		&device.DeviceName,
 		&device.Hostname,
 		&device.OSVersion,
@@ -64,6 +101,40 @@ WHERE device_token_hash = $1
 
 	device.Revoked = revoked
 	_, _ = s.pool.Exec(ctx, `UPDATE devices SET last_seen_at = now() WHERE device_id = $1`, device.DeviceID)
+	_, _ = s.pool.Exec(ctx, `UPDATE device_tokens SET last_seen_at = now() WHERE device_token_hash = $1`, tokenHash)
+	return device, true, nil
+}
+
+func (s *PostgresStore) DeviceByID(ctx context.Context, deviceID string) (Device, bool, error) {
+	var device Device
+	var revoked bool
+	err := s.pool.QueryRow(ctx, `
+SELECT
+    device_id,
+    device_fingerprint_hash,
+    device_name,
+    hostname,
+    os_version,
+    client_version,
+    revoked_at IS NOT NULL
+FROM devices
+WHERE device_id = $1
+`, deviceID).Scan(
+		&device.DeviceID,
+		&device.DeviceFingerprintHash,
+		&device.DeviceName,
+		&device.Hostname,
+		&device.OSVersion,
+		&device.ClientVersion,
+		&revoked,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Device{}, false, nil
+	}
+	if err != nil {
+		return Device{}, false, err
+	}
+	device.Revoked = revoked
 	return device, true, nil
 }
 
@@ -388,10 +459,16 @@ func (s *PostgresStore) CheckSchema(ctx context.Context) (SchemaReadiness, error
 		"devices": {
 			"device_id",
 			"device_token_hash",
+			"device_fingerprint_hash",
 			"device_name",
 			"hostname",
 			"os_version",
 			"client_version",
+			"revoked_at",
+		},
+		"device_tokens": {
+			"device_token_hash",
+			"device_id",
 			"revoked_at",
 		},
 		"cloud_entities": {

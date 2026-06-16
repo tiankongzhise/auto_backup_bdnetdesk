@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
 import json
 import os
 import platform
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from auto_backup_client.baidu.cloud_api import DeviceRegistration, register_device
+from auto_backup_client.baidu.cloud_api import BaiduCloudClient, DeviceRegistration, register_device
 
 
 STORE_VERSION = 1
@@ -22,6 +23,7 @@ PROTECTION_DPAPI = "windows_dpapi_current_user_v1"
 PROTECTION_PLAINTEXT = "plaintext_test_only_v1"
 DEFAULT_STORE_ENV = "AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_PATH"
 ALLOW_PLAINTEXT_ENV = "AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_ALLOW_PLAINTEXT"
+DEVICE_ID_NAMESPACE = "auto_backup_bdnetdesk.device_id.v1"
 
 
 class DeviceCredentialStoreError(RuntimeError):
@@ -29,10 +31,18 @@ class DeviceCredentialStoreError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class DeviceIdentity:
+    device_id: str
+    fingerprint_hash: str
+    feature_keys: tuple[str, ...] = tuple()
+
+
+@dataclass(frozen=True)
 class DeviceCredentials:
     cloud_api_base_url: str
     device_id: str
     device_token: str
+    device_fingerprint_hash: str = ""
     device_name: str = ""
     hostname: str = ""
     os_version: str = ""
@@ -50,11 +60,13 @@ class DeviceCredentials:
         hostname: str,
         os_version: str,
         client_version: str,
+        device_fingerprint_hash: str = "",
     ) -> "DeviceCredentials":
         return cls(
             cloud_api_base_url=_clean_base_url(cloud_api_base_url),
             device_id=_clean_required(registration.device_id, "device_id"),
             device_token=_clean_required(registration.device_token, "device_token"),
+            device_fingerprint_hash=device_fingerprint_hash.strip().lower(),
             device_name=device_name.strip(),
             hostname=hostname.strip(),
             os_version=os_version.strip(),
@@ -67,6 +79,7 @@ class DeviceCredentials:
             cloud_api_base_url=_clean_base_url(str(data.get("cloud_api_base_url", ""))),
             device_id=_clean_required(str(data.get("device_id", "")), "device_id"),
             device_token=_clean_required(str(data.get("device_token", "")), "device_token"),
+            device_fingerprint_hash=str(data.get("device_fingerprint_hash", "")).strip().lower(),
             device_name=str(data.get("device_name", "")).strip(),
             hostname=str(data.get("hostname", "")).strip(),
             os_version=str(data.get("os_version", "")).strip(),
@@ -80,6 +93,7 @@ class DeviceCredentials:
             "cloud_api_base_url": self.cloud_api_base_url,
             "device_id": self.device_id,
             "device_token": self.device_token,
+            "device_fingerprint_hash": self.device_fingerprint_hash,
             "device_name": self.device_name,
             "hostname": self.hostname,
             "os_version": self.os_version,
@@ -127,6 +141,7 @@ class DeviceCredentialStore:
             cloud_api_base_url=_clean_base_url(credentials.cloud_api_base_url),
             device_id=_clean_required(credentials.device_id, "device_id"),
             device_token=_clean_required(credentials.device_token, "device_token"),
+            device_fingerprint_hash=credentials.device_fingerprint_hash,
             device_name=credentials.device_name,
             hostname=credentials.hostname,
             os_version=credentials.os_version,
@@ -202,18 +217,43 @@ def resolve_or_register_device_credentials(
     client_version: str = "0.1.0",
 ) -> tuple[DeviceCredentials, str]:
     base_url = _clean_base_url(cloud_api_base_url)
+    actual_store = store or DeviceCredentialStore.from_env()
     if provided_device_token.strip():
+        token = provided_device_token.strip()
+        try:
+            saved = actual_store.load_for_base_url(base_url)
+        except DeviceCredentialStoreError:
+            saved = None
+        if saved is not None and saved.device_token == token:
+            return (
+                DeviceCredentials(
+                    cloud_api_base_url=base_url,
+                    device_id=saved.device_id,
+                    device_token=token,
+                    device_fingerprint_hash=saved.device_fingerprint_hash,
+                    device_name=saved.device_name,
+                    hostname=saved.hostname,
+                    os_version=saved.os_version,
+                    client_version=client_version or saved.client_version,
+                    created_at=saved.created_at,
+                    updated_at=saved.updated_at,
+                ),
+                "运行环境 + 本机 DPAPI 凭据",
+            )
+        remote = _current_device_from_token(base_url, token)
         return (
             DeviceCredentials(
                 cloud_api_base_url=base_url,
-                device_id="",
-                device_token=provided_device_token.strip(),
-                device_name="environment",
-                client_version=client_version,
+                device_id=_clean_required(remote.device_id, "device_id"),
+                device_token=token,
+                device_fingerprint_hash="",
+                device_name=remote.device_name,
+                hostname=remote.hostname,
+                os_version=remote.os_version,
+                client_version=client_version or remote.client_version,
             ),
-            "运行环境",
+            "运行环境 + 云端当前设备",
         )
-    actual_store = store or DeviceCredentialStore.from_env()
     saved = actual_store.load_for_base_url(base_url)
     if saved is not None:
         return saved, "本机 DPAPI 凭据"
@@ -221,8 +261,11 @@ def resolve_or_register_device_credentials(
     hostname = socket.gethostname()
     os_version = platform.platform()
     device_name = f"auto-backup-{hostname}".strip("-")
+    identity = derive_stable_device_identity(_collect_device_identity_features())
     registration = register_device(
         base_url,
+        device_id=identity.device_id,
+        device_fingerprint_hash=identity.fingerprint_hash,
         device_name=device_name,
         hostname=hostname,
         os_version=os_version,
@@ -236,9 +279,97 @@ def resolve_or_register_device_credentials(
             hostname=hostname,
             os_version=os_version,
             client_version=client_version,
+            device_fingerprint_hash=identity.fingerprint_hash,
         )
     )
     return credentials, "新注册并保存到本机 DPAPI"
+
+
+def _current_device_from_token(cloud_api_base_url: str, device_token: str) -> Any:
+    try:
+        with BaiduCloudClient(cloud_api_base_url, device_token, timeout=10.0) as cloud:
+            return cloud.current_device()
+    except Exception as exc:
+        raise DeviceCredentialStoreError("failed to resolve device_id from runtime Device Token") from exc
+
+
+def derive_stable_device_identity(features: Mapping[str, str]) -> DeviceIdentity:
+    cleaned = _clean_identity_features(features)
+    if not cleaned:
+        raise DeviceCredentialStoreError("stable device identity features are unavailable")
+    canonical = json.dumps(
+        {
+            "namespace": DEVICE_ID_NAMESPACE,
+            "features": [[key, cleaned[key]] for key in sorted(cleaned)],
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    fingerprint_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return DeviceIdentity(
+        device_id=_device_id_from_fingerprint_hash(fingerprint_hash),
+        fingerprint_hash=fingerprint_hash,
+        feature_keys=tuple(sorted(cleaned)),
+    )
+
+
+def current_machine_device_identity() -> DeviceIdentity:
+    return derive_stable_device_identity(_collect_device_identity_features())
+
+
+def _collect_device_identity_features() -> dict[str, str]:
+    features: dict[str, str] = {}
+    if os.name == "nt":
+        machine_guid = _windows_machine_guid()
+        if machine_guid:
+            features["windows_machine_guid"] = machine_guid
+        return features
+
+    machine_id = _read_first_text_file(("/etc/machine-id", "/var/lib/dbus/machine-id"))
+    if machine_id:
+        features["machine_id"] = machine_id
+    return features
+
+
+def _clean_identity_features(features: Mapping[str, str]) -> dict[str, str]:
+    cleaned: dict[str, str] = {}
+    for raw_key, raw_value in features.items():
+        key = str(raw_key).strip().lower()
+        value = str(raw_value).strip().lower()
+        if key and value:
+            cleaned[key] = value
+    return cleaned
+
+
+def _device_id_from_fingerprint_hash(fingerprint_hash: str) -> str:
+    value = fingerprint_hash.strip().lower()
+    if not _is_sha256_hex(value):
+        raise DeviceCredentialStoreError("device fingerprint hash must be 64 lowercase hex characters")
+    return f"dev_{value[0:8]}-{value[8:12]}-{value[12:16]}-{value[16:20]}-{value[20:32]}"
+
+
+def _windows_machine_guid() -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+            value, _value_type = winreg.QueryValueEx(key, "MachineGuid")
+    except Exception:
+        return ""
+    return str(value).strip()
+
+
+def _read_first_text_file(paths: tuple[str, ...]) -> str:
+    for raw_path in paths:
+        try:
+            text = Path(raw_path).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if text:
+            return text
+    return ""
 
 
 def default_device_credential_store_path() -> Path:
@@ -265,6 +396,12 @@ def _clean_required(value: str, field: str) -> str:
     if not cleaned:
         raise DeviceCredentialStoreError(f"{field} is required")
     return cleaned
+
+
+def _is_sha256_hex(value: str) -> bool:
+    if len(value) != 64:
+        return False
+    return all(("0" <= char <= "9") or ("a" <= char <= "f") for char in value)
 
 
 def _b64url_encode(value: bytes) -> str:

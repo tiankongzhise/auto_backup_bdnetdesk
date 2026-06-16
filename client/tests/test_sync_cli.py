@@ -162,8 +162,16 @@ def test_sync_outbox_cli_marks_retryable_on_cloud_503(tmp_path, capsys, monkeypa
         store.put_upload_session(conn, payload)
 
     monkeypatch.setenv("CLOUD_API_DEVICE_TOKEN", "secret-device-token")
-    monkeypatch.delenv("AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_PATH", raising=False)
-    monkeypatch.delenv("AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_ALLOW_PLAINTEXT", raising=False)
+    credential_store = DeviceCredentialStore(tmp_path / "device_credentials.json", allow_plaintext=True)
+    credential_store.save(
+        DeviceCredentials(
+            cloud_api_base_url="https://backup.baichengedu.com",
+            device_id="device-1",
+            device_token="secret-device-token",
+        )
+    )
+    monkeypatch.setenv("AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_PATH", str(credential_store.path))
+    monkeypatch.setenv("AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_ALLOW_PLAINTEXT", "true")
 
     original_client = httpx.Client
 

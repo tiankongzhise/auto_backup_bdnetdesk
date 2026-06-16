@@ -41,6 +41,9 @@ password 模式只持久化 KDF salt、Argon2id 参数、`account_id` 和 token 
 
 当前设备的 Device Token 只用于云端 API Bearer 认证，不得写入仓库文件。
 
+- `device_id` 由客户端基于本机固定特征派生后注册到云端；`client_version` 不参与生成，同一设备换不同 client 版本不应改变 `device_id`。
+- 云端注册接口校验 `device_id` 与指纹 hash 的派生关系；同一 `device_id` 重复注册会签发新的 Device Token，但不会改变设备 ID。
+- 如运行时只提供 `CLOUD_API_DEVICE_TOKEN`，客户端必须复用本机凭据中的真实 `device_id`，或通过真实云端 `GET /v1/devices/current` 回读；失败时不得继续用占位设备 ID 执行授权、上传或同步。
 - Windows 默认保存到 `%LOCALAPPDATA%\auto_backup_bdnetdesk\credentials\device_credentials.json`，并使用当前用户 DPAPI 保护。
 - 如需改存储位置，可设置 `AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_PATH`。
 - 非 Windows 或自动化测试只有显式设置 `AUTO_BACKUP_DEVICE_CREDENTIAL_STORE_ALLOW_PLAINTEXT=true` 或代码传入 `allow_plaintext=True` 时才允许明文测试存储；真实联调不得使用明文模式。

@@ -229,7 +229,7 @@ func TestBaiduAccountSelectionAndRefreshLease(t *testing.T) {
 		WithBaiduOAuthClient(newFakeBaiduOAuthClient()),
 	)
 	firstToken := registerDevice(t, handler).DeviceToken
-	secondToken := registerDevice(t, handler).DeviceToken
+	secondToken := registerDeviceWithFingerprint(t, handler, secondFingerprint, "v1.3-test").DeviceToken
 
 	accountID := createPasswordBaiduAccount(t, handler, firstToken)
 
@@ -283,7 +283,7 @@ func TestBaiduSameUIDAuthorizationIsDeviceScoped(t *testing.T) {
 		WithBaiduOAuthClient(newFakeBaiduOAuthClient()),
 	)
 	firstDevice := registerDevice(t, handler)
-	secondDevice := registerDevice(t, handler)
+	secondDevice := registerDeviceWithFingerprint(t, handler, secondFingerprint, "v1.3-test")
 	firstToken := firstDevice.DeviceToken
 	secondToken := secondDevice.DeviceToken
 

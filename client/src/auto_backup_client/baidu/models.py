@@ -22,6 +22,25 @@ class DeviceRegistration:
 
 
 @dataclass(frozen=True)
+class DeviceInfo:
+    device_id: str
+    device_name: str = ""
+    hostname: str = ""
+    os_version: str = ""
+    client_version: str = ""
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "DeviceInfo":
+        return cls(
+            device_id=str(data.get("device_id", "")),
+            device_name=str(data.get("device_name", "")),
+            hostname=str(data.get("hostname", "")),
+            os_version=str(data.get("os_version", "")),
+            client_version=str(data.get("client_version", "")),
+        )
+
+
+@dataclass(frozen=True)
 class BaiduAuthSession:
     session_id: str
     flow: str

@@ -94,7 +94,7 @@ def _run(args: argparse.Namespace) -> int:
     store = SQLiteClientStore(sqlite_path)
     store.migrate()
     source_paths = _prepare_sources(work_dir, small_bytes=args.small_bytes, multipart_bytes=args.multipart_bytes, run_id=run_id)
-    device_id = credentials.device_id or "environment"
+    device_id = _require_device_id(credentials)
     job_id = args.job_id.strip() or _create_job(store, device_id=device_id, job_name=args.job_name, sources=source_paths)
 
     with BaiduCloudClient(args.base_url, credentials.device_token, timeout=30.0, device_id=device_id) as cloud:
@@ -397,6 +397,13 @@ def _resolve_credentials(args: argparse.Namespace):
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
 
 
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
+
+
 def _decrypt_selected_token(cloud: BaiduCloudClient, account_id: str, password: str):
     workflow = BaiduAuthWorkflow(cloud)
     actual_account_id = account_id.strip() or _selected_account_id(workflow)
@@ -435,6 +442,7 @@ def _safe_error_summary(exc: Exception) -> str:
             "account_id is required because current device has no selected Baidu account",
             "authorization password is required",
             "completed job cloud summary mismatch",
+            "device_id is required",
             "multipart_bytes must exceed one upload part",
             "real pipeline did not complete",
             "real pipeline final sync reported failures",

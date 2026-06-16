@@ -74,7 +74,7 @@ def run_cloud_sync_audit(args: argparse.Namespace) -> CloudSyncAuditResult:
         raise ValueError("timeout must be greater than zero")
 
     credentials, source = _resolve_credentials(args)
-    device_id = credentials.device_id or "environment"
+    device_id = _require_device_id(credentials)
     now = utc_now_iso()
     event = _build_probe_event(device_id=device_id, now=now, probe_label=args.probe_label)
 
@@ -165,13 +165,20 @@ def _resolve_credentials(args: argparse.Namespace):
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
 
 
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
+
+
 def _safe_error_summary(exc: Exception) -> str:
     if isinstance(exc, CloudAPIError):
         return f"cloud_api_error status={exc.status_code} code={exc.error_code or 'unknown'}"
     if isinstance(exc, DeviceCredentialStoreError):
         return "device_credential_store_error"
     if isinstance(exc, ValueError):
-        allowed = {"timeout must be greater than zero"}
+        allowed = {"device_id is required", "timeout must be greater than zero"}
         message = str(exc)
         return message if message in allowed else "invalid_argument"
     if isinstance(exc, sqlite3.Error):

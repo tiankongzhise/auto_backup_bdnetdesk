@@ -116,7 +116,7 @@ def _repair_remote_objects(args: argparse.Namespace) -> int:
     dry_run = not args.apply
     result = RemoteObjectRepairer(
         store=store,
-        updated_by_device_id=credentials.device_id or "environment",
+        updated_by_device_id=_require_device_id(credentials),
     ).apply(plan, dry_run=dry_run)
 
     _print_repair_plan(
@@ -260,6 +260,13 @@ def _resolve_credentials(args: argparse.Namespace) -> tuple[object, str]:
     return resolve_or_register_device_credentials(cloud_api_base_url=args.base_url, provided_device_token=token)
 
 
+def _require_device_id(credentials: object) -> str:
+    device_id = str(getattr(credentials, "device_id", "")).strip()
+    if not device_id:
+        raise ValueError("device_id is required")
+    return device_id
+
+
 def _read_authorization_password(password_env: str) -> str:
     password = os.environ.get(password_env, "") if password_env else ""
     if not password:
@@ -289,6 +296,7 @@ def _safe_error_summary(exc: Exception) -> str:
         allowed = {
             "account_id is required because current device has no selected Baidu account",
             "authorization password is required",
+            "device_id is required",
             "exactly one of job_id, upload_session_id, or remote_dir is required",
             "max_requests_per_minute must be >= 1",
             "page_limit must be >= 1",

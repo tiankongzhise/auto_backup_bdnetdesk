@@ -164,7 +164,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 3. 页面顶部会显示云端 API 地址、Device Token 状态和 Device ID。
 4. Device Token 明文不会显示在界面里。
 
-如果是第一次启动，软件会尝试注册当前设备并在本机保存 Device Token。
+如果是第一次启动，软件会先根据本机固定特征生成稳定 Device ID，再注册当前设备并在本机保存 Device Token。正常升级到不同 client 版本不会改变同一台设备的 Device ID。
 
 ### 5.2 刷新账号列表
 

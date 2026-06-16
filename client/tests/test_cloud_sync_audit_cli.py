@@ -20,11 +20,15 @@ def test_cloud_sync_audit_posts_probe_and_verifies_duplicate(capsys, monkeypatch
             return httpx.Response(200, json={"status": "ready"})
 
         assert request.headers["Authorization"] == "Bearer secret-device-token"
+        if request.url.path == "/v1/devices/current":
+            return httpx.Response(200, json={"device_id": "device-secret"})
+
         if request.url.path == "/v1/sync/revisions":
             body = json.loads(request.content.decode("utf-8"))
             event = body["events"][0]
             assert event["entity_type"] == "release_sync_audits"
             assert event["payload"]["purpose"] == "p3_14_cloud_sync_truth_probe"
+            assert event["payload"]["updated_by_device_id"] == "device-secret"
             assert event["payload"]["probe_label_sha256"]
             assert "secret label" not in json.dumps(event, ensure_ascii=False)
             seen_events.append(event)
@@ -55,7 +59,7 @@ def test_cloud_sync_audit_posts_probe_and_verifies_duplicate(capsys, monkeypatch
                     "data_version": event["data_version"],
                     "revision_id": event["revision_id"],
                     "canonical_record_sha256": event["canonical_record_sha256"],
-                    "updated_by_device_id": "environment",
+                    "updated_by_device_id": "device-secret",
                     "recent_revisions": [
                         {
                             "event_id": event["event_id"],
@@ -92,6 +96,8 @@ def test_cloud_sync_audit_fails_when_readyz_is_not_ready(capsys, monkeypatch) ->
     original_client = httpx.Client
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/devices/current":
+            return httpx.Response(200, json={"device_id": "device-secret"})
         if request.url.path == "/v1/readyz":
             return httpx.Response(503, json={"error": "schema_not_ready"})
         raise AssertionError("sync should not run when readyz fails")
