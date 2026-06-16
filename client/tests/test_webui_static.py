@@ -64,9 +64,30 @@ def test_jobs_page_exposes_single_source_picker() -> None:
     text = (WEBUI / "js" / "views" / "jobs.js").read_text(encoding="utf-8")
 
     assert 'button("添加来源"' in text
-    assert 'context.call("choose_sources", "mixed")' in text
-    assert 'button("选择文件"' not in text
-    assert 'button("选择目录"' not in text
+    assert 'class: "source-picker"' in text
+    assert 'context.call("choose_sources", "mixed")' not in text
+    assert 'chooseNativeSources("file")' in text
+    assert 'chooseNativeSources("directory")' in text
+
+
+def test_jobs_page_passes_baidu_upload_parameters_to_bridge() -> None:
+    text = (WEBUI / "js" / "views" / "jobs.js").read_text(encoding="utf-8")
+
+    assert "root_dir: rootDir.value.trim()" in text
+    assert "part_size: Number(partSize.value)" in text
+    assert "max_archive_size_bytes: Number(maxArchiveSize.value)" in text
+    assert "check_quota: checkQuota.checked" in text
+    assert "sync_outbox: syncOutbox.checked" in text
+    assert "reconcile_remote: reconcileRemote.checked" in text
+    assert "cleanup_cache_artifacts: cleanupCache.checked" in text
+
+
+def test_baidu_page_exposes_device_credential_status() -> None:
+    text = (WEBUI / "js" / "views" / "baidu.js").read_text(encoding="utf-8")
+
+    assert "device_token_available" in text
+    assert "device_credential_source" in text
+    assert "device_credential_error" in text
 
 
 def test_cleanup_page_gates_permanent_delete_behind_advanced_flag() -> None:

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from auto_backup_client.device_credentials import DeviceCredentials
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.sqlite_store import SQLiteClientStore
 from auto_backup_client.webview_bridge import AutoBackupWebviewBridge
@@ -61,6 +62,84 @@ def test_start_job_returns_operation_without_password_leak(tmp_path) -> None:
     dumped = json.dumps(operation, ensure_ascii=False)
     assert "ArchivePassword123" not in dumped
     assert "AuthPassword456" not in dumped
+
+
+def test_bridge_resolves_local_device_credentials_into_runtime_settings(tmp_path) -> None:
+    settings = ClientSettings(
+        cloud_api_base_url="https://backup.example.test",
+        device_token="",
+        local_data_dir=str(tmp_path / "data"),
+        local_sqlite_path=str(tmp_path / "data" / "state.sqlite3"),
+        local_cache_dir=str(tmp_path / "cache"),
+    )
+
+    def resolver(**_kwargs):
+        return (
+            DeviceCredentials(
+                cloud_api_base_url=settings.cloud_api_base_url,
+                device_id="device-from-store",
+                device_token="token-from-store",
+            ),
+            "本机 DPAPI 凭据",
+        )
+
+    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver)
+    bridge._try_accounts_summary = lambda: {"available": True, "selected_account_id": None, "items": []}
+
+    assert bridge.settings.device_token == "token-from-store"
+    assert bridge.device_id == "device-from-store"
+    state = bridge.get_app_state()["data"]
+    assert state["app"]["device_token_available"] is True
+    assert state["app"]["device_credential_source"] == "本机 DPAPI 凭据"
+
+
+def test_bridge_reports_device_credential_recovery_error_without_blocking_ui(tmp_path) -> None:
+    settings = ClientSettings(
+        cloud_api_base_url="https://backup.example.test",
+        device_token="",
+        local_data_dir=str(tmp_path / "data"),
+        local_sqlite_path=str(tmp_path / "data" / "state.sqlite3"),
+        local_cache_dir=str(tmp_path / "cache"),
+    )
+
+    def resolver(**_kwargs):
+        raise RuntimeError("local credential store unavailable")
+
+    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver)
+
+    state = bridge.get_app_state()["data"]
+    assert state["app"]["device_token_available"] is False
+    assert state["app"]["device_credential_source"] == "加载失败"
+    assert "local credential store unavailable" in state["app"]["device_credential_error"]
+
+
+def test_pipeline_options_from_api_preserves_upload_parameters(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+
+    options = bridge._pipeline_options_from_api(
+        account_id="account-1",
+        archive_password="ArchivePassword123",
+        options={
+            "root_dir": "/apps/custom/backups",
+            "run_upload": True,
+            "check_quota": False,
+            "sync_outbox": False,
+            "reconcile_remote": True,
+            "enforce_cache_budget": True,
+            "cleanup_cache_artifacts": True,
+            "part_size": 16 * 1024 * 1024,
+            "max_archive_size_bytes": 10 * 1024 * 1024 * 1024,
+        },
+    )
+
+    assert options.root_dir == "/apps/custom/backups"
+    assert options.part_size == 16 * 1024 * 1024
+    assert options.max_archive_size_bytes == 10 * 1024 * 1024 * 1024
+    assert options.check_quota is False
+    assert options.sync_outbox is False
+    assert options.reconcile_remote is True
+    assert options.enforce_cache_budget is True
+    assert options.cleanup_cache_artifacts is True
 
 
 def test_choose_sources_detects_file_and_directory_with_stub_window(tmp_path, monkeypatch) -> None:
@@ -164,6 +243,7 @@ def test_get_operation_reports_missing_operation_as_safe_error(tmp_path) -> None
 
 def test_baidu_account_dto_uses_summaries_not_full_device_or_uid(tmp_path) -> None:
     bridge = _bridge(tmp_path)
+    bridge._has_local_kdf_record = lambda account_id: account_id == "account-1"
     account = SimpleNamespace(
         account_id="account-1",
         baidu_uk="1234567890123456",
@@ -181,6 +261,7 @@ def test_baidu_account_dto_uses_summaries_not_full_device_or_uid(tmp_path) -> No
 
     assert dto["device_hint"] == "devi...cdef"
     assert dto["uid_hint"] == "uid-...cdef"
+    assert dto["local_kdf_available"] is True
     dumped = json.dumps(dto, ensure_ascii=False)
     assert "device-secret-abcdef" not in dumped
     assert "uid-secret-abcdef" not in dumped

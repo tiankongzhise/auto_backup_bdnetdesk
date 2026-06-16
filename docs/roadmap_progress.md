@@ -11,19 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：P3 阶段 14 干净 Windows R04-R14 发布候选验收准备与执行。
-- 当前代码 review 结论：pywebview UI 替换与本轮 review fix 已完成，开发机自动化验收通过；项目仍未完成干净 Windows R04-R14 真实矩阵，不能标记为 v1.3 最终可交付。
-- 本轮计划按 `docs/release_acceptance_matrix.md` 执行或补齐 R04-R14：首次启动、百度授权、真实备份、校对、清理、恢复、断网补偿、升级/卸载、云同步真实性复验和敏感信息审计。
-- 若 R04-R14 发现真实环境阻塞，必须先按阻塞项修复并复跑对应开发机/干净机验收，再继续矩阵。
+- 本轮工作：P3 阶段 14 pywebview 发布候选 UI 阻塞修复，挂靠干净 Windows R04-R14 发布候选验收，不改变主排期。
+- 用户反馈阻塞：百度授权页未读取本机已存在 DPAPI Device Token/KDF 记录，也未读取真实云端账号列表，不能验证解密；百度上传参数设置丢失；备份来源添加仍不能在单入口中混合选择文件和文件夹。
+- 本轮计划恢复 pywebview bridge 的本机设备凭据解析、账号列表/解密验证链路、上传参数表单到 `BackupPipelineOptions` 的传递，以及真正单入口的混合来源选择体验。
+- 本轮完成后继续回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ## 本次验收标准
 
-- R04：干净 Windows 双击发布包可启动 pywebview UI，不要求已有 Device Token，WebView2 可用性或缺失提示明确。
-- R05-R06：真实百度授权和真实备份通过，单一添加来源入口可覆盖文件/文件夹，任务完成扫描、归档、上传、Cloud Sync、远端校对和 completed final sync。
-- R07-R09：来源映射/远端校对、原始数据清理和来源级恢复可用，UI 不要求普通用户输入内部 job_id，不显示完整敏感路径、token、密码或 wrapping key。
-- R10-R12：断网补偿、升级和卸载/清理边界明确，本地 SQLite/DPAPI 凭据/缓存行为符合矩阵。
-- R13-R14：真实 Cloud Sync 审计 summary 回读和 duplicate 复验通过；dist、日志、SQLite outbox 和 UI 输出敏感信息审计通过。
-- 每个阻塞修复完成后必须更新本文件完成记录和发布矩阵，再纳入同一 commit。
+- pywebview bridge 初始化必须复用或注册本机 Device Token，优先读取本机 DPAPI 凭据；账号列表必须能走真实云端 API，且 UI 展示凭据来源/设备摘要。
+- 百度授权页必须可读取远端账号记录，选择账号后可用本机 KDF 记录和授权密码验证云端密文 token 解密；验证结果不泄露 token、密码、wrapping key 或完整设备 ID。
+- 备份页必须恢复上传参数设置：备份根目录、分片大小、最大压缩包大小、上传开关、Cloud Sync、远端校对和缓存 artifact 清理选项，并传入 `start_job`。
+- 备份来源添加必须对用户表现为单一“添加来源”入口，可在一个自定义选择流程中合并文件和文件夹，由后端统一判断类型；前端不要求用户分别点击文件/目录。
+- 新增/更新自动化测试覆盖设备凭据解析、账号读取/验证解密、上传参数传递和混合来源添加；客户端 pytest、compileall、Go 测试、发布 dry-run 和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -56,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-16：P3-14 pywebview 发布候选 UI 阻塞修复
+
+变更原因：用户反馈 pywebview 发布候选 UI 存在三项阻塞：百度授权页未读取本机/云端既有授权记录且不能验证解密；百度上传参数设置丢失；备份来源添加仍不能在单入口中混合选择文件和文件夹。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于干净 Windows R04-R14 前必须修复的发布候选 UI 阻塞。
+
+验收标准：bridge 初始化读取或注册本机 Device Token 并显示凭据来源；百度账号列表和 token 解密验证可用；上传参数表单传入备份 pipeline；添加来源单入口可合并文件/文件夹；自动化测试、compileall、Go 测试、发布 dry-run 和 `git diff --check` 通过。
+
+回到主排期条件：本轮阻塞修复、测试和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-16：P3-14 pywebview UI code review 与发布候选体验补齐
 
@@ -228,6 +237,27 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：pywebview 发布候选 UI 阻塞修复
+
+- P3 阶段 14 pywebview 发布候选 UI 阻塞修复开发完成；下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 修复 pywebview bridge 启动时未恢复本机设备凭据的问题：初始化时复用运行环境 Device Token、读取本机 DPAPI 凭据或注册新设备，并把凭据来源、设备摘要和错误摘要下发给前端。
+- 百度授权页恢复真实云端账号列表读取，并展示 Device Token 加载状态、凭据来源、账号读取错误和账号级本机 KDF 记录状态；`verify_baidu_token` 继续通过本机 KDF store + 用户一次性授权密码解密云端密文 token，不返回 token、密码、wrapping key 或完整设备 ID。
+- 备份页恢复百度上传参数：远端根目录、分片大小、单归档上限、上传开关、容量检查、Cloud Sync、远端校对、缓存预算和完成后缓存清理；bridge 新增统一解析方法并完整传入 `BackupPipelineOptions`。
+- 备份来源添加改为一个“添加来源”入口打开来源面板，支持在同一流程中连续添加本地文件、本地文件夹或多行粘贴路径；创建任务时继续由后端识别来源类型并返回脱敏 source token。
+- 设置页补充运行凭据状态和百度上传默认值，方便发布候选联调时快速确认当前设备、云端 API 与上传参数口径。
+- 新增和扩展 `tests/test_webview_bridge.py`、`tests/test_webui_static.py`，覆盖本机 Device Token 恢复、凭据恢复失败不阻塞 UI、账号 DTO 本机 KDF 状态、上传参数传入 pipeline、单一来源入口和授权页凭据状态。
+- 已验证完整客户端测试：`uv run python -m pytest -p no:cacheprovider --basetemp E:\python_code_object\auto_backup_bdnetdesk\client\.cache\pytest-basetemp-webview-fix`，178 项通过。
+- 已验证 `uv run python -m compileall src tests` 通过，`cloud-api/` 下 `go test -p=1 ./...` 通过，`powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun -BuildId webview-auth-upload-fix-dry-run` 输出包含 `webui;webui`。
+- 已验证 `node --check` 检查 `jobs.js`、`baidu.js`、`settings.js` 通过，`git diff --check` 通过。
+- 验证备注：客户端 pytest/compileall 因 uv 受管 Python 目录权限使用提升权限运行；Go 测试首次因冷缓存下载模块触发沙箱 socket 权限失败，提升后同一命令通过，并已将该约束补充到 `AGENTS.MD`。
+
+提交摘要：本次提交修复 P3 阶段 14 pywebview 发布候选 UI 阻塞，恢复本机 DPAPI Device Token/KDF 状态读取、真实云端账号列表和 token 解密验证入口，补回百度上传参数到备份 pipeline，并将来源添加改为单一入口的连续添加流程；开发机自动化、Go 测试和发布 dry-run 已通过，主排期回到干净 Windows R04-R14 发布候选验收。
+
+后续待办：
+
+- 按 `docs/release_acceptance_matrix.md` 在干净 Windows 执行 R04-R14，重点复验真实百度授权账号读取、KDF 解密验证、带自定义上传参数的真实备份、远端校对、恢复、清理、升级/卸载和敏感信息审计。
+- 若 R04-R14 任一项失败，先作为 P3 阶段 14 发布候选阻塞修复记录到本文件，再修复、复测并提交。
 
 ### P3 阶段 14 打包发布与最终验收：pywebview UI code review 与发布候选体验补齐
 

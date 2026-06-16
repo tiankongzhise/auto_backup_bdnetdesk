@@ -484,6 +484,28 @@ tr:last-child td {
   margin: 8px 0 12px;
 }
 
+.source-picker,
+.options-box {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px;
+  background: #fbfcfe;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.source-picker[hidden] {
+  display: none;
+}
+
+.options-box summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .source-chip {
   display: flex;
   align-items: center;

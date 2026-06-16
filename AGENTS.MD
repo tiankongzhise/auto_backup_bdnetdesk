@@ -462,3 +462,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：确认 `.git/index.lock` 不存在后，按权限流程提升运行同一 `git add` 和 `git commit`；提交成功后用 `git status --short --branch` 和 `git log --oneline -1` 确认结果。
 
 后续约束：若后续暂存或提交时出现 `.git/index.lock: Permission denied`，先检查是否存在遗留 lock；不存在时按权限流程提升执行 Git 写元数据命令。不得误删 `.git` 内容或用破坏性 Git 命令绕过。
+
+### 2026-06-16：Go 测试冷缓存下载模块受沙箱 socket 权限限制
+
+问题：在 `cloud-api/` 下已将 `GOCACHE` 和 `GOMODCACHE` 指向仓库内 `.cache/` 后执行 `go test -p=1 ./...`，冷的 `GOMODCACHE` 仍需要从 `proxy.golang.org` 下载 `github.com/go-chi/chi/v5`、`github.com/jackc/pgx/v5` 等模块，沙箱内返回 Windows `connectex: An attempt was made to access a socket in a way forbidden by its access permissions`。
+
+原因：仓库内缓存解决的是文件系统权限问题，但当前 sandbox 仍限制联网 socket；失败发生在 Go module 下载阶段，不是项目代码编译或测试断言失败。
+
+解决方案：保留仓库内 `GOCACHE`/`GOMODCACHE` 设置，按权限流程提升运行同一 `go test -p=1 ./...` 命令；提升后依赖下载成功，`cloud-api/` 测试通过。
+
+后续约束：Go 测试若在冷缓存下因 `proxy.golang.org`、DNS、socket 权限或模块下载失败，不得误判为项目代码失败；应先使用同一缓存路径提升重跑。依赖下载完成后仍应继续使用仓库内 `.cache/go-build` 和 `.cache/go-mod`，不得提交 `.cache/`。

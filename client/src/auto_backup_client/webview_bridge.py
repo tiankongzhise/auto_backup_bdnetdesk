@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -23,9 +23,11 @@ from auto_backup_client.backup_jobs import (
 from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineOptions
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
 from auto_backup_client.baidu.cloud_api import BaiduCloudClient
+from auto_backup_client.baidu.kdf_store import PasswordKDFStore
 from auto_backup_client.baidu.reconcile import RemoteObjectReconciler, RemoteReconcileScope
 from auto_backup_client.baidu.reconcile_repair import CONFIRM_REPAIR_TEXT, RemoteObjectRepairer, build_remote_repair_plan
-from auto_backup_client.baidu.upload import BaiduNetdiskClient
+from auto_backup_client.baidu.upload import DEFAULT_BACKUP_ROOT_DIR, DEFAULT_PART_SIZE, BaiduNetdiskClient
+from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.restore_flow import BaiduArchiveDownloader, RestoreService
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.source_cleanup import (
@@ -39,6 +41,8 @@ from auto_backup_client.sqlite_store import SQLiteClientStore
 
 BridgeCallable = Callable[[], dict[str, Any]]
 OperationCallable = Callable[["OperationHandle"], dict[str, Any]]
+DeviceCredentialResolver = Callable[..., tuple[Any, str]]
+DEFAULT_MAX_ARCHIVE_SIZE_BYTES = 4 * 1024**3
 
 
 def _utc_now() -> str:
@@ -117,6 +121,25 @@ def _as_source_inputs(sources: Iterable[Any]) -> list[BackupSourceInput]:
         if raw_path:
             normalized.append(BackupSourceInput(local_path=raw_path, source_type=None))
     return normalized
+
+
+def _bool_option(options: dict[str, Any], name: str, default: bool) -> bool:
+    value = options.get(name)
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "no", "off"}
+    return bool(value)
+
+
+def _int_option(options: dict[str, Any], name: str, default: int, *, minimum: int = 1) -> int:
+    value = options.get(name)
+    if value is None or value == "":
+        return default
+    parsed = int(value)
+    if parsed < minimum:
+        raise ValueError(f"{name} must be >= {minimum}")
+    return parsed
 
 
 @dataclass(slots=True)
@@ -256,13 +279,35 @@ class AutoBackupWebviewBridge:
         device_id: str | None = None,
         run_operations_inline: bool = False,
         backup_runner: OperationCallable | None = None,
+        device_credentials_resolver: DeviceCredentialResolver | None = None,
+        auto_resolve_device_credentials: bool = True,
     ) -> None:
         self.settings = settings or ClientSettings.from_env()
         Path(self.settings.local_data_dir).mkdir(parents=True, exist_ok=True)
         Path(self.settings.local_cache_dir).mkdir(parents=True, exist_ok=True)
         self.store = store or SQLiteClientStore(self.settings.local_sqlite_path)
         self.store.migrate()
-        self.device_id = device_id or os.environ.get("AUTO_BACKUP_DEVICE_ID") or "current-device"
+        self.device_credential_source = "未加载"
+        self.device_credential_error = ""
+        resolved_device_id = device_id or os.environ.get("AUTO_BACKUP_DEVICE_ID") or ""
+        if auto_resolve_device_credentials:
+            resolver = device_credentials_resolver or resolve_or_register_device_credentials
+            try:
+                credentials, source = resolver(
+                    cloud_api_base_url=self.settings.cloud_api_base_url,
+                    provided_device_token=self.settings.device_token,
+                )
+                device_token = str(getattr(credentials, "device_token", "") or "")
+                if device_token and device_token != self.settings.device_token:
+                    self.settings = replace(self.settings, device_token=device_token)
+                resolved_device_id = resolved_device_id or str(getattr(credentials, "device_id", "") or "")
+                self.device_credential_source = source
+            except BaseException as exc:  # noqa: BLE001 - UI must still open if credential recovery fails.
+                self.device_credential_source = "加载失败"
+                self.device_credential_error = _safe_error(exc)["message"]
+        else:
+            self.device_credential_source = "已跳过"
+        self.device_id = resolved_device_id or "current-device"
         self._write_lock = threading.RLock()
         self._window: Any | None = None
         self._operations = OperationRegistry(inline=run_operations_inline)
@@ -270,6 +315,7 @@ class AutoBackupWebviewBridge:
         self._last_reconcile_report: Any | None = None
         self._auth_session_id: str = ""
         self._pending_sources: dict[str, BackupSourceInput] = {}
+        self._kdf_store = PasswordKDFStore.from_env()
 
     def set_window(self, window: Any) -> None:
         self._window = window
@@ -497,7 +543,9 @@ class AutoBackupWebviewBridge:
             status_counts[job["status"]] = status_counts.get(job["status"], 0) + 1
         risks: list[dict[str, str]] = []
         if not self.settings.device_token:
-            risks.append({"level": "warning", "title": "设备未注册", "message": "云端授权和同步需要先配置 Device Token"})
+            risks.append({"level": "warning", "title": "设备未注册", "message": "云端授权和同步需要先恢复或注册 Device Token"})
+        if self.device_credential_error:
+            risks.append({"level": "warning", "title": "设备凭据加载失败", "message": self.device_credential_error})
         if not any(job["status"] == "completed" for job in jobs):
             risks.append({"level": "info", "title": "尚无完成备份", "message": "创建并完成首个备份后可进入恢复演练"})
         if any(job["status"] == "failed" for job in jobs):
@@ -510,6 +558,9 @@ class AutoBackupWebviewBridge:
                 "version": "desktop",
                 "device_id_hint": _short_digest(path_sha256(self.device_id), length=10),
                 "cloud_api_base_url": self.settings.cloud_api_base_url,
+                "device_credential_source": self.device_credential_source,
+                "device_credential_error": self.device_credential_error,
+                "device_token_available": bool(self.settings.device_token),
             },
             "dashboard": {
                 "jobs": jobs,
@@ -517,6 +568,19 @@ class AutoBackupWebviewBridge:
                 "risks": risks,
                 "operations": operations,
                 "accounts": accounts,
+            },
+            "settings": {
+                "upload": {
+                    "root_dir": DEFAULT_BACKUP_ROOT_DIR,
+                    "part_size": DEFAULT_PART_SIZE,
+                    "max_archive_size_bytes": DEFAULT_MAX_ARCHIVE_SIZE_BYTES,
+                    "run_upload": True,
+                    "check_quota": True,
+                    "sync_outbox": True,
+                    "reconcile_remote": True,
+                    "enforce_cache_budget": False,
+                    "cleanup_cache_artifacts": False,
+                }
             },
         }
 
@@ -629,11 +693,11 @@ class AutoBackupWebviewBridge:
         return str(selected[0])
 
     def _auth_workflow(self) -> BaiduAuthWorkflow:
-        return BaiduAuthWorkflow(cloud_client=self._cloud_client(), device_id=self.device_id)
+        return BaiduAuthWorkflow(cloud_client=self._cloud_client(), kdf_store=self._kdf_store, device_id=self.device_id)
 
     def _with_auth_workflow(self, func: Callable[[BaiduAuthWorkflow], Any]) -> Any:
         with self._cloud_client() as cloud_client:
-            return func(BaiduAuthWorkflow(cloud_client=cloud_client, device_id=self.device_id))
+            return func(BaiduAuthWorkflow(cloud_client=cloud_client, kdf_store=self._kdf_store, device_id=self.device_id))
 
     def _cloud_client(self) -> BaiduCloudClient:
         return BaiduCloudClient(
@@ -654,8 +718,10 @@ class AutoBackupWebviewBridge:
         baidu_uk = str(getattr(account, "baidu_uk", "") or "")
         baidu_uid = str(getattr(account, "baidu_uid", "") or "")
         device_id = str(getattr(account, "device_id", "") or "")
+        account_id = str(account.account_id)
+        has_local_kdf = self._has_local_kdf_record(account_id)
         return {
-            "account_id": account.account_id,
+            "account_id": account_id,
             "baidu_uk": _edge_hint(baidu_uk),
             "uid_hint": _edge_hint(baidu_uid or baidu_uk),
             "device_hint": _edge_hint(device_id),
@@ -665,6 +731,7 @@ class AutoBackupWebviewBridge:
             "token_valid": bool(account.token_valid),
             "token_expires_at": account.token_expires_at.isoformat(),
             "last_verify_status": account.last_verify_status,
+            "local_kdf_available": has_local_kdf,
         }
 
     def _auth_state_to_dto(self, state: Any) -> dict[str, Any]:
@@ -699,6 +766,12 @@ class AutoBackupWebviewBridge:
         )
         return BaiduNetdiskClient(access_token=token.access_token)
 
+    def _has_local_kdf_record(self, account_id: str) -> bool:
+        try:
+            return self._kdf_store.get_record(account_id, device_id=self.device_id) is not None
+        except BaseException:
+            return False
+
     def _refresh_history(self) -> None:
         if not self.settings.device_token:
             return
@@ -712,6 +785,30 @@ class AutoBackupWebviewBridge:
             refresher.refresh()
         except BaseException:
             return
+
+    def _pipeline_options_from_api(self, *, account_id: str, archive_password: str, options: dict[str, Any]) -> BackupPipelineOptions:
+        root_dir = str(options.get("root_dir") or DEFAULT_BACKUP_ROOT_DIR).strip()
+        if not root_dir:
+            raise ValueError("百度远端根目录不能为空")
+        return BackupPipelineOptions(
+            cache_root=self.settings.local_cache_dir,
+            password=archive_password,
+            account_id=account_id,
+            root_dir=root_dir,
+            run_upload=_bool_option(options, "run_upload", True),
+            check_quota=_bool_option(options, "check_quota", True),
+            sync_outbox=_bool_option(options, "sync_outbox", True),
+            reconcile_remote=_bool_option(options, "reconcile_remote", True),
+            enforce_cache_budget=_bool_option(options, "enforce_cache_budget", False),
+            max_archive_size_bytes=_int_option(
+                options,
+                "max_archive_size_bytes",
+                DEFAULT_MAX_ARCHIVE_SIZE_BYTES,
+                minimum=64 * 1024**2,
+            ),
+            part_size=_int_option(options, "part_size", DEFAULT_PART_SIZE, minimum=1024 * 1024),
+            cleanup_cache_artifacts=_bool_option(options, "cleanup_cache_artifacts", False),
+        )
 
     def _run_backup_job(self, operation: OperationHandle, *, job_id: str, passwords: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
         operation.update(stage="preflight", message="正在准备备份参数", progress=0.1)
@@ -731,17 +828,7 @@ class AutoBackupWebviewBridge:
                 baidu_client=baidu_client,
                 cloud_client=cloud_client,
             )
-            pipeline_options = BackupPipelineOptions(
-                cache_root=self.settings.local_cache_dir,
-                password=archive_password,
-                account_id=account_id,
-                run_upload=bool(options.get("run_upload", True)),
-                sync_outbox=bool(options.get("sync_outbox", True)),
-                reconcile_remote=bool(options.get("reconcile_remote", True)),
-                max_archive_size_bytes=int(options.get("max_archive_size_bytes") or 4 * 1024**3),
-                part_size=int(options.get("part_size") or 4 * 1024**2),
-                cleanup_cache_artifacts=bool(options.get("cleanup_cache_artifacts", False)),
-            )
+            pipeline_options = self._pipeline_options_from_api(account_id=account_id, archive_password=archive_password, options=options)
             operation.update(stage="backup", message="正在执行扫描、归档、上传与同步", progress=0.32)
             summary = pipeline.run_job(job_id, pipeline_options)
         operation.update(stage="finalize", message="正在整理任务摘要", progress=0.92)

@@ -20,13 +20,44 @@ export async function renderJobs(root, context) {
 }
 
 function jobForm(context) {
+  const uploadDefaults = (state.appState && state.appState.settings && state.appState.settings.upload) || {};
   const name = input("job-name", { placeholder: "任务名称" });
-  const manual = input("manual-source", { placeholder: "可粘贴完整文件或目录路径" });
+  const manual = input("manual-source", { type: "textarea", placeholder: "每行一个完整文件或目录路径" });
   const archivePassword = input("archive-password", { type: "password", placeholder: "压缩密码" });
   const authPassword = input("auth-password", { type: "password", placeholder: "百度授权密码" });
   const runUpload = input("run-upload", { type: "checkbox" });
-  runUpload.checked = true;
+  const rootDir = input("baidu-root-dir", { value: uploadDefaults.root_dir || "/apps/auto_backup_bdnetdesk/backups" });
+  const partSize = input("baidu-part-size", {
+    select: true,
+    value: String(uploadDefaults.part_size || 4 * 1024 * 1024),
+    options: [
+      { value: String(4 * 1024 * 1024), label: "4 MiB" },
+      { value: String(16 * 1024 * 1024), label: "16 MiB" },
+      { value: String(32 * 1024 * 1024), label: "32 MiB" },
+    ],
+  });
+  const maxArchiveSize = input("max-archive-size", {
+    select: true,
+    value: String(uploadDefaults.max_archive_size_bytes || 4 * 1024 * 1024 * 1024),
+    options: [
+      { value: String(4 * 1024 * 1024 * 1024), label: "4 GiB" },
+      { value: String(10 * 1024 * 1024 * 1024), label: "10 GiB" },
+      { value: String(20 * 1024 * 1024 * 1024), label: "20 GiB" },
+    ],
+  });
+  const checkQuota = input("check-quota", { type: "checkbox" });
+  const syncOutbox = input("sync-outbox", { type: "checkbox" });
+  const reconcileRemote = input("reconcile-remote", { type: "checkbox" });
+  const cleanupCache = input("cleanup-cache", { type: "checkbox" });
+  const enforceCacheBudget = input("enforce-cache-budget", { type: "checkbox" });
+  runUpload.checked = uploadDefaults.run_upload !== false;
+  checkQuota.checked = uploadDefaults.check_quota !== false;
+  syncOutbox.checked = uploadDefaults.sync_outbox !== false;
+  reconcileRemote.checked = uploadDefaults.reconcile_remote !== false;
+  cleanupCache.checked = uploadDefaults.cleanup_cache_artifacts === true;
+  enforceCacheBudget.checked = uploadDefaults.enforce_cache_budget === true;
   const sourceList = el("div", { class: "source-list" });
+  const sourcePicker = el("div", { class: "source-picker", hidden: true });
 
   function redrawSources() {
     clear(sourceList);
@@ -45,26 +76,52 @@ function jobForm(context) {
   }
   redrawSources();
 
+  function addManualSources() {
+    const values = manual.value
+      .split(/\r?\n|;/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!values.length) {
+      return;
+    }
+    addSources(
+      values.map((value) => ({
+        path: value,
+        display_name: value.split(/[\\/]/).pop() || value,
+        source_type: "",
+        path_digest: "后端识别",
+      })),
+    );
+    manual.value = "";
+    redrawSources();
+  }
+
+  async function chooseNativeSources(kind) {
+    const data = await context.call("choose_sources", kind);
+    addSources(data.sources || []);
+    redrawSources();
+  }
+
+  sourcePicker.replaceChildren(
+    field("粘贴路径", manual),
+    el("div", { class: "toolbar" }, [
+      button("添加粘贴路径", { onClick: addManualSources }),
+      button("选择本地文件", { onClick: () => chooseNativeSources("file") }),
+      button("选择本地文件夹", { onClick: () => chooseNativeSources("directory") }),
+      button("完成", { onClick: () => sourcePicker.setAttribute("hidden", "") }),
+    ]),
+  );
+
   return el("div", {}, [
     field("任务名称", name),
-    field("手动路径", manual),
     el("div", { class: "toolbar" }, [
-      button("添加手动路径", {
-        onClick: () => {
-          const value = manual.value.trim();
-          if (!value) {
-            return;
-          }
-          addSources([{ path: value, display_name: value.split(/[\\/]/).pop() || value, source_type: "", path_digest: "后端识别" }]);
-          manual.value = "";
-          redrawSources();
-        },
-      }),
       button("添加来源", {
         onClick: async () => {
-          const data = await context.call("choose_sources", "mixed");
-          addSources(data.sources || []);
-          redrawSources();
+          if (sourcePicker.hasAttribute("hidden")) {
+            sourcePicker.removeAttribute("hidden");
+          } else {
+            sourcePicker.setAttribute("hidden", "");
+          }
         },
       }),
       button("清空", {
@@ -74,10 +131,22 @@ function jobForm(context) {
         },
       }),
     ]),
+    sourcePicker,
     sourceList,
     field("压缩密码", archivePassword),
     field("授权密码", authPassword),
     el("label", { class: "field inline" }, [el("span", { class: "field-label", text: "上传百度" }), runUpload]),
+    el("details", { class: "options-box", open: true }, [
+      el("summary", { text: "百度上传参数" }),
+      field("远端根目录", rootDir),
+      field("分片大小", partSize),
+      field("单归档上限", maxArchiveSize),
+      field("检查百度容量", checkQuota, { inline: true }),
+      field("同步任务记录", syncOutbox, { inline: true }),
+      field("云端校对", reconcileRemote, { inline: true }),
+      field("执行缓存预算", enforceCacheBudget, { inline: true }),
+      field("完成后清理缓存", cleanupCache, { inline: true }),
+    ]),
     button("创建并启动", {
       variant: "primary",
       onClick: async () => {
@@ -86,7 +155,17 @@ function jobForm(context) {
           "start_job",
           created.job.job_id,
           { archive_password: archivePassword.value, authorization_password: authPassword.value },
-          { run_upload: runUpload.checked, sync_outbox: runUpload.checked, reconcile_remote: runUpload.checked },
+          {
+            run_upload: runUpload.checked,
+            root_dir: rootDir.value.trim(),
+            part_size: Number(partSize.value),
+            max_archive_size_bytes: Number(maxArchiveSize.value),
+            check_quota: checkQuota.checked,
+            sync_outbox: syncOutbox.checked,
+            reconcile_remote: reconcileRemote.checked,
+            enforce_cache_budget: enforceCacheBudget.checked,
+            cleanup_cache_artifacts: cleanupCache.checked,
+          },
         );
         upsertOperation(operationData.operation);
         showToast("备份任务已启动");
