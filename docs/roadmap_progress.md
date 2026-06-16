@@ -11,16 +11,17 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 pywebview UI 重构第一步，先输出设计文档，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划新增 `docs/ui_design_pywebview.md`，明确 pywebview 官方依据、工作台重排信息架构、视觉原则、关键流程、安全约束和后续 spec 边界。
-- 本轮完成后继续进入 pywebview UI 前端 spec 文档阶段，再按 spec 替换 PySide6 UI。
+- 本轮插队工作：P3 阶段 14 pywebview UI 重构第二步，输出前端 spec，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划新增 `client/docs/frontend_spec_pywebview.md`，明确原生静态前端文件结构、bridge API、DTO 脱敏规则、页面行为、状态管理、测试和实现顺序。
+- 本轮完成后继续进入 pywebview UI 替换实现阶段。
 
 ## 本次验收标准
 
-- 已获取 pywebview 官方 Usage、Javascript-Python bridge、Freezing 和 Installation 文档内容，并在设计文档中记录实现依据。
-- 设计文档必须说明新 UI 采用“工作台重排”，主导航包含工作台、备份、百度授权、恢复、清理、校对与同步、设置。
-- 设计文档必须明确 pywebview `js_api` 暴露函数返回 Promise、独立线程执行且不是线程安全的，因此后续 bridge 写操作必须串行化。
-- 设计文档必须明确 UI 只消费脱敏 DTO，不展示 Device Token、百度 token、用户密码、wrapping key、本地完整敏感路径或完整远端路径。
+- 前端 spec 必须固定 `client/src/auto_backup_client/webui/` 的原生静态文件结构，不引入 React/Vue/Vite/Node 构建链。
+- 前端 spec 必须列出 `window.pywebview.api` bridge 方法、统一成功/错误返回格式、operation 轮询模型和写操作串行化约束。
+- 前端 spec 必须定义核心 DTO 脱敏规则，明确不返回 token、密码、wrapping key、完整本地路径或完整远端路径。
+- 前端 spec 必须覆盖工作台、备份、百度授权、恢复、清理、校对与同步、设置页面的最小可用控件和按钮启停规则。
+- 前端 spec 必须列出 Python bridge 测试、静态前端结构测试、PyInstaller data 测试和验收命令。
 - 本轮只修改文档和进度记录；`git diff --check` 必须通过。
 
 ## 开发排期
@@ -54,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-16：P3-14 pywebview UI 前端 spec
+
+变更原因：已完成 pywebview UI 设计文档，按用户要求进入“先 design 文档、再前端 spec、最后实现替换”的第二步。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选 UI 体验和技术栈替换插队需求。
+
+验收标准：新增 `client/docs/frontend_spec_pywebview.md`，固定原生静态前端目录、bridge API、DTO 脱敏、页面行为、operation 轮询、状态管理、测试边界和实现顺序；本轮不修改业务代码。
+
+回到主排期条件：前端 spec 提交完成后，继续进入 pywebview UI 替换实现阶段；全部完成后回到干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-16：P3-14 pywebview UI 重构设计文档
 
@@ -196,6 +207,26 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：pywebview UI 前端 spec
+
+- P3 阶段 14 pywebview UI 前端 spec 完成；P3 阶段 14 仍在进行中，下一个开发小项为 pywebview UI 替换实现。
+- 新增 `client/docs/frontend_spec_pywebview.md`，固定原生静态 HTML/CSS/JS 文件结构，不引入 React/Vue/Vite/Node 构建链。
+- spec 明确 `api.js` 是唯一直接访问 `window.pywebview.api` 的模块，其他 view/state/render 模块必须通过 `api.js` 调用 bridge。
+- spec 定义 bridge 统一成功/错误返回格式，覆盖应用状态、备份任务、百度授权、校对与同步、清理、恢复和长操作接口。
+- spec 定义 operation registry 和前端轮询模型：长任务返回 `operation_id`，前端每秒轮询 `get_operation()`，完成后刷新当前页面和工作台摘要。
+- spec 明确核心 DTO 脱敏规则，不返回 Device Token、百度 token、用户密码、wrapping key、密文 envelope 正文、完整本地路径或完整远端路径。
+- spec 覆盖工作台、备份、百度授权、恢复、清理、校对与同步、设置页面的最小可用控件、按钮启停和确认短语规则。
+- spec 列出 Python bridge 测试、静态前端结构测试、PyInstaller data 测试和 uv/Go 验收命令。
+- 本轮只修改文档和进度记录，未修改业务代码、依赖或发布构建脚本。
+
+提交摘要：本次提交完成 pywebview UI 前端规格，明确原生静态前端结构、bridge API、脱敏 DTO、operation 长任务模型、页面最小行为和测试验收边界，为后续实现替换 PySide6 UI 提供可执行规格。
+
+后续待办：
+
+- 按 spec 实现 `webview_app.py`、`webview_bridge.py` 和 `webui/` 静态 UI。
+- 替换 `app.py` 入口，调整依赖为 pywebview，移除 PySide6 UI 模块和对应 UI 测试。
+- 更新 PyInstaller 打包 data、客户端 README、用户手册和发布验收矩阵，并执行完整验证命令。
 
 ### P3 阶段 14 打包发布与最终验收：pywebview UI 重构设计文档
 
