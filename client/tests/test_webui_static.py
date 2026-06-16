@@ -90,6 +90,15 @@ def test_baidu_page_exposes_device_credential_status() -> None:
     assert "device_credential_error" in text
 
 
+def test_baidu_page_exposes_visible_authorization_password_verification() -> None:
+    text = (WEBUI / "js" / "views" / "baidu.js").read_text(encoding="utf-8")
+
+    assert "验证授权密码" in text
+    assert "verify-authorization-password" in text
+    assert "verify_baidu_token" in text
+    assert "window.prompt" not in text
+
+
 def test_cleanup_page_gates_permanent_delete_behind_advanced_flag() -> None:
     text = (WEBUI / "js" / "views" / "cleanup.js").read_text(encoding="utf-8")
 

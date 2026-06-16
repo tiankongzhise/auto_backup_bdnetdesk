@@ -25,7 +25,8 @@ def _bridge(tmp_path: Path, **kwargs) -> AutoBackupWebviewBridge:
     Path(settings.local_data_dir).mkdir(parents=True, exist_ok=True)
     store = SQLiteClientStore(settings.local_sqlite_path)
     store.migrate()
-    return AutoBackupWebviewBridge(settings=settings, store=store, device_id="device-test", **kwargs)
+    device_id = kwargs.pop("device_id", "device-test")
+    return AutoBackupWebviewBridge(settings=settings, store=store, device_id=device_id, **kwargs)
 
 
 def test_create_job_returns_redacted_source_dto(tmp_path) -> None:
@@ -91,6 +92,17 @@ def test_bridge_resolves_local_device_credentials_into_runtime_settings(tmp_path
     state = bridge.get_app_state()["data"]
     assert state["app"]["device_token_available"] is True
     assert state["app"]["device_credential_source"] == "本机 DPAPI 凭据"
+
+
+def test_app_state_uses_comparable_device_id_hint_instead_of_hash_prefix(tmp_path) -> None:
+    device_id = "dev_edae23f2-1bfb-f26e-654f-ea4d8fbb5d10"
+    bridge = _bridge(tmp_path, device_id=device_id)
+    bridge._try_accounts_summary = lambda: {"available": True, "selected_account_id": None, "items": []}
+
+    state = bridge.get_app_state()["data"]
+
+    assert state["app"]["device_id_hint"] == "dev_edae23f2...5d10"
+    assert state["app"]["device_id_hint"] != "16da66855e"
 
 
 def test_bridge_reports_device_credential_recovery_error_without_blocking_ui(tmp_path) -> None:
@@ -286,6 +298,28 @@ def test_baidu_account_dto_uses_summaries_not_full_device_or_uid(tmp_path) -> No
     dumped = json.dumps(dto, ensure_ascii=False)
     assert "device-secret-abcdef" not in dumped
     assert "uid-secret-abcdef" not in dumped
+
+
+def test_baidu_account_dto_uses_comparable_device_id_hint_for_stable_ids(tmp_path) -> None:
+    bridge = _bridge(tmp_path)
+    bridge._has_local_kdf_record = lambda _account_id: False
+    account = SimpleNamespace(
+        account_id="account-1",
+        baidu_uk="1234567890123456",
+        baidu_uid="uid-secret-abcdef",
+        device_id="dev_edae23f2-1bfb-f26e-654f-ea4d8fbb5d10",
+        current_device=True,
+        display_name="测试账号",
+        selected=True,
+        token_valid=True,
+        token_expires_at=SimpleNamespace(isoformat=lambda: "2026-06-16T00:00:00+00:00"),
+        last_verify_status="valid",
+    )
+
+    dto = bridge._baidu_account_to_dto(account)
+
+    assert dto["device_hint"] == "dev_edae23f2...5d10"
+    assert dto["device_hint"] != "16da66855e"
 
 
 def test_verify_baidu_token_returns_safe_success_dto(tmp_path, monkeypatch) -> None:

@@ -9,8 +9,10 @@ export async function renderBaidu(root, context) {
     .catch((error) => ({ accounts: [], selected_account_id: "", error: error.message || "账号读取失败" }));
   root.appendChild(el("section", { class: "panel", style: "margin-bottom:16px" }, [el("h2", { text: "设备授权状态" }), credentialStatus(app, accountsData)]));
   const authBox = el("div", { class: "panel" }, [el("h2", { text: "授权流程" }), authFlow(context)]);
-  const tableBox = el("div", { class: "panel" }, [el("h2", { text: "百度账号" }), accountTable(accountsData.accounts || [], context)]);
-  root.appendChild(el("div", { class: "grid two" }, [authBox, tableBox]));
+  const verifyBox = el("div", { class: "panel" }, [el("h2", { text: "验证授权密码" }), tokenVerification(accountsData.accounts || [], context)]);
+  const tableBox = el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "百度账号" }), accountTable(accountsData.accounts || [], context)]);
+  root.appendChild(el("div", { class: "grid two" }, [authBox, verifyBox]));
+  root.appendChild(tableBox);
 }
 
 function credentialStatus(app, accountsData) {
@@ -74,6 +76,42 @@ function authFlow(context) {
   ]);
 }
 
+function tokenVerification(accounts, context) {
+  const selected = accounts.find((row) => row.selected) || accounts[0] || {};
+  const accountSelect = input("verify-account", {
+    select: true,
+    value: selected.account_id || "",
+    options: accounts.map((row) => ({
+      value: row.account_id,
+      label: `${row.display_name || row.baidu_uk || row.account_id} / ${row.device_hint || "-"}`,
+    })),
+  });
+  const password = input("verify-authorization-password", { type: "password", placeholder: "输入授权密码验证本地解密" });
+  const result = el("div", { class: "item-meta", text: accounts.length ? "尚未验证" : "暂无可验证账号" });
+  const verifyButton = button("验证授权密码", {
+    variant: "primary",
+    disabled: accounts.length === 0,
+    onClick: async () => {
+      const accountId = accountSelect.value;
+      if (!accountId) {
+        context.showToast("请先选择百度账号");
+        return;
+      }
+      const data = await context.call("verify_baidu_token", accountId, password.value);
+      const verification = data.verification || {};
+      result.textContent = verification.valid ? `验证通过，token version ${verification.token_version || "-"}` : verification.message || "验证失败";
+      context.showToast(verification.valid ? "授权密码验证通过" : result.textContent);
+      password.value = "";
+    },
+  });
+  return el("div", {}, [
+    field("账号", accountSelect),
+    field("授权密码", password),
+    el("div", { class: "toolbar" }, [verifyButton]),
+    result,
+  ]);
+}
+
 function accountTable(accounts, context) {
   return table(
     [
@@ -97,9 +135,15 @@ function accountTable(accounts, context) {
             }),
             button("验证", {
               onClick: async () => {
-                const password = window.prompt("输入百度授权密码") || "";
-                const data = await context.call("verify_baidu_token", row.account_id, password);
-                context.showToast(data.verification.valid ? "token 解密验证通过" : data.verification.message);
+                const passwordInput = document.querySelector("#verify-authorization-password");
+                const accountSelect = document.querySelector("#verify-account");
+                if (accountSelect) {
+                  accountSelect.value = row.account_id;
+                }
+                if (passwordInput) {
+                  passwordInput.focus();
+                }
+                context.showToast("请在验证授权密码区域输入密码后验证");
               },
             }),
           ]),

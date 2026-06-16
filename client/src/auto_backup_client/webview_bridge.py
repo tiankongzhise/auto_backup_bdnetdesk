@@ -64,6 +64,19 @@ def _edge_hint(value: str | None) -> str:
     return f"{normalized[:4]}...{normalized[-4:]}"
 
 
+def _device_id_hint(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = str(value).strip()
+    if not normalized:
+        return ""
+    if len(normalized) <= 18:
+        return normalized
+    if normalized.startswith("dev_"):
+        return f"{normalized[:12]}...{normalized[-4:]}"
+    return _edge_hint(normalized)
+
+
 def _status_label(status: str) -> str:
     labels = {
         "queued": "待开始",
@@ -565,7 +578,7 @@ class AutoBackupWebviewBridge:
             "app": {
                 "name": "Auto Backup BD Netdisk",
                 "version": "desktop",
-                "device_id_hint": _short_digest(path_sha256(self.device_id), length=10),
+                "device_id_hint": _device_id_hint(self.device_id),
                 "cloud_api_base_url": self.settings.cloud_api_base_url,
                 "device_credential_source": self.device_credential_source,
                 "device_credential_error": self.device_credential_error,
@@ -734,7 +747,7 @@ class AutoBackupWebviewBridge:
             "account_id": account_id,
             "baidu_uk": _edge_hint(baidu_uk),
             "uid_hint": _edge_hint(baidu_uid or baidu_uk),
-            "device_hint": _edge_hint(device_id),
+            "device_hint": _device_id_hint(device_id),
             "current_device": bool(getattr(account, "current_device", False)),
             "display_name": account.display_name,
             "selected": bool(getattr(account, "selected", False)),
