@@ -1,5 +1,17 @@
 # 执行版本 v1.3：百度网盘加密备份工具完整方案
 
+> 文档状态：历史整合规格。
+>
+> 本文件保留用于追溯 v1.3 早期完整方案。当前开发权威文档已经拆分到 `docs/current/`：
+>
+> - `docs/current/prd.md`：产品需求、用户流程、支持/不支持范围和产品验收。
+> - `docs/current/design.md`：pywebview 前端设计、页面规范、交互与展示边界。
+> - `docs/current/tech.md`：技术栈、架构、API、数据库、凭据、缓存、构建和测试约束。
+> - `docs/current/spec.md`：全 v1.3 任务拆解、状态、依赖、边界和验收标准。
+> - `docs/current/document_change_audit.md`：新旧文档口径修正记录。
+>
+> 当本文件与 `docs/current/` 冲突时，以 `docs/current/` 为准。
+
 ## 1. 产品定稿
 
 本项目做成 **Windows 单机桌面客户端 + 云端索引服务 + 百度网盘官方开放平台**。

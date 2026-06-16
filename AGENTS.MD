@@ -7,11 +7,29 @@
 每次开始开发前必须阅读：
 
 - `AGENTS.MD`
+- `docs/current/README.md`
 - `docs/roadmap_progress.md`
-- 当前相关产品文档或技术文档
+- 当前相关权威文档：`docs/current/prd.md`、`docs/current/design.md`、`docs/current/tech.md`、`docs/current/spec.md`、`docs/current/agents.md`
 - Git 最近提交历史和关键提交摘要
 
 阅读后再开始修改代码、文档或配置。
+
+## 当前文档权威顺序
+
+本项目已将开发文档细化到 `docs/current/`。后续开发不得只依赖旧的长规格文档或进度流水判断边界。
+
+权威顺序：
+
+1. `docs/current/README.md`：当前权威文档入口、阅读路径和旧文档状态。
+2. `docs/current/prd.md`：产品需求、用户流程、支持/不支持范围和产品验收。
+3. `docs/current/spec.md`：全 v1.3 任务拆解、状态、依赖、边界和验收标准。
+4. `docs/current/design.md`：pywebview 前端设计、页面规范、交互与展示边界。
+5. `docs/current/tech.md`：技术栈、架构、API、数据库、凭据、缓存、构建和测试约束。
+6. `docs/current/agents.md`：前后端开发规范、测试命令、提交和文档维护规则。
+7. `docs/current/audit.md`：旧文档冲突、模糊边界、风险和待验证问题。
+8. `docs/current/document_change_audit.md`：新旧文档口径修正记录，用于后续与代码和测试变更校对。
+
+旧文档保留用于追溯，状态见 `docs/legacy/README.md`。当旧文档与 `docs/current/` 冲突时，以 `docs/current/` 为准，并在 `document_change_audit.md` 中记录修正原因。
 
 ## Git 历史阅读约束
 

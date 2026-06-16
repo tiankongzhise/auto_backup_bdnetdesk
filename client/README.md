@@ -2,6 +2,16 @@
 
 客户端源码、测试、迁移和客户端专用说明集中放在本目录，避免把客户端实现散布到仓库根目录。
 
+当前详细产品、设计、技术和任务边界以仓库根目录 `docs/current/` 为准：
+
+- `../docs/current/prd.md`：产品需求和用户流程。
+- `../docs/current/design.md`：pywebview 前端设计和 UI 边界。
+- `../docs/current/tech.md`：客户端架构、凭据、缓存、构建和测试约束。
+- `../docs/current/spec.md`：全 v1.3 任务状态和验收标准。
+- `../docs/current/agents.md`：客户端开发、测试和提交规则。
+
+本文件只保留客户端入口、模块索引和常用命令。若本文件与 `docs/current/` 冲突，以 `docs/current/` 为准，并在 `../docs/current/document_change_audit.md` 记录修正。
+
 ## 当前范围
 
 - `src/auto_backup_client/settings.py`：客户端运行配置读取。

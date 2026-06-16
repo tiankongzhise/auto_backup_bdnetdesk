@@ -8,14 +8,22 @@ Windows 桌面端百度网盘加密备份工具。
 
 项目已完成产品规格、初始化文档、Go 云端同步服务、部署构建脚本、百度网盘云端授权管理、pywebview 工作台 UI、本机 Device Token/KDF 凭据、真实百度上传核心链路、本地 SQLite 上传账本、`uploadid` 断点续传、`sync_outbox` 同步 worker、脱敏联调 CLI、备份任务模型、扫描与内容指纹、内容去重索引、7-Zip AES-256 加密归档与 manifest、端到端备份编排、真实百度全链路验收、Windows 长路径文件访问硬化、缓存额度与 artifact 生命周期管理、来源映射和远端校对、原始数据清理服务、来源级恢复流程服务/CLI、按本机设备拉取云端历史备份记录。仓库以公开项目形式发布，采用 GNU Lesser General Public License v2.1 授权。
 
-当前仍未达到完整 v1.3 桌面端发布状态；剩余主线集中在 P3 阶段 14 打包发布与最终验收。按当前排期估算，离 v1.3 可交付仍约剩 8%-12%。最新差异审计和开发排期以 `docs/roadmap_progress.md` 为准。
+当前仍未达到完整 v1.3 桌面端发布状态；剩余主线集中在 P3 阶段 14 打包发布与最终验收。按当前排期估算，离 v1.3 可交付仍约剩 5%-8%。最新权威开发文档以 `docs/current/` 为准，进度接力以 `docs/roadmap_progress.md` 为准。
 
 ## 文档入口
 
+- `docs/current/README.md`：当前权威文档入口、阅读路径和旧文档状态。
+- `docs/current/prd.md`：产品需求、用户流程、支持/不支持范围和产品验收。
+- `docs/current/design.md`：pywebview 前端设计、页面规范、交互与展示边界。
+- `docs/current/tech.md`：技术栈、架构、API、数据库、凭据、缓存、构建和测试约束。
+- `docs/current/spec.md`：全 v1.3 任务拆解、状态、依赖、边界和验收标准。
+- `docs/current/agents.md`：前后端开发规范、测试命令、提交和文档维护规则。
+- `docs/current/audit.md`：实质审计结论、旧文档冲突和待验证风险。
+- `docs/current/document_change_audit.md`：新旧文档修正记录，用于后续与代码和测试变更校对。
+- `docs/roadmap_progress.md`：开发排期和进度记录。
+- `docs/legacy/README.md`：旧文档和额外功能文档索引。
 - `docs/user_guide.md`：普通 Windows 用户使用说明，覆盖启动、授权、备份、校对、清理、恢复和常见问题。
 - `AGENTS.MD`：项目记忆、协作规则、编码约束、提交规则和安全约束。
-- `docs/product_spec_v1.3.md`：完整产品与技术规格。
-- `docs/roadmap_progress.md`：开发排期和进度记录。
 - `docs/release_acceptance_matrix.md`：P3-14 打包发布与最终验收矩阵。
 - `.env.example`：本地开发环境变量示例。
 - `docs/deployment_nginx_backup_baichengedu.md`：`backup.baichengedu.com`、nginx 反代和百度回调部署示例。
