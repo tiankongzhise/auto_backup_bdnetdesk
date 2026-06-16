@@ -4,7 +4,7 @@
 
 ## 发布构建
 
-当前客户端发布包采用 PyInstaller onedir Windows GUI 方案，入口为 `auto_backup_client.app`，底层启动 PySide6 主窗口。
+当前客户端发布包采用 PyInstaller onedir Windows GUI 方案，入口为 `auto_backup_client.app`，底层启动 pywebview 主窗口并加载打包内置的原生静态 `webui`。
 
 从仓库根目录执行 dry-run：
 

@@ -7,6 +7,7 @@ from auto_backup_client.release_build import (
     APP_NAME,
     ENTRY_SCRIPT,
     SOURCE_ROOT,
+    DEFAULT_WEBUI_DIR,
     PyInstallerBuildConfig,
     build_pyinstaller_args,
     resolve_build_id,
@@ -41,9 +42,17 @@ def test_pyinstaller_args_include_sqlite_migrations_data(tmp_path) -> None:
     migrations_dir = tmp_path / "client" / "migrations" / "sqlite"
     args = build_pyinstaller_args(PyInstallerBuildConfig(migrations_dir=migrations_dir))
 
-    data_arg = _option_value(args, "--add-data")
+    data_args = _option_values(args, "--add-data")
 
-    assert data_arg == f"{migrations_dir}{os.pathsep}migrations/sqlite"
+    assert f"{migrations_dir}{os.pathsep}migrations/sqlite" in data_args
+
+
+def test_pyinstaller_args_include_webui_static_assets() -> None:
+    args = build_pyinstaller_args(PyInstallerBuildConfig(build_id="test-webui-assets"))
+
+    data_args = _option_values(args, "--add-data")
+
+    assert f"{DEFAULT_WEBUI_DIR}{os.pathsep}webui" in data_args
 
 
 def test_pyinstaller_args_append_build_id_to_default_dirs() -> None:
@@ -72,3 +81,7 @@ def test_resolve_build_id_rejects_windows_unsafe_folder_name() -> None:
 def _option_value(args: list[str], option: str) -> str:
     index = args.index(option)
     return args[index + 1]
+
+
+def _option_values(args: list[str], option: str) -> list[str]:
+    return [args[index + 1] for index, value in enumerate(args[:-1]) if value == option]

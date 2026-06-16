@@ -8,7 +8,7 @@
 
 技术栈固定：
 
-- 客户端：Python 3.12 + PySide6。
+- 客户端：Python 3.12 + pywebview + 原生静态 HTML/CSS/JS，Windows 路线使用 WebView2。
 - 本地数据库：SQLite。
 - 云端服务：Go + PostgreSQL，使用 chi、pgx/pgxpool 和 sqlc；部署形态为单二进制 + 外部 PostgreSQL。
 - HTTP：客户端使用 httpx；云端使用 Go net/http + chi。

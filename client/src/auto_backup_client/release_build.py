@@ -22,6 +22,7 @@ DEFAULT_DIST_DIR = REPO_ROOT / "dist" / "client"
 DEFAULT_WORK_DIR = REPO_ROOT / ".cache" / "pyinstaller"
 DEFAULT_SPEC_DIR = REPO_ROOT / ".cache" / "pyinstaller-spec"
 DEFAULT_MIGRATIONS_DIR = CLIENT_ROOT / "migrations" / "sqlite"
+DEFAULT_WEBUI_DIR = SOURCE_ROOT / "auto_backup_client" / "webui"
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class PyInstallerBuildConfig:
     work_dir: Path = DEFAULT_WORK_DIR
     spec_dir: Path = DEFAULT_SPEC_DIR
     migrations_dir: Path = DEFAULT_MIGRATIONS_DIR
+    webui_dir: Path = DEFAULT_WEBUI_DIR
     clean: bool = True
     noconfirm: bool = True
     windowed: bool = True
@@ -43,7 +45,8 @@ def build_pyinstaller_args(config: PyInstallerBuildConfig | None = None) -> list
     dist_dir = selected.dist_dir / build_id
     work_dir = selected.work_dir / build_id
     spec_dir = selected.spec_dir / build_id
-    data_mapping = f"{selected.migrations_dir}{os.pathsep}migrations/sqlite"
+    migrations_mapping = f"{selected.migrations_dir}{os.pathsep}migrations/sqlite"
+    webui_mapping = f"{selected.webui_dir}{os.pathsep}webui"
     args = [
         sys.executable,
         "-m",
@@ -60,7 +63,9 @@ def build_pyinstaller_args(config: PyInstallerBuildConfig | None = None) -> list
         "--paths",
         str(SOURCE_ROOT),
         "--add-data",
-        data_mapping,
+        migrations_mapping,
+        "--add-data",
+        webui_mapping,
     ]
     if selected.clean:
         args.append("--clean")
@@ -80,6 +85,7 @@ def run_pyinstaller(config: PyInstallerBuildConfig, *, dry_run: bool = False) ->
         work_dir=config.work_dir,
         spec_dir=config.spec_dir,
         migrations_dir=config.migrations_dir,
+        webui_dir=config.webui_dir,
         clean=config.clean,
         noconfirm=config.noconfirm,
         windowed=config.windowed,
@@ -102,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK_DIR)
     parser.add_argument("--spec-dir", type=Path, default=DEFAULT_SPEC_DIR)
     parser.add_argument("--migrations-dir", type=Path, default=DEFAULT_MIGRATIONS_DIR)
+    parser.add_argument("--webui-dir", type=Path, default=DEFAULT_WEBUI_DIR)
     parser.add_argument("--name", default=APP_NAME)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-clean", action="store_true")
@@ -114,6 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         work_dir=parsed.work_dir,
         spec_dir=parsed.spec_dir,
         migrations_dir=parsed.migrations_dir,
+        webui_dir=parsed.webui_dir,
         clean=not parsed.no_clean,
     )
     return run_pyinstaller(config, dry_run=parsed.dry_run)

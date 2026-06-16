@@ -11,18 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮插队工作：P3 阶段 14 pywebview UI 重构第二步，输出前端 spec，挂靠打包发布与最终验收，不改变主排期。
-- 本轮计划新增 `client/docs/frontend_spec_pywebview.md`，明确原生静态前端文件结构、bridge API、DTO 脱敏规则、页面行为、状态管理、测试和实现顺序。
-- 本轮完成后继续进入 pywebview UI 替换实现阶段。
+- 本轮插队工作：P3 阶段 14 pywebview UI 重构第三步，实现 pywebview + 原生静态 UI 替换，挂靠打包发布与最终验收，不改变主排期。
+- 本轮计划新增 `webview_app.py`、`webview_bridge.py` 和 `webui/` 静态工作台，替换 `app.py` 入口，调整依赖、测试、打包脚本和相关文档。
+- 本轮完成后回到干净 Windows R04-R14 发布候选验收、安装/升级/卸载验证和真实链路复验。
 
 ## 本次验收标准
 
-- 前端 spec 必须固定 `client/src/auto_backup_client/webui/` 的原生静态文件结构，不引入 React/Vue/Vite/Node 构建链。
-- 前端 spec 必须列出 `window.pywebview.api` bridge 方法、统一成功/错误返回格式、operation 轮询模型和写操作串行化约束。
-- 前端 spec 必须定义核心 DTO 脱敏规则，明确不返回 token、密码、wrapping key、完整本地路径或完整远端路径。
-- 前端 spec 必须覆盖工作台、备份、百度授权、恢复、清理、校对与同步、设置页面的最小可用控件和按钮启停规则。
-- 前端 spec 必须列出 Python bridge 测试、静态前端结构测试、PyInstaller data 测试和验收命令。
-- 本轮只修改文档和进度记录；`git diff --check` 必须通过。
+- `auto_backup_client.app` 必须启动 pywebview 主窗口，并加载打包内置的原生静态 `webui`。
+- `webview_bridge.py` 必须覆盖备份、百度授权、来源映射/远端校对、清理、恢复和 operation 轮询接口，写操作串行化。
+- 前端只通过 `api.js` 调用 `window.pywebview.api`，不使用浏览器持久化存储保存敏感状态。
+- bridge DTO 默认脱敏，不返回 token、密码、wrapping key、完整本地路径或完整远端路径；原生文件选择结果通过临时 source token 回传。
+- 依赖必须由 uv 从 PySide6 切换为 pywebview；移除旧 PySide6 UI 模块和对应 GUI 测试，新增 bridge/static 测试。
+- PyInstaller dry-run 必须包含 SQLite migrations 和 `webui` 静态目录；客户端 pytest、compileall、Go 测试和 `git diff --check` 必须通过。
 
 ## 开发排期
 
@@ -55,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-16：P3-14 pywebview UI 替换实现
+
+变更原因：设计文档和前端 spec 已完成，按用户要求进入第三步实现，将当前 PySide6 UI 替换为 pywebview + 原生静态工作台 UI。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选 UI 体验和技术栈替换插队需求。
+
+验收标准：新增 pywebview 入口、bridge 和静态工作台；替换 `app.py` 启动入口；依赖由 PySide6 切换为 pywebview；删除旧 PySide6 UI 模块和 GUI 测试；PyInstaller 打包包含 `webui`；新增 bridge/static/release_build 测试；客户端 pytest、compileall、Go 测试、发布 dry-run 和 `git diff --check` 通过。
+
+回到主排期条件：本轮实现、测试和提交完成后，回到干净 Windows R04-R14 发布候选验收、安装/升级/卸载验证和真实链路复验。
 
 ### 2026-06-16：P3-14 pywebview UI 前端 spec
 
@@ -207,6 +217,27 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：pywebview UI 替换实现
+
+- P3 阶段 14 pywebview UI 替换实现开发完成；P3 阶段 14 仍在进行中，下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 新增 `client/src/auto_backup_client/webview_app.py`，作为 pywebview 主窗口入口，加载 `webui/index.html` 并通过 `js_api` 注入 bridge。
+- 新增 `client/src/auto_backup_client/webview_bridge.py`，封装备份任务、百度授权、来源映射、远端校对/修复、原始数据清理、恢复和长操作状态查询；写操作通过锁串行化。
+- 新增 `client/src/auto_backup_client/webui/` 原生静态工作台，包含工作台、备份、百度授权、恢复、清理、校对与同步、设置页面；`api.js` 是唯一直接访问 `window.pywebview.api` 的模块。
+- `app.py` 改为启动 pywebview；删除旧 `auto_backup_client/ui/` PySide6 UI 模块和对应 GUI 测试。
+- 使用 uv 移除 PySide6 依赖并新增 `pywebview>=6,<7`，`uv.lock` 同步新增 pywebview、pythonnet、bottle 等运行依赖。
+- 更新 PyInstaller 发布参数，新增 `webui` 静态目录 `--add-data`，保留 SQLite migrations 打包。
+- 新增 `tests/test_webview_bridge.py` 和 `tests/test_webui_static.py`，覆盖 bridge DTO 脱敏、来源选择 token、operation 不泄露密码、清理确认失败状态、静态文件结构、`api.js` 唯一 bridge 访问和前端不使用浏览器持久化存储。
+- 更新 README、客户端 README、百度授权手工验收文档、产品规格和发布验收矩阵，将 UI 技术栈口径从 PySide6 切换为 pywebview。
+- 已验证完整客户端测试：`uv run python -m pytest -p no:cacheprovider --basetemp E:\python_code_object\auto_backup_bdnetdesk\.cache\pytest-basetemp-all`，166 项通过；修正 bridge 适配后复跑 `tests/test_webview_bridge.py tests/test_webui_static.py tests/test_release_build.py`，13 项通过。
+- 已验证 `uv run python -m compileall src tests` 通过，`go test -p=1 ./...` 在 `cloud-api/` 下通过，`client_build.ps1 -DryRun` 输出包含 `webui;webui`，`git diff --check` 通过。
+
+提交摘要：本次提交完成 pywebview UI 替换实现，新增 pywebview 入口、线程安全 bridge 和原生静态工作台，移除旧 PySide6 UI/测试并切换依赖，发布打包加入 webui 静态资源，相关文档与测试同步更新。
+
+后续待办：
+
+- 在干净 Windows 环境执行 R04-R14 发布候选验收，覆盖 WebView2 可用性、安装/升级/卸载、授权、备份、校对、清理、恢复和云同步真实性复验。
+- 后续真实 UI smoke 应重点验证 pywebview 文件/目录选择器、百度授权轮询、长任务 operation 刷新和密码不落日志。
 
 ### P3 阶段 14 打包发布与最终验收：pywebview UI 前端 spec
 

@@ -11,7 +11,7 @@ dependencies = [
     "argon2-cffi>=23.1,<26",
     "cryptography>=42,<47",
     "httpx>=0.27,<1",
-    "pyside6>=6.11.1",
+    "pywebview>=6,<7",
     "qrcode[pil]>=8.2",
 ]
 

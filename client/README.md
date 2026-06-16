@@ -33,10 +33,11 @@
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
 - `src/auto_backup_client/cloud_sync_audit_cli.py`：真实 Cloud Sync 同步真实性审计探针，直接提交无敏感临时 revision 并回读云端 summary，确认不是仅本地假同步。
-- `src/auto_backup_client/ui/main_window.py`：PySide6 主窗口、备份任务页、来源映射页、远端校对页、原始数据清理页和恢复页；写入类动作默认脱敏展示。
-- `src/auto_backup_client/ui/baidu_settings.py`：PySide6 百度设置页，展示账号列表、设备码授权、二维码和授权完成反馈。
+- `src/auto_backup_client/webview_app.py`：pywebview 桌面入口，创建主窗口并加载静态工作台。
+- `src/auto_backup_client/webview_bridge.py`：`window.pywebview.api` bridge，封装备份、授权、校对、清理和恢复业务调用，并串行化写操作。
+- `src/auto_backup_client/webui/`：原生静态 HTML/CSS/JS 工作台 UI，前端只渲染脱敏 DTO。
 
-## PySide6 主窗口
+## pywebview 主窗口
 
 主窗口提供备份任务、百度设置、来源映射、远端校对、云端同步、原始数据清理和恢复入口。备份任务页提供统一“添加来源”和拖拽入口，“添加来源”使用自定义选择器同时选择文件和文件夹，后端自动识别来源类型；任务列表中“开始”只用于待开始任务，“继续”用于运行中、已暂停或等待重试任务。点击“开始/继续”会要求运行时输入归档密码和授权密码，然后在后台调用 `BackupPipeline` 执行扫描、去重、按每个选择源生成 7-Zip 加密归档、百度上传、Cloud Sync、远端校对和 completed final sync。归档密码和授权密码只保留在本次内存调用中，启动后会清空输入框，不写入 SQLite、日志或 UI 状态。来源映射、原始数据清理和恢复页刷新前会共用本机设备历史拉取 helper，按本机 `device_id` 幂等导入云端历史；页面主筛选使用任务下拉，默认“全部最近记录”，显示任务名、状态、更新时间和来源数，不要求普通用户输入内部 `backup_job_id`。远端校对页可按 job、upload session 或 remote dir 调用真实百度 `list/listall` 生成差异报告，校对对象是本地 `remote_objects/upload_sessions` 与百度网盘实际结果；云端 PostgreSQL summary 回读在“云端同步”页完成。原始数据清理页只列出已完成、已验证、远端对象已确认且源文件未变化的候选，默认移入 Windows 回收站；永久删除默认隐藏在高级选项中，且必须额外填写确认短语。恢复页按用户备份时选择的来源聚合候选，选择手动目录或原路径，运行时输入归档密码后整包解压 archive 并只恢复所选来源范围；文件夹来源恢复到手动目录时会保留来源根文件夹和内部结构，本地 archive 缺失但远端 archive 已确认时，恢复页会要求授权密码并通过真实百度 dlink 拉取 archive 后再校验恢复。
 
@@ -46,7 +47,7 @@ $env:UV_LINK_MODE='copy'
 $env:UV_CACHE_DIR='..\.cache\uv'
 $env:LOCAL_SQLITE_PATH='..\var\data\backup_state.sqlite3'
 $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
-uv run python -m auto_backup_client.ui.main_window
+uv run python -m auto_backup_client.app
 ```
 
 `backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。备份执行摘要只展示文件数、归档数量、上传分片总数和阶段结果，不输出本地 SQLite 路径、缓存路径、远端真实路径、Device Token、百度 token、用户密码或 wrapping key。来源映射、远端校对和云端同步 UI 同样不把这些敏感内容输出到界面日志。
@@ -205,7 +206,7 @@ uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --pass
 
 `restore_cli` 和恢复页输出只展示数量、状态、来源名、文件数、content/archive hash 和路径 hash，不输出完整本地来源路径、目标路径、SQLite 路径、缓存路径、归档密码或百度 token。每个实际恢复出的文件都会写入 `restore_records`，并同事务更新对应 `content_references.restore_status`；同步 payload 会过滤 `target_path`、`final_path` 和 `archive_path`。
 
-## PySide6 百度设置页
+## 百度授权
 
 运行前通过运行时环境提供真实云端配置：
 
@@ -213,7 +214,7 @@ uv run python -m auto_backup_client.restore_cli --cache-root ..\var\cache --pass
 cd client
 $env:UV_LINK_MODE='copy'
 $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
-uv run python -m auto_backup_client.ui.baidu_settings
+uv run python -m auto_backup_client.app
 ```
 
 页面启动时如果没有 `CLOUD_API_DEVICE_TOKEN`，会自动注册当前设备，并把 Device Token 保存到本机 DPAPI 凭据文件；也可通过运行时环境临时提供 `CLOUD_API_DEVICE_TOKEN`。页面会直接调用真实云端 API 读取账号、选择账号、生成扫码授权、轮询状态并自动完成密文 token 写入。完成授权后，客户端会按 `account_id` 保存 password KDF salt/参数；后续可选中账号并点击“验证解密”，用同一授权密码重新派生 wrapping key 并验证云端密文 token 可本地解密。

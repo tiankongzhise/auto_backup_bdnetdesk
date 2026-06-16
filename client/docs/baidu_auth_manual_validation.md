@@ -1,6 +1,6 @@
 # 百度授权客户端核心手动验收
 
-本说明覆盖 `client/` 目录内的百度授权核心库、真实联调 CLI 和 PySide6 百度设置页。
+本说明覆盖 `client/` 目录内的百度授权核心库、真实联调 CLI 和 pywebview 百度授权页。
 
 ## 前置条件
 
@@ -21,9 +21,9 @@
    uv run pytest
    ```
 
-2. 使用 PySide6 UI 或 `BaiduCloudClient` 调用 `create_auth_session(flow="device_code")`，确认返回扫码授权材料，响应中不包含百度 `device_code`、access token 或 refresh token。
+2. 使用 pywebview UI 或 `BaiduCloudClient` 调用 `create_auth_session(flow="device_code")`，确认返回扫码授权材料，响应中不包含百度 `device_code`、access token 或 refresh token。
 
-3. 在 PySide6 UI 中输入授权密码，点击“生成扫码授权”，使用百度 App 扫码确认授权。UI 轮询到授权可完成后会自动调用 `complete_auth_session(...)`，password 模式下只传入本地派生出的 32 字节 wrapping key；不得传入或保存用户明文密码。客户端会按 `account_id` 保存 KDF salt 和 Argon2id 参数，用于后续用同一授权密码重新派生同一个 wrapping key。
+3. 在 pywebview UI 中输入授权密码，点击“开始授权”，使用百度 App 扫码确认授权。UI 轮询到授权可完成后调用 `complete_auth_session(...)`，password 模式下只传入本地派生出的 32 字节 wrapping key；不得传入或保存用户明文密码。客户端会按 `account_id` 保存 KDF salt 和 Argon2id 参数，用于后续用同一授权密码重新派生同一个 wrapping key。
 
 4. 重启客户端进程后，调用 `token-check` 或 UI “验证解密”，确认本地 KDF 参数可以重新派生 wrapping key，并成功解密云端密文 token。明文 token 只存在于进程内存，不写日志、不写 `.env`、不写数据库或缓存文件。
 
@@ -59,16 +59,16 @@ uv run python -m auto_backup_client.baidu.real_auth_cli token-check --password-e
 
 CLI 会优先使用运行时 `CLOUD_API_DEVICE_TOKEN`，否则复用本机 DPAPI Device Token 凭据；如本机尚无凭据，会自动注册当前设备并保存。需要一次性临时设备时，可加 `--register-ephemeral-device`，脚本只在当前进程内使用返回的 token，不写入文件。`token-check` 只输出账号 ID、token version、过期时间、token type 和 scope 等脱敏元数据，不输出 access token 或 refresh token。
 
-## PySide6 UI 联调
+## pywebview UI 联调
 
 ```powershell
 cd client
 $env:UV_LINK_MODE='copy'
 $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
-uv run python -m auto_backup_client.ui.baidu_settings
+uv run python -m auto_backup_client.app
 ```
 
-页面会调用真实云端 API 展示账号列表、选择账号、生成扫码授权二维码，并在扫码确认授权后自动提交本地派生 wrapping key 完成密文 token 入库。完成授权后可重启页面，输入同一授权密码并点击“验证解密”，确认 KDF 参数持久化材料可恢复云端密文 token 本地解密能力。
+页面会调用真实云端 API 展示账号列表、选择账号、生成扫码授权材料，并在扫码确认授权后由用户点击“完成授权”提交本地派生 wrapping key 完成密文 token 入库。完成授权后可重启页面，输入同一授权密码启动备份、恢复或校对任务，确认 KDF 参数持久化材料可恢复云端密文 token 本地解密能力。
 
 ## 需要人工停顿的场景
 
