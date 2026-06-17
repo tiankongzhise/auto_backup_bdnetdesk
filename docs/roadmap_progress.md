@@ -11,18 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：P3 阶段 14 `AGENTS.MD` 发布到中央 agents 仓库，属于用户明确插入的开发协作工具治理需求，不改变主排期。
-- 用户反馈阻塞：上一轮只完成 `agents-md-sync` 更新和发布授权配置，尚未把当前项目 `AGENTS.MD` 推送到中央 `agents_repo`；同时用户指出按仓库名 `auto_backup_bdnetdesk` 作为分支会导致不同 GitHub owner 的同名项目冲突，应使用 `tiankongzhise/auto_backup_bdnetdesk`。
-- 本轮计划范围：依据 `.agents-sync.json` 的用户授权，将当前项目 `AGENTS.MD` 发布到中央仓库 `git@github.com:tiankongzhise/agents_repo.git` 的 `tiankongzhise/auto_backup_bdnetdesk` 分支，并记录新版 `agents-md-sync` 中“只用仓库名、不用 owner”的分支命名口径需要后续修正。
-- 本轮完成后继续回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 本轮工作：进入主排期下一阶段，补齐 P3 阶段 14 R14 敏感信息审计自动化入口，为干净 Windows R04-R14 发布候选验收提供可重复执行的机器检查。
+- 当前阶段判断：上一轮 `AGENTS.MD` 中央仓库发布已完成，主排期回到 P3 阶段 14 干净 Windows R04-R14；R04-R13 仍需要真实干净机和真实账号操作，R14 的 dist、日志、SQLite outbox 和 UI 输出敏感信息审计可以先实现为本地 CLI。
+- 本轮计划范围：新增客户端 `release_sensitive_audit` CLI，支持扫描发布目录、日志/UI 文本输出和 SQLite `sync_outbox`，识别 `.env`、本地 SQLite/缓存产物、Device Token、百度 token、授权/归档密码、wrapping key、明文 manifest 和完整本地路径等发布阻塞泄漏；补充自动化测试、发布验收矩阵和进度记录。
+- 本轮完成后继续执行 P3 阶段 14 干净 Windows R04-R13 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
 
 ## 本次验收标准
 
-- 发布前必须校验 `.agents-sync.json` 中 `enabled=true`、`auto_publish_on_agents_change=true` 和 `publish_authorization.granted=true`。
-- 发布前必须确认本地文件为 `AGENTS.MD`，目标中央仓库为 `git@github.com:tiankongzhise/agents_repo.git`。
-- 中央发布分支必须使用 `tiankongzhise/auto_backup_bdnetdesk`，不得使用仅仓库名 `auto_backup_bdnetdesk`。
-- 中央分支 `AGENTS.md` 必须来自当前项目 `AGENTS.MD`，有差异才提交，提交信息使用中文。
-- 推送完成后必须用 `git ls-remote --heads` 核验远端分支 ref，记录中央提交哈希；运行 `git diff --check` 通过。
+- `release_sensitive_audit` CLI 可对一个或多个 `--scan-path` 扫描文本/文件名，可对一个或多个 `--sqlite-path` 检查 `sync_outbox`，发现泄漏时返回非 0 并只输出脱敏位置和类型。
+- 审计规则必须覆盖 `.env`、SQLite 数据库文件、明文备份 manifest、`Authorization: Bearer ...`、`bdn_...` Device Token、access/refresh token、password/wrapping key/private key 字段值和完整 Windows 本地路径。
+- SQLite outbox 检查必须解析 `payload_json`，拒绝本地敏感字段进入同步 payload，并检查 `last_error` 不包含敏感路径或 token。
+- 定向 pytest 覆盖通过场景、文件扫描泄漏、SQLite outbox 泄漏和 CLI 输出脱敏；`git diff --check` 通过。
+- 发布矩阵 R14 更新为开发机自动化入口已补齐，干净 Windows 仍需在真实 dist/log/SQLite/UI 输出上执行。
 
 ## 开发排期
 
@@ -43,7 +43,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复、稳定 Device ID 修复和本机设备摘要/授权密码验证入口修复已完成，P3 阶段 14 尚未整体完成 | 当前进入干净 Windows R04-R14：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复、稳定 Device ID 修复、本机设备摘要/授权密码验证入口修复和 R14 敏感信息审计自动化入口已完成，P3 阶段 14 尚未整体完成 | 当前进入干净 Windows R04-R13：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试；R14 需在真实产物上执行自动化审计 |
 
 ## 进度差异审计
 
@@ -297,6 +297,26 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：R14 敏感信息审计自动化入口
+
+- P3 阶段 14 R14 敏感信息审计自动化入口开发完成；P3 阶段 14 仍在进行中，下一个开发阶段为 P3 阶段 14 干净 Windows R04-R13 真实发布候选验收和 R14 真实产物审计。
+- 新增 `auto_backup_client.release_sensitive_audit` CLI，支持扫描发布目录、日志目录、UI 文本输出和指定 SQLite `sync_outbox`。
+- 文件扫描可识别 `.env`、发布目录中的 SQLite 数据库、明文 manifest、Bearer/Device Token、百度 access/refresh token、授权/归档密码、wrapping key、private key 和完整 Windows 本地路径。
+- SQLite outbox 检查会解析 `payload_json`，识别本地敏感字段、嵌套 token/password/key 字段和 `last_error` 中的敏感路径或 token；显式传入 `--sqlite-path` 时数据库本身不作为泄漏，但 outbox 内容必须干净。
+- CLI 发现泄漏时返回非 0，只输出脱敏 finding 类型、文件尾部路径或 event 短 ID，不回显敏感原文。
+- 更新 `client/README.md`、`docs/current/spec.md`、`docs/current/tech.md` 和 `docs/release_acceptance_matrix.md`，固定 R14 自动化命令、通过标准和“干净机仍需用真实产物执行”的边界。
+- 已验证 `client/` 下定向 `uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-basetemp-r14 tests/test_release_sensitive_audit.py tests/test_release_build.py` 通过，10 项通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证 `client/` 下全量 `uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-basetemp-full-r14` 通过，193 项通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交补齐 P3 阶段 14 R14 敏感信息审计自动化入口，新增发布候选敏感信息扫描 CLI 和测试，能够对 dist、日志/UI 文本和 SQLite outbox 做可重复的脱敏泄漏检查；发布矩阵同步更新为开发机入口已补齐，但干净 Windows 仍需用真实产物执行 R04-R13 与 R14 审计。
+
+后续待办：
+
+- P3 阶段 14 下一个开发阶段为干净 Windows R04-R13 真实发布候选验收，并在真实 dist、运行日志、UI 输出和本地 SQLite 上执行 R14 `release_sensitive_audit`。
+- 若真实产物审计发现泄漏，必须作为 P3 阶段 14 发布候选阻塞修复记录到本文件，再修复、复测并提交。
 
 ### P3 阶段 14 打包发布与最终验收：AGENTS.MD 发布到中央 agents 仓库
 

@@ -67,7 +67,7 @@ PyInstaller 官方文档获取记录：
 | R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动，或使用新 exe 搭配空本地 SQLite 启动备份/来源映射/清理/恢复页 | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等；若本机 Device Token 仍在，相关页面可按本机 `device_id` 从云端拉取本设备历史备份记录并重建任务列表、来源映射、清理候选和来源级恢复候选 | 开发机自动化已覆盖云端历史 payload 重建空 SQLite、共享历史刷新和恢复候选；干净机待执行 |
 | R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据 | 程序目录可移除；用户数据、凭据和缓存清理边界清晰 | 待执行 |
 | R13 | 云同步真实性审计 | 开发机/干净 Windows | 运行 `auto_backup_client.cloud_sync_audit_cli` | 真实云端 `/v1/readyz` 为 ready；探针 revision 返回 `synced`；`GET /v1/reconcile/entities/{entity_id}` 回读 `revision_id`、`data_version`、`canonical_record_sha256` 匹配；重复提交同一 revision 返回 `duplicate` | 开发机已验收：`first_sync_status=synced`、`summary_matched=true`、`duplicate_sync_status=duplicate`、`duplicate_verified=true`、`cloud_sync_truthful=true`；干净机待复验 |
-| R14 | 敏感信息审计 | 开发机/干净 Windows | 检查 dist、日志、SQLite outbox 和 UI 输出 | 无 `.env`、token、密码、wrapping key、明文 manifest 或完整敏感路径泄漏 | 待执行 |
+| R14 | 敏感信息审计 | 开发机/干净 Windows | 运行 `auto_backup_client.release_sensitive_audit` 检查 dist、日志、SQLite outbox 和 UI 输出 | 无 `.env`、token、密码、wrapping key、明文 manifest、SQLite 数据库文件或完整敏感路径泄漏；CLI 发现泄漏时只输出脱敏 finding | 开发机自动化入口已补齐，干净机真实 dist/log/SQLite/UI 输出待执行 |
 
 ## 发布阻塞项
 
@@ -75,6 +75,25 @@ PyInstaller 官方文档获取记录：
 - 尚未生成最终安装器；当前是 onedir 发行目录，后续可在同一矩阵基础上接入安装器。
 - 覆盖恢复仍未开放；如发布前要求覆盖恢复，必须先实现覆盖前回收站保护并新增验收项。
 - 云同步真实性审计不得只看本地 `sync_outbox` 状态；必须保留真实 Cloud Sync API 写入和云端 summary 回读匹配证据，确认不是虚假同步。
+- R14 自动化审计只能证明指定输入未泄漏；干净机验收时仍必须把实际发布目录、运行日志、UI 导出文本和真实本地 SQLite 作为输入执行。
+
+## R14 敏感信息审计命令
+
+开发机或干净 Windows 生成发布目录后，在 `client/` 下执行：
+
+```powershell
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path ..\var\data\backup_state.sqlite3
+```
+
+如需同时检查日志或 UI 导出文本，可重复传入 `--scan-path`：
+
+```powershell
+uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --scan-path <日志目录> --scan-path <UI导出文本> --sqlite-path <本地SQLite>
+```
+
+通过标准：命令返回 0，输出 `release_sensitive_audit_passed: true`。若发现 `.env`、SQLite 数据库文件、明文 manifest、`Authorization: Bearer ...`、`bdn_...` Device Token、百度 access/refresh token、授权/归档密码、wrapping key、private key、完整 Windows 本地路径或敏感 outbox 字段，命令必须返回非 0，且 finding 输出不得回显敏感原文。
 
 ## P3-14 发布候选体验与恢复同步修复记录
 

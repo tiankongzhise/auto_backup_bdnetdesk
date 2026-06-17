@@ -85,7 +85,7 @@
 | R11 升级 | 待做 | DPAPI 凭据、SQLite 迁移 | 稳定 `device_id` 不能变。 | 新包能读取旧凭据和历史。 |
 | R12 卸载/清理 | 待做 | 发布目录、用户数据目录 | 删除程序不等于删除用户数据。 | 程序目录和用户数据边界清晰。 |
 | R13 云同步真实性审计 | 待做干净机复验 | 真实云端 | 不能只看本地 outbox。 | summary matched、duplicate verified。 |
-| R14 敏感信息审计 | 待做 | dist、日志、SQLite、UI | 无敏感文件和敏感输出。 | dist/log/UI/outbox 无 token/password/key/manifest 明文。 |
+| R14 敏感信息审计 | 进行中 | dist、日志、SQLite、UI | 无敏感文件和敏感输出；自动化入口只能证明指定输入，不替代干净机实际产物审计。 | `release_sensitive_audit` 开发机入口已补齐；干净机 dist/log/UI/outbox 仍需执行无 token/password/key/manifest 明文验收。 |
 
 ## Spec 审计结论
 

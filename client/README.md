@@ -43,6 +43,7 @@
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
 - `src/auto_backup_client/cloud_sync_audit_cli.py`：真实 Cloud Sync 同步真实性审计探针，直接提交无敏感临时 revision 并回读云端 summary，确认不是仅本地假同步。
+- `src/auto_backup_client/release_sensitive_audit.py`：P3-14 R14 发布候选敏感信息审计入口，扫描 dist、日志/UI 文本和 SQLite `sync_outbox`，发现泄漏时只输出脱敏 finding。
 - `src/auto_backup_client/webview_app.py`：pywebview 桌面入口，创建主窗口并加载静态工作台。
 - `src/auto_backup_client/webview_bridge.py`：`window.pywebview.api` bridge，封装备份、授权、校对、清理和恢复业务调用，并串行化写操作。
 - `src/auto_backup_client/webui/`：原生静态 HTML/CSS/JS 工作台 UI，前端只渲染脱敏 DTO。
@@ -96,6 +97,17 @@ SQLite 迁移目录定位顺序为：
 3. 源码树 `client/migrations/sqlite`。
 
 PyInstaller 官方依据已记录在 `docs/release_acceptance_matrix.md`。当前发布包仍需完成干净 Windows 安装、授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计矩阵后，才能作为 v1.3 可交付发布。
+
+R14 敏感信息审计可在生成发布目录、收集 UI 导出或日志后执行。`--scan-path` 用于 dist、日志目录或 UI 文本文件；`--sqlite-path` 用于检查指定 SQLite 的 `sync_outbox.payload_json` 和 `last_error`。显式传入的 SQLite 数据库本身不会被当作泄漏，但发布目录里出现 `.sqlite/.sqlite3/.db` 文件会被判为阻塞。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path ..\var\data\backup_state.sqlite3
+```
+
+通过标准是 `release_sensitive_audit_passed: true`。发现 `.env`、SQLite 数据库文件、明文 manifest、Device Token、百度 access/refresh token、授权/归档密码、wrapping key、private key、完整 Windows 本地路径或敏感 outbox 字段时返回非 0。输出只包含脱敏后的文件尾部路径、事件短 ID 和 finding 类型，不回显敏感原文。
 
 ## 扫描与内容指纹
 

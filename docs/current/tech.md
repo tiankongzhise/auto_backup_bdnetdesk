@@ -211,6 +211,15 @@ $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.cloud_sync_audit_cli
 ```
 
+R14 敏感信息审计：
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path ..\var\data\backup_state.sqlite3
+```
+
 ## 技术审计结论
 
 旧文档的主要问题不是缺少信息，而是信息归属混乱。技术约束散落在 PRD、README、进度记录、手动验收和沉淀问题中，导致开发者容易只读到其中一份就误判边界。
