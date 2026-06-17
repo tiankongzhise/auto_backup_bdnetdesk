@@ -15,7 +15,8 @@ Windows 桌面端百度网盘加密备份工具。
 - `docs/current/README.md`：当前权威文档入口、阅读路径和旧文档状态。
 - `docs/current/prd.md`：产品需求、用户流程、支持/不支持范围和产品验收。
 - `docs/current/design.md`：pywebview 前端设计、页面规范、交互与展示边界。
-- `docs/current/tech.md`：技术栈、架构、API、数据库、凭据、缓存、构建和测试约束。
+- `docs/current/tech.md`：技术栈、架构、凭据、缓存、构建和测试约束。
+- `docs/current/api_database_contract.md`：云端 HTTP API、pywebview bridge API、百度 API、SQLite/PostgreSQL schema、同步 payload 和版本字段契约。
 - `docs/current/spec.md`：全 v1.3 任务拆解、状态、依赖、边界和验收标准。
 - `docs/current/agents.md`：前后端开发规范、测试命令、提交和文档维护规则。
 - `docs/current/audit.md`：实质审计结论、旧文档冲突和待验证风险。

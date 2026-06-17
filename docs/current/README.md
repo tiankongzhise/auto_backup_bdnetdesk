@@ -10,16 +10,17 @@
 | 2 | `docs/current/prd.md` | 产品目标、用户流程、支持/不支持范围和产品验收。 |
 | 3 | `docs/current/spec.md` | 全 v1.3 任务拆解、状态、依赖、边界和验收标准。 |
 | 4 | `docs/current/design.md` | pywebview 前端设计、页面规范、交互与展示边界。 |
-| 5 | `docs/current/tech.md` | 技术栈、架构、API、数据库、凭据、缓存、构建和测试约束。 |
-| 6 | `docs/current/agents.md` | 前后端开发规范、测试命令、提交和文档维护规则。 |
-| 7 | `docs/current/audit.md` | 实质审计结论、旧文档冲突、风险和待验证问题。 |
-| 8 | `docs/current/document_change_audit.md` | 新旧文档口径差异，用于后续与代码和测试变更校对。 |
+| 5 | `docs/current/tech.md` | 技术栈、架构、凭据、缓存、构建和测试约束。 |
+| 6 | `docs/current/api_database_contract.md` | 云端 HTTP API、pywebview bridge API、百度 API、SQLite/PostgreSQL schema、同步 payload 和版本字段契约。 |
+| 7 | `docs/current/agents.md` | 前后端开发规范、测试命令、提交和文档维护规则。 |
+| 8 | `docs/current/audit.md` | 实质审计结论、旧文档冲突、风险和待验证问题。 |
+| 9 | `docs/current/document_change_audit.md` | 新旧文档口径差异，用于后续与代码和测试变更校对。 |
 
 ## 开发前阅读路径
 
 - 产品功能变更：先读 `prd.md`，再读 `spec.md` 对应任务，最后读 `tech.md` 中相关技术边界。
 - UI 或交互变更：先读 `design.md`，再读 `spec.md` 对应任务和 `agents.md` 前端规范。
-- 云端、百度 API、SQLite、凭据、同步、上传、恢复或发布变更：先读 `tech.md`，再读 `spec.md`，必要时查 `docs/baidu_netdisk_openapi_reference.md` 或部署文档。
+- 云端、百度 API、SQLite、凭据、同步、上传、恢复或发布变更：先读 `tech.md` 和 `api_database_contract.md`，再读 `spec.md`，必要时查 `docs/baidu_netdisk_openapi_reference.md` 或部署文档。
 - 真实联调、发布验收或干净机测试：先读 `spec.md` 的 P3-14，再读 `docs/release_acceptance_matrix.md`。
 - 修改文档本身：必须同时维护 `audit.md` 或 `document_change_audit.md` 中对应的审计记录。
 
@@ -44,6 +45,7 @@
 
 - 新增或修改功能时，先更新 `prd.md` 和 `spec.md`，再改代码。
 - 涉及 UI 表现时，同步更新 `design.md`。
-- 涉及技术栈、API、数据结构、凭据、部署或测试时，同步更新 `tech.md`。
+- 涉及技术栈、凭据、部署或测试时，同步更新 `tech.md`。
+- 涉及云端 HTTP API、pywebview bridge API、百度 API、SQLite/PostgreSQL schema、同步 payload 或版本字段时，必须先同步更新 `api_database_contract.md`。
 - 如果新文档修正了旧文档口径，必须在 `document_change_audit.md` 增加记录。
 - 如果发现旧文档模糊、冲突或与代码不一致，必须在 `audit.md` 记录处理结果。

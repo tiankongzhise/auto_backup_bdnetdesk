@@ -106,9 +106,9 @@ Python 入口：
   - 返回账号/设备绑定行，设备 ID 只返回前四后四摘要和本机标记。
 - `start_baidu_authorization()`
   - 返回 `session_id`、用户码、授权 URL、二维码 URL/文本、过期时间。
-- `poll_baidu_authorization(session_id)`
+- `poll_baidu_authorization()`
   - 返回等待、已授权、过期、失败等状态。
-- `complete_baidu_authorization(session_id, authorization_password)`
+- `complete_baidu_authorization(authorization_password)`
   - 完成 token 加密入库；返回账号摘要。
 - `select_baidu_account(account_id)`
   - 选择当前账号。
@@ -150,7 +150,7 @@ Python 入口：
 ### 4.7 长操作
 
 - `get_operation(operation_id)`
-  - 返回 `queued/running/succeeded/failed/canceled`、阶段、进度、脱敏消息、结果摘要。
+  - 返回 `pending/running/completed/failed/canceling`、阶段、进度、脱敏消息、结果摘要。
 - `cancel_operation(operation_id)`
   - 标记取消请求。第一版允许不可中断底层任务完成当前阶段后停止；UI 必须诚实显示“正在请求取消”。
 

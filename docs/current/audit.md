@@ -32,6 +32,7 @@
 | 主题 | 旧风险 | 新口径 |
 | --- | --- | --- |
 | 文档权威 | `product_spec_v1.3.md` 既像 PRD 又像 tech/spec。 | `prd.md`、`design.md`、`tech.md`、`spec.md` 分工明确。 |
+| API 与数据库契约 | 云端 API、bridge API、百度 API 参数和 SQLite/PostgreSQL 表结构散在代码、迁移、旧规格和 README 中。 | `api_database_contract.md` 作为接口、返回、错误、示例、schema、同步 payload 和版本字段的单一对照文档。 |
 | UI 技术栈 | 旧记录仍混有 PySide6 阶段历史。 | 当前 v1.3 UI 为 pywebview + 原生静态 Web UI。 |
 | 发布状态 | “基本完成”“进行中”容易被误读为可发布。 | P3-14 仍未完成，干净 Windows R04-R14 是发布前硬门槛。 |
 | 设备 ID | 曾出现摘要口径不清和版本变化风险。 | `device_id` 由本机固定特征派生，client version 不参与。 |
@@ -76,6 +77,16 @@
 
 新文档不再把 PySide6 当作当前 UI 实现；只在历史问题和旧文档索引中保留 PySide6 阶段记录。
 
+本轮 API/数据库契约补强对齐了以下真实来源：
+
+- Go `/v1` 路由、请求/响应类型和错误包络来自 `cloud-api/internal/cloudapi/server.go`、`types.go` 和 `baidu_types.go`。
+- SQLite schema 和同步字段来自 `client/migrations/sqlite/*.sql` 和 `sqlite_store.py`。
+- PostgreSQL schema、revision 投影和 schema readiness 来自 `cloud-api/migrations/postgres/*.sql`、`postgres_store.go` 和 `index_payload.go`。
+- pywebview bridge 方法、返回包络和 operation DTO 来自 `webview_bridge.py` 与前端 `api.js`。
+- 百度 API 调用口径来自 `docs/baidu_netdisk_openapi_reference.md` 和 `baidu/upload.py`；2026-06-17 本轮重新通过提升后的 `curl.exe` 获取到官方“预上传”页面 HTML。
+
+本轮同步修正了 `client/docs/frontend_spec_pywebview.md` 中 `poll_baidu_authorization(session_id)`、`complete_baidu_authorization(session_id, authorization_password)` 和 operation 状态枚举等已确认过时签名。仍需代码级校对：`webview_bridge.py#get_cloud_sync_summary` 引用了 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段，后续修复云端同步页面时必须按 `api_database_contract.md` 对齐。
+
 ## 安全边界检查
 
 已集中明确：
@@ -106,4 +117,5 @@
 - 最终安装器尚未完成，当前是 onedir 发布目录。
 - 覆盖恢复仍未实现，若需要必须单独设计回收站保护。
 - 上传失败重试 UI 仍可进一步细化。
+- pywebview bridge 的云端同步 summary DTO 字段需要按 `api_database_contract.md` 做代码级对齐。
 - 旧文档中历史完成记录很多，后续若发现与代码不一致，应继续补充 `document_change_audit.md`。

@@ -11,18 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：P3 阶段 14 文档体系重构、实质审计与变更校对，属于用户明确插入的开发文档治理需求，不改变主排期。
-- 用户反馈阻塞：当前 `docs/product_spec_v1.3.md`、`client/README.md`、`docs/roadmap_progress.md` 等文档混合了 PRD、设计、技术、spec、进度流水和协作规则，边界不清导致后续开发容易误判范围、重复修复和引入 BUG。
-- 本轮计划范围：新增 `docs/current/` 权威文档体系，拆分 PRD、Design、Tech、Spec、Agents、Audit 和新旧文档变更校对；新增 `docs/legacy/README.md` 保留旧文档与额外功能文档索引；更新 README、客户端 README、根 `AGENTS.MD` 和历史规格入口，使后续开发以新文档为准。
+- 本轮工作：P3 阶段 14 API 与数据库契约文档补强，属于用户明确插入的开发文档治理需求，不改变主排期。
+- 用户反馈阻塞：各 API 接口的传参、调用方式、成功返回、错误返回、典型示例和各数据库具体结构散在 Go/Python 代码、迁移、旧规格和验收记录中，没有一个明确文档约束与对照，后续修复和新增容易出现契约对齐错误。
+- 本轮计划范围：新增或补强 `docs/current/` 下的 API 与数据库契约文档，覆盖云端 HTTP API、pywebview bridge API、百度 API 使用边界、本地 SQLite schema、云端 PostgreSQL schema、同步 payload 与版本字段，并更新权威入口、技术文档、开发规范、审计和变更校对记录。
 - 本轮完成后继续回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ## 本次验收标准
 
-- 新增 `docs/current/README.md`、`prd.md`、`design.md`、`tech.md`、`spec.md`、`agents.md`、`audit.md` 和 `document_change_audit.md`，并新增 `docs/legacy/README.md`。
-- 新文档必须进行实质审计：明确需求完整性、支持/不支持边界、开发可执行性、技术一致性、安全边界、P3-14 剩余缺口和文档美观性，不得只是形式拆分或原文搬运。
-- `docs/current/document_change_audit.md` 必须记录旧口径、新口径、修正原因、代码/测试/Git 依据和后续校对点，方便后续与实际代码变更对账。
-- `spec.md` 必须覆盖全 v1.3 已完成、进行中和待完成任务，并显式保留 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
-- 更新 `AGENTS.MD`、`README.md`、`client/README.md`、`docs/product_spec_v1.3.md` 和 `docs/roadmap_progress.md` 的入口口径；旧文档和额外功能文档必须保留并通过索引标注权威性。
+- 契约文档必须覆盖云端 HTTP API 的认证方式、路径、方法、请求参数、成功返回、错误返回和典型示例。
+- 契约文档必须覆盖 pywebview bridge API 的前端调用方式、参数、同步/异步返回、operation 轮询、错误包络和敏感信息边界。
+- 契约文档必须覆盖本地 SQLite 与云端 PostgreSQL 的表结构、主键/唯一约束、关键索引、版本/同步字段和写入责任。
+- 契约文档必须明确百度官方 API 在本项目中的调用顺序、关键参数、成功/错误判断和官方文档/离线依据，不把未核验内容写成已核验事实。
+- 更新 `docs/current/README.md`、`tech.md`、`agents.md`、`audit.md`、`document_change_audit.md` 和 `docs/roadmap_progress.md`，约束后续接口、数据库、同步 payload 变更必须优先对齐契约文档。
 - 本次只改文档，运行 `git diff --check` 通过；不跑 Python/Go 全量测试。
 
 ## 开发排期
@@ -56,6 +56,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-17：P3-14 API 与数据库契约文档补强
+
+变更原因：用户指出各 API 接口的传参、调用方式、正确返回、错误返回、典型示例和各数据库具体结构散在项目各处，没有一个明确文档约束与对照，导致开发容易出现接口和库表契约对齐错误。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选验收前的技术契约治理和后续维护约束补强。
+
+验收标准：新增或补强 `docs/current/` 下的 API 与数据库契约文档，覆盖云端 HTTP API、pywebview bridge API、百度 API 使用边界、SQLite/PostgreSQL schema、同步 payload 与版本字段；入口 README、Tech、Agents、Audit、DCA 和进度记录同步约束后续接口/数据库变更必须先对齐契约文档；`git diff --check` 通过。
+
+回到主排期条件：本轮契约文档、入口约束、审计记录、变更校对记录和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-16：P3-14 文档体系重构、实质审计与变更校对
 
@@ -268,6 +278,29 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：API 与数据库契约文档补强
+
+- P3 阶段 14 API 与数据库契约文档补强开发完成；下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 本轮属于用户明确插入的技术契约治理需求，不改变主排期；完成后回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 新增 `docs/current/api_database_contract.md`，集中记录云端 HTTP API、pywebview bridge API、百度网盘 API、本地 SQLite、云端 PostgreSQL、Cloud Sync payload、版本字段和变更前检查清单。
+- 云端 HTTP API 契约覆盖 Device Token 认证、统一错误包络、设备注册/current、health/ready、sync revisions、summary 回读、content/archive 查询、设备历史、百度授权 session、账号选择、密文 token 读取/回写和 refresh 租约，并补充典型请求、成功响应、错误响应和状态枚举。
+- pywebview bridge 契约覆盖前端 `call()` 调用方式、`ok/data/error` 包络、operation DTO、长操作轮询、各 bridge 方法参数/返回、敏感 DTO 边界和典型调用示例。
+- 百度 API 契约按项目实际调用链记录 `quota -> precreate -> locateupload -> superfile2 -> create -> list/listall -> filemetas/dlink -> filemanager/delete`，并明确本轮只重新通过提升后的 `curl.exe` 获取到官方“预上传”页面，其余接口沿用仓库已有官方离线摘录和现有代码依据。
+- SQLite 契约覆盖 `sync_outbox`、上传账本、任务/来源、扫描、去重、归档、缓存、清理、恢复和迁移记录表，明确主键/唯一约束、同步责任、状态枚举、本地敏感字段过滤和 canonical hash 口径。
+- PostgreSQL 契约覆盖 `devices`、`device_tokens`、`cloud_entities`、`entity_revisions`、内容/归档投影、百度账号、授权 session、设备级 token 绑定和 refresh lease 表，明确 schema readiness、自迁移和 Cloud Sync 冲突规则。
+- 更新 `AGENTS.MD`、`README.md`、`docs/current/README.md`、`docs/current/tech.md` 和 `docs/current/agents.md`，把 `api_database_contract.md` 纳入权威阅读路径，并要求后续 API、数据库、同步 payload、版本字段或 canonical hash 变更必须先更新契约文档。
+- 更新 `docs/current/audit.md` 和 `docs/current/document_change_audit.md`，记录旧文档缺少统一接口/库表契约的风险、契约文档依据和后续校对点。
+- 修正 `client/docs/frontend_spec_pywebview.md` 中已确认过时的 bridge 签名和 operation 状态枚举：`poll_baidu_authorization()`、`complete_baidu_authorization(authorization_password)`、`pending/running/completed/failed/canceling`。
+- 发现并记录后续代码待修点：`webview_bridge.py#get_cloud_sync_summary` 当前引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段，后续应按契约对齐为 `entity_id/entity_type/data_version/revision_id/canonical_record_sha256/updated_by_device_id/recent_revisions`。
+
+提交摘要：本次提交补齐项目 API 与数据库契约文档，将云端 HTTP API、pywebview bridge、百度网盘调用、本地 SQLite、云端 PostgreSQL、同步 payload 和版本字段集中到 `docs/current/api_database_contract.md`，并更新入口文档、协作规范、审计和 DCA，约束后续接口和库表变更必须优先对齐契约文档。
+
+后续待办：
+
+- 回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 后续修复云端同步页面时，优先按 `api_database_contract.md` 修复 `get_cloud_sync_summary` DTO 字段并补测试。
+- 后续任何 API、bridge、百度调用、SQLite/PostgreSQL schema、同步 payload 或版本字段变更，都必须同步维护 `docs/current/api_database_contract.md`、`audit.md` 和 `document_change_audit.md`。
 
 ### P3 阶段 14 打包发布与最终验收：文档体系重构、实质审计与变更校对
 

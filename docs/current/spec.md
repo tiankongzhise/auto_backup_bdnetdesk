@@ -14,7 +14,8 @@
 | 仓库初始化与授权 | 完成 | Git、LGPL-2.1 | 不提交敏感文件，不依赖全局换行策略。 | `LICENSE` 存在，README 指向新文档，Git LF 约束有效。 |
 | Python 客户端骨架 | 完成 | uv、Python 3.12 | 客户端代码、测试、迁移集中在 `client/`。 | `client/pyproject.toml`、`uv.lock`、源码和测试结构存在。 |
 | Go 云端服务骨架 | 完成 | Go 1.25、chi、pgx | 服务代码集中在 `cloud-api/`，入口固定。 | `cloud-api/cmd/cloud-api` 可构建，服务含 health/ready。 |
-| 文档权威体系 | 完成 | 本次文档治理 | 新文档必须实质审计，不是形式拆分。 | `docs/current/*` 和 `docs/legacy/README.md` 完成，`git diff --check` 通过。 |
+| 文档权威体系 | 完成 | 文档治理 | 新文档必须实质审计，不是形式拆分。 | `docs/current/*` 和 `docs/legacy/README.md` 完成，`git diff --check` 通过。 |
+| API 与数据库契约 | 完成 | 文档治理、代码/迁移对照 | API、bridge、百度调用、SQLite/PostgreSQL schema 和同步 payload 变更前必须先对齐契约文档。 | `docs/current/api_database_contract.md` 完成，README/Tech/Agents/Audit/DCA 已纳入入口约束。 |
 
 ## P0 云端同步底座
 

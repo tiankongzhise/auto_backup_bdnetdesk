@@ -22,6 +22,20 @@
 - 旧文档索引放在 `docs/legacy/README.md`。
 - 构建产物、缓存、虚拟环境、本地 SQLite、日志和敏感配置不得提交。
 
+## API 与数据库契约
+
+`tech.md` 只描述架构边界和技术原则；具体接口、参数、成功/错误返回、示例、数据库表结构、同步 payload 和版本字段以 `docs/current/api_database_contract.md` 为准。
+
+后续任何变更只要触及以下内容，必须先更新契约文档，再改代码：
+
+- Go 云端 `/v1` HTTP API。
+- pywebview `window.pywebview.api` bridge API。
+- 百度网盘官方 API 调用参数、顺序、错误处理或真实联调口径。
+- SQLite migration、同步实体字段、`sync_outbox` payload 或 canonical hash 过滤字段。
+- PostgreSQL migration、schema readiness、Cloud Sync 投影或百度授权表。
+
+如果契约文档与代码不一致，新增功能不得继续基于猜测开发；必须先在 `audit.md` 和 `document_change_audit.md` 记录偏差，再修正文档或代码。
+
 ## 客户端架构
 
 客户端核心模块：

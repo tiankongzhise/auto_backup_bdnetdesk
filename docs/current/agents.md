@@ -9,7 +9,7 @@
 1. `AGENTS.MD`
 2. `docs/current/README.md`
 3. `docs/roadmap_progress.md`
-4. 与任务相关的 `prd.md`、`design.md`、`tech.md`、`spec.md`
+4. 与任务相关的 `prd.md`、`design.md`、`tech.md`、`api_database_contract.md`、`spec.md`
 5. Git 最近 20 条提交
 6. 相关关键提交 `git show --stat --summary --format=fuller <commit>`
 
@@ -22,7 +22,8 @@
 - 先在 `docs/roadmap_progress.md` 写当前工作项、计划范围和验收标准。
 - 如改变产品行为，更新 `docs/current/prd.md`。
 - 如改变 UI，更新 `docs/current/design.md`。
-- 如改变 API、数据库、凭据、构建、测试或部署，更新 `docs/current/tech.md`。
+- 如改变技术栈、凭据、构建、测试或部署，更新 `docs/current/tech.md`。
+- 如改变云端 HTTP API、pywebview bridge API、百度 API 调用、SQLite/PostgreSQL schema、同步 payload、版本字段或 canonical hash 过滤规则，先更新 `docs/current/api_database_contract.md`。
 - 如改变任务状态或验收口径，更新 `docs/current/spec.md`。
 - 如修正旧文档口径，更新 `docs/current/document_change_audit.md`。
 
