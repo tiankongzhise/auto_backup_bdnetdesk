@@ -11,18 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：P3 阶段 14 `agents-md-sync` skill 更新与发布授权配置，属于用户明确插入的开发协作工具治理需求，不改变主排期。
-- 用户反馈阻塞：只需要从 GitHub 拉取并更新 `agents-md-sync`，不得从本地 `agents_repo` 目录作为来源；同时需要补全 `agents-md-sync` 新版本要求的项目级发布授权确认。
-- 本轮计划范围：从 GitHub `tiankongzhise/agents_repo` 拉取 `skills/agents-md-sync`，覆盖本机 Codex 用户 skill 目录并保留旧版本备份；新增项目 `.agents-sync.json`，持久化用户明确授权 `agents-md-sync` 将本项目 `AGENTS.MD` 发布到中央规则仓库对应分支。
+- 本轮工作：P3 阶段 14 `AGENTS.MD` 发布到中央 agents 仓库，属于用户明确插入的开发协作工具治理需求，不改变主排期。
+- 用户反馈阻塞：上一轮只完成 `agents-md-sync` 更新和发布授权配置，尚未把当前项目 `AGENTS.MD` 推送到中央 `agents_repo`；同时用户指出按仓库名 `auto_backup_bdnetdesk` 作为分支会导致不同 GitHub owner 的同名项目冲突，应使用 `tiankongzhise/auto_backup_bdnetdesk`。
+- 本轮计划范围：依据 `.agents-sync.json` 的用户授权，将当前项目 `AGENTS.MD` 发布到中央仓库 `git@github.com:tiankongzhise/agents_repo.git` 的 `tiankongzhise/auto_backup_bdnetdesk` 分支，并记录新版 `agents-md-sync` 中“只用仓库名、不用 owner”的分支命名口径需要后续修正。
 - 本轮完成后继续回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ## 本次验收标准
 
-- 新版 `agents-md-sync` 必须来自 GitHub `tiankongzhise/agents_repo` 的 `main` 分支 `skills/agents-md-sync`，不得使用本地仓库目录作为安装来源。
-- 本机 `C:\Users\hbc_thinkbook16\.codex\skills\agents-md-sync` 必须被新版覆盖，且旧版本目录保留到 `.backup` 以便回滚。
-- 项目 `.agents-sync.json` 必须记录 `enabled=true`、`auto_update=true`、`auto_publish_on_agents_change=true`，并包含用户明确授权的 `publish_authorization.granted=true`。
-- 授权配置不得包含 token、SSH key、PAT、Device Token、百度 token、密码或其他私密凭据。
-- 校验安装后的 `SKILL.md` 与 GitHub 临时副本 SHA256 一致；`.agents-sync.json` 可被 JSON 解析；运行 `git diff --check` 通过。
+- 发布前必须校验 `.agents-sync.json` 中 `enabled=true`、`auto_publish_on_agents_change=true` 和 `publish_authorization.granted=true`。
+- 发布前必须确认本地文件为 `AGENTS.MD`，目标中央仓库为 `git@github.com:tiankongzhise/agents_repo.git`。
+- 中央发布分支必须使用 `tiankongzhise/auto_backup_bdnetdesk`，不得使用仅仓库名 `auto_backup_bdnetdesk`。
+- 中央分支 `AGENTS.md` 必须来自当前项目 `AGENTS.MD`，有差异才提交，提交信息使用中文。
+- 推送完成后必须用 `git ls-remote --heads` 核验远端分支 ref，记录中央提交哈希；运行 `git diff --check` 通过。
 
 ## 开发排期
 
@@ -55,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-17：P3-14 AGENTS.MD 发布到中央 agents 仓库
+
+变更原因：上一轮已更新 `agents-md-sync` 并补齐项目级发布授权，但尚未实际将当前项目 `AGENTS.MD` 推送到中央 `agents_repo`；用户要求按 skill 流程推送，并明确中央分支应使用 `tiankongzhise/auto_backup_bdnetdesk`，避免不同 GitHub owner 的同名项目冲突。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选阶段的开发协作规则同步和中央 AGENTS 备份治理。
+
+验收标准：依据 `.agents-sync.json` 的用户授权，将当前项目 `AGENTS.MD` 复制为中央仓库分支 `tiankongzhise/auto_backup_bdnetdesk` 的 `AGENTS.md`；中央提交使用中文 message；推送后 `git ls-remote --heads git@github.com:tiankongzhise/agents_repo.git tiankongzhise/auto_backup_bdnetdesk` 返回目标 ref；进度记录说明当前 `agents-md-sync` 中“只用仓库名、不用 owner”的分支命名口径需要后续修正。
+
+回到主排期条件：本轮中央分支推送、远端 ref 校验、进度记录和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-17：P3-14 agents-md-sync skill 更新与发布授权配置
 
@@ -287,6 +297,23 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：AGENTS.MD 发布到中央 agents 仓库
+
+- P3 阶段 14 `AGENTS.MD` 发布到中央 agents 仓库开发完成；下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 本轮属于用户明确插入的开发协作工具治理需求，不改变主排期；完成后回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 已按 `.agents-sync.json` 校验项目级授权：`enabled=true`、`auto_publish_on_agents_change=true`、`publish_authorization.granted=true`、`central_repo=git@github.com:tiankongzhise/agents_repo.git`、`local_agents_path=AGENTS.MD`。
+- 已将当前项目 `AGENTS.MD` 复制为中央仓库分支 `tiankongzhise/auto_backup_bdnetdesk` 的 `AGENTS.md`。
+- 已在中央仓库创建中文提交 `8cc0f7832b44f395ed3cdbc0c346d28eb1e7323e`，提交信息为“同步 tiankongzhise/auto_backup_bdnetdesk 的 AGENTS.md”。
+- 已推送并验证远端 ref：`8cc0f7832b44f395ed3cdbc0c346d28eb1e7323e refs/heads/tiankongzhise/auto_backup_bdnetdesk`。
+- 已确认当前 `agents-md-sync` skill 文档写的是“Publish branch: sanitized current GitHub repository name, not owner name”，该口径会把本项目识别为 `auto_backup_bdnetdesk`；用户指出该规则无法防止不同 owner 的同名项目冲突，后续应修正 skill 为 owner/repo 分支或支持显式配置发布分支。
+
+提交摘要：本次提交记录当前项目 `AGENTS.MD` 已按用户指定的 owner/repo 分支名发布到中央 `agents_repo`，并标记 `agents-md-sync` 当前“只用仓库名”的分支命名规则需要后续修正。
+
+后续待办：
+
+- 回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 后续应在 `tiankongzhise/agents_repo` 中修正 `agents-md-sync` 的发布分支命名规则，避免同名仓库冲突，并重新从 GitHub 更新本机 skill。
 
 ### P3 阶段 14 打包发布与最终验收：agents-md-sync skill 更新与发布授权配置
 
