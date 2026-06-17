@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "auto_update": true,
+  "auto_publish_on_agents_change": true,
+  "central_repo": "git@github.com:tiankongzhise/agents_repo.git",
+  "central_branch": "main",
+  "central_agents_path": "AGENTS.md",
+  "local_agents_path": "AGENTS.MD",
+  "change_log_dir": "docs/agents-sync",
+  "publish_authorization": {
+    "granted": true,
+    "scope": "push_local_agents_to_central_repo",
+    "central_repo": "git@github.com:tiankongzhise/agents_repo.git",
+    "local_agents_path": "AGENTS.MD",
+    "granted_at": "2026-06-17T01:56:17Z",
+    "granted_by": "user",
+    "note": "User authorized agents-md-sync to publish this project's AGENTS.MD to the central rules repository branch for this project."
+  }
+}

@@ -11,19 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：P3 阶段 14 API 与数据库契约文档补强，属于用户明确插入的开发文档治理需求，不改变主排期。
-- 用户反馈阻塞：各 API 接口的传参、调用方式、成功返回、错误返回、典型示例和各数据库具体结构散在 Go/Python 代码、迁移、旧规格和验收记录中，没有一个明确文档约束与对照，后续修复和新增容易出现契约对齐错误。
-- 本轮计划范围：新增或补强 `docs/current/` 下的 API 与数据库契约文档，覆盖云端 HTTP API、pywebview bridge API、百度 API 使用边界、本地 SQLite schema、云端 PostgreSQL schema、同步 payload 与版本字段，并更新权威入口、技术文档、开发规范、审计和变更校对记录。
+- 本轮工作：P3 阶段 14 `agents-md-sync` skill 更新与发布授权配置，属于用户明确插入的开发协作工具治理需求，不改变主排期。
+- 用户反馈阻塞：只需要从 GitHub 拉取并更新 `agents-md-sync`，不得从本地 `agents_repo` 目录作为来源；同时需要补全 `agents-md-sync` 新版本要求的项目级发布授权确认。
+- 本轮计划范围：从 GitHub `tiankongzhise/agents_repo` 拉取 `skills/agents-md-sync`，覆盖本机 Codex 用户 skill 目录并保留旧版本备份；新增项目 `.agents-sync.json`，持久化用户明确授权 `agents-md-sync` 将本项目 `AGENTS.MD` 发布到中央规则仓库对应分支。
 - 本轮完成后继续回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ## 本次验收标准
 
-- 契约文档必须覆盖云端 HTTP API 的认证方式、路径、方法、请求参数、成功返回、错误返回和典型示例。
-- 契约文档必须覆盖 pywebview bridge API 的前端调用方式、参数、同步/异步返回、operation 轮询、错误包络和敏感信息边界。
-- 契约文档必须覆盖本地 SQLite 与云端 PostgreSQL 的表结构、主键/唯一约束、关键索引、版本/同步字段和写入责任。
-- 契约文档必须明确百度官方 API 在本项目中的调用顺序、关键参数、成功/错误判断和官方文档/离线依据，不把未核验内容写成已核验事实。
-- 更新 `docs/current/README.md`、`tech.md`、`agents.md`、`audit.md`、`document_change_audit.md` 和 `docs/roadmap_progress.md`，约束后续接口、数据库、同步 payload 变更必须优先对齐契约文档。
-- 本次只改文档，运行 `git diff --check` 通过；不跑 Python/Go 全量测试。
+- 新版 `agents-md-sync` 必须来自 GitHub `tiankongzhise/agents_repo` 的 `main` 分支 `skills/agents-md-sync`，不得使用本地仓库目录作为安装来源。
+- 本机 `C:\Users\hbc_thinkbook16\.codex\skills\agents-md-sync` 必须被新版覆盖，且旧版本目录保留到 `.backup` 以便回滚。
+- 项目 `.agents-sync.json` 必须记录 `enabled=true`、`auto_update=true`、`auto_publish_on_agents_change=true`，并包含用户明确授权的 `publish_authorization.granted=true`。
+- 授权配置不得包含 token、SSH key、PAT、Device Token、百度 token、密码或其他私密凭据。
+- 校验安装后的 `SKILL.md` 与 GitHub 临时副本 SHA256 一致；`.agents-sync.json` 可被 JSON 解析；运行 `git diff --check` 通过。
 
 ## 开发排期
 
@@ -56,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-17：P3-14 agents-md-sync skill 更新与发布授权配置
+
+变更原因：用户要求只从 GitHub 拉取并更新 `agents-md-sync` skill，不使用本地仓库目录作为来源；同时明确授权补全 `agents-md-sync` 新版本要求的项目级发布授权配置。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布候选阶段的开发协作工具治理和后续 AGENTS 同步发布授权补强。
+
+验收标准：从 GitHub `tiankongzhise/agents_repo` 的 `main` 分支 `skills/agents-md-sync` 拉取新版 skill，覆盖本机 Codex 用户 skill 目录并保留旧版本备份；新增 `.agents-sync.json`，持久化用户明确授权，且不包含任何敏感凭据；安装后 `SKILL.md` 与 GitHub 临时副本 SHA256 一致，`.agents-sync.json` 可解析，`git diff --check` 通过。
+
+回到主排期条件：本轮 skill 更新、授权配置、进度记录和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-17：P3-14 API 与数据库契约文档补强
 
@@ -278,6 +287,26 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：agents-md-sync skill 更新与发布授权配置
+
+- P3 阶段 14 `agents-md-sync` skill 更新与发布授权配置开发完成；下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 本轮属于用户明确插入的开发协作工具治理需求，不改变主排期；完成后回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 已按用户要求仅从 GitHub `tiankongzhise/agents_repo` 的 `main` 分支 `skills/agents-md-sync` 拉取新版 skill，不以本地 `E:\mix_code_object\agents_repo` 目录作为安装来源。
+- 已覆盖本机 Codex 用户 skill：`C:\Users\hbc_thinkbook16\.codex\skills\agents-md-sync`。
+- 已将旧版本备份到 `C:\Users\hbc_thinkbook16\.codex\skills\.backup\agents-md-sync-20260617-095328`，便于后续必要时回滚。
+- 已确认安装后的 `SKILL.md` 与 GitHub 临时副本 SHA256 一致：`14F33D2864757B75995730A9DF98F6C284271AC7D208D7FB6B50E57A4E87C23F`。
+- 新增 `.agents-sync.json`，启用自动同步和 AGENTS 变更后的发布流程，并记录用户明确授权 `agents-md-sync` 将本项目 `AGENTS.MD` 发布到 `git@github.com:tiankongzhise/agents_repo.git` 的项目分支。
+- `.agents-sync.json` 只保存授权元数据和同步配置，不包含 token、SSH key、PAT、Device Token、百度 token、密码或其他私密凭据。
+- 已验证 `.agents-sync.json` 可被 JSON 解析，`publish_authorization.granted=true`、`scope=push_local_agents_to_central_repo`、`central_repo` 和 `local_agents_path=AGENTS.MD` 与本项目配置匹配。
+
+提交摘要：本次提交为当前项目补齐 `agents-md-sync` 的项目级同步与发布授权配置，并记录从 GitHub 更新本机 Codex 用户 skill 的结果；后续 `agents-md-sync` 在发布本项目 `AGENTS.MD` 到中央规则仓库前，可依据 `.agents-sync.json` 校验用户授权。
+
+后续待办：
+
+- 重启 Codex 以加载新版 `agents-md-sync` skill。
+- 回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 后续如更改中央仓库、授权 scope 或本地 AGENTS 路径，必须重新取得用户明确授权并更新 `.agents-sync.json`。
 
 ### P3 阶段 14 打包发布与最终验收：API 与数据库契约文档补强
 
