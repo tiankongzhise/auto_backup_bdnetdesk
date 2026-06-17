@@ -11,18 +11,19 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：进入主排期下一阶段，补齐 P3 阶段 14 R14 敏感信息审计自动化入口，为干净 Windows R04-R14 发布候选验收提供可重复执行的机器检查。
-- 当前阶段判断：上一轮 `AGENTS.MD` 中央仓库发布已完成，主排期回到 P3 阶段 14 干净 Windows R04-R14；R04-R13 仍需要真实干净机和真实账号操作，R14 的 dist、日志、SQLite outbox 和 UI 输出敏感信息审计可以先实现为本地 CLI。
-- 本轮计划范围：新增客户端 `release_sensitive_audit` CLI，支持扫描发布目录、日志/UI 文本输出和 SQLite `sync_outbox`，识别 `.env`、本地 SQLite/缓存产物、Device Token、百度 token、授权/归档密码、wrapping key、明文 manifest 和完整本地路径等发布阻塞泄漏；补充自动化测试、发布验收矩阵和进度记录。
-- 本轮完成后继续执行 P3 阶段 14 干净 Windows R04-R13 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
+- 本轮工作：进入主排期下一阶段，补齐 P3 阶段 14 R04/R11/R12 发布候选预检自动化入口，为首次启动、升级和卸载/清理边界提供可重复执行的开发机检查。
+- 当前阶段判断：R04-R13 仍需要真实干净 Windows 和真实账号操作；但发布包结构、启动必需资源、SQLite 迁移打包、用户数据目录边界和程序目录敏感数据误放可以先实现为本地 CLI 预检，降低干净机验收前的反复返工。
+- 本轮计划范围：新增客户端 `release_candidate_preflight` CLI，支持检查 PyInstaller onedir 发布目录、可执行文件、webui、SQLite migrations、用户数据/缓存目录边界、程序目录误放用户数据和可选 WebView2 runtime 可见性；补充自动化测试、客户端 README、发布验收矩阵和进度记录。
+- 本轮完成后按用户要求暂停进度，不继续启动新的干净机验收或真实联调；恢复开发时继续执行 P3 阶段 14 干净 Windows R04-R13 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
 
 ## 本次验收标准
 
-- `release_sensitive_audit` CLI 可对一个或多个 `--scan-path` 扫描文本/文件名，可对一个或多个 `--sqlite-path` 检查 `sync_outbox`，发现泄漏时返回非 0 并只输出脱敏位置和类型。
-- 审计规则必须覆盖 `.env`、SQLite 数据库文件、明文备份 manifest、`Authorization: Bearer ...`、`bdn_...` Device Token、access/refresh token、password/wrapping key/private key 字段值和完整 Windows 本地路径。
-- SQLite outbox 检查必须解析 `payload_json`，拒绝本地敏感字段进入同步 payload，并检查 `last_error` 不包含敏感路径或 token。
-- 定向 pytest 覆盖通过场景、文件扫描泄漏、SQLite outbox 泄漏和 CLI 输出脱敏；`git diff --check` 通过。
-- 发布矩阵 R14 更新为开发机自动化入口已补齐，干净 Windows 仍需在真实 dist/log/SQLite/UI 输出上执行。
+- `release_candidate_preflight` CLI 可检查一个 `--release-dir`，确认 `AutoBackupBDNetdisk.exe`、`webui/index.html`、核心 JS/CSS 和 `migrations/sqlite/*.sql` 存在。
+- 预检必须拒绝发布目录中出现 `.env`、`backup_state.sqlite3`、`credentials/`、`var/data`、`var/cache` 或明显的运行期日志目录，避免程序目录和用户数据目录混在一起。
+- 预检支持 `--data-dir` 和 `--cache-dir`，检查用户数据/缓存目录不位于发布目录内；支持 `--check-webview2`，在 Windows 上报告 WebView2 runtime 可见性，非 Windows 或未检查时只标记 skipped，不阻塞开发机测试。
+- CLI 发现阻塞项时返回非 0，并只输出检查项、脱敏路径尾部和说明；通过时输出 `release_candidate_preflight_passed: true`。
+- 定向 pytest 覆盖干净发布目录、缺少启动资源、用户数据误放程序目录、用户数据目录嵌入发布目录和 CLI 输出；`git diff --check` 通过。
+- 发布矩阵 R04/R11/R12 更新为开发机预检入口已补齐，干净 Windows 真实双击启动、升级和卸载/清理仍待执行。
 
 ## 开发排期
 
@@ -43,7 +44,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复、稳定 Device ID 修复、本机设备摘要/授权密码验证入口修复和 R14 敏感信息审计自动化入口已完成，P3 阶段 14 尚未整体完成 | 当前进入干净 Windows R04-R13：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试；R14 需在真实产物上执行自动化审计 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复、稳定 Device ID 修复、本机设备摘要/授权密码验证入口修复、R14 敏感信息审计自动化入口和 R04/R11/R12 发布候选预检入口已完成，P3 阶段 14 尚未整体完成；当前按用户要求暂停进度 | 恢复后进入干净 Windows R04-R13：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试；R14 需在真实产物上执行自动化审计 |
 
 ## 进度差异审计
 
@@ -297,6 +298,26 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：R04/R11/R12 发布候选预检自动化入口
+
+- P3 阶段 14 R04/R11/R12 发布候选预检自动化入口开发完成；P3 阶段 14 仍在进行中；按用户要求本轮提交后暂停进度，不继续启动新的干净机验收或真实联调。
+- 新增 `auto_backup_client.release_candidate_preflight` CLI，检查 PyInstaller onedir 发布目录是否包含 `AutoBackupBDNetdisk.exe`、`webui/index.html`、核心 JS/CSS 和 `migrations/sqlite/*.sql`。
+- 预检拒绝发布目录中出现 `.env`、SQLite 数据库、凭据目录、日志目录、`var/data`、`var/cache`，并检查 `--data-dir`、`--cache-dir` 不位于发布程序目录内，避免卸载程序时误删用户数据。
+- 预检支持 `--check-webview2`，在 Windows 上读取 EdgeUpdate WebView2 Runtime `pv` 注册表值；非 Windows 或不传该开关时只标记 skipped，不阻塞开发机测试。
+- 将客户端默认运行期 `LOCAL_DATA_DIR`、`LOCAL_SQLITE_PATH` 和 `LOCAL_CACHE_DIR` 改为 `%LOCALAPPDATA%\auto_backup_bdnetdesk\{data,cache}`；`.env.example` 只保留仓库内 `var/` 作为显式源码调试示例。
+- 按外部依赖文档约束获取 Microsoft Learn WebView2 distribution 页面：沙箱内 `curl.exe -L` 连接失败，提升后获取成功；发布矩阵记录该官方依据和本轮实现边界。
+- 更新 `client/README.md`、`docs/current/spec.md`、`docs/current/tech.md` 和 `docs/release_acceptance_matrix.md`，固定 R04/R11/R12 预检命令、默认用户数据目录和“预检不能替代真实干净 Windows 验收”的边界。
+- 已验证 `client/` 下定向 `uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-basetemp-preflight2 tests/test_release_candidate_preflight.py tests/test_release_build.py tests/test_settings_redaction.py tests/test_webview_bridge.py` 通过，29 项通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交补齐 P3 阶段 14 R04/R11/R12 发布候选预检自动化入口，新增发布目录结构、启动资源、迁移打包、用户数据目录边界和 WebView2 runtime 可见性检查；同时将客户端默认运行期数据迁移到 `%LOCALAPPDATA%\auto_backup_bdnetdesk\`，避免程序目录和用户数据目录混用。发布矩阵同步标记为开发机预检入口已补齐，但干净 Windows 真实双击启动、升级、卸载/清理和真实链路验收仍待执行。
+
+后续待办：
+
+- 当前按用户要求暂停进度；恢复后继续 P3 阶段 14 干净 Windows R04-R13 真实发布候选验收，并在真实 dist、运行日志、UI 输出和本地 SQLite 上执行 R14 `release_sensitive_audit`。
+- 干净 Windows 验收时必须先运行 `release_candidate_preflight --check-webview2`，再继续真实双击启动、百度授权、备份、校对、清理、恢复、断网补偿、升级/卸载和 R13 云同步真实性复验。
 
 ### P3 阶段 14 打包发布与最终验收：R14 敏感信息审计自动化入口
 

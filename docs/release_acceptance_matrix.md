@@ -43,6 +43,7 @@ PyInstaller 官方文档获取记录：
 
 - 2026-06-08 已通过提升后的 `curl.exe -L https://pyinstaller.org/en/stable/usage.html` 获取官方 Usage 页面。
 - 2026-06-08 已通过提升后的 `curl.exe -L https://pyinstaller.org/en/stable/runtime-information.html` 获取官方 Run-time Information 页面。
+- 2026-06-17 沙箱内 `curl.exe -L https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution` 无法连接；按权限流程提升后成功获取 Microsoft Learn WebView2 distribution 页面 HTML，页面标题为 “Distribute your app and the WebView2 Runtime”，描述说明发布使用 WebView2 的应用时需要分发自动更新 Evergreen Runtime 或固定版本 Runtime。
 
 本轮实现依据：
 
@@ -57,15 +58,15 @@ PyInstaller 官方文档获取记录：
 | R01 | 发布构建 dry-run | 开发机 | `.\client_build.ps1 -DryRun` | 输出 PyInstaller 命令，包含 GUI onedir、源码路径、迁移 data 和带 `<BuildId>` 的仓库内输出/缓存目录 | 本轮已验收 |
 | R02 | 发布构建 | 开发机 | `.\client_build.ps1` | 生成 `dist/client/<BuildId>/AutoBackupBDNetdisk/AutoBackupBDNetdisk.exe`，无敏感文件进入 dist | 本轮已验收开发机构建；干净机待验收 |
 | R03 | 迁移定位 | 开发机/打包包 | 启动后初始化新 SQLite | 源码运行读取 `client/migrations/sqlite`；打包运行读取 bundle 内 `migrations/sqlite` | 本轮自动化验收源码与 `_MEIPASS` 分支；打包 exe 启动待干净机验收 |
-| R04 | 首次启动 | 干净 Windows | 双击 exe | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题 | 待执行 |
+| R04 | 首次启动 | 干净 Windows | 双击 exe；执行前可先跑 `release_candidate_preflight` | UI 启动，不要求已有 Device Token；能自动注册或提示真实云端配置问题；预检可提前发现 exe、webui、migrations 或 WebView2 Runtime 可见性问题，但不能替代双击启动 | 开发机预检入口已补齐；干净机待执行 |
 | R05 | 百度授权 | 干净 Windows | 设备码/扫码授权 | 只在百度官方页面输入百度账号；本机保存 DPAPI Device Token/KDF 材料；不落仓库路径 | 待执行 |
 | R06 | 备份 | 干净 Windows | 主 UI 通过“添加来源”或拖拽添加单文件和文件夹，输入运行时归档密码/授权密码、确认缓存目录后点击开始 | 单一添加来源入口可混选文件/文件夹，后端自动识别；完成扫描、去重、按每个选择源生成独立 7-Zip 加密归档、百度上传、outbox 同步、远端校对和 completed final sync；运行时不闪现 CMD 窗口；云端导入的 `running`/暂停/等待重试任务可通过“继续”恢复执行；不能 completed 时任务显示最后阶段和原因；`job.index.json` 汇总本 job 全部 archive；UI 不保存或显示密码/token/完整路径 | 开发机自动化已覆盖统一添加来源、主 UI 调用 BackupPipeline、多来源归档、archive/upload/remote/completed 写入、校对差异收口和 running 任务继续按钮；干净机真实百度待执行 |
 | R07 | 校对 | 干净 Windows | 来源映射、远端校对和云端同步页查看同一 job | 来源映射页刷新前拉取本机云端历史；任务筛选默认“全部最近记录”，按任务名/状态/更新时间选择，不要求普通用户输入 job_id；展示来源/远端关系和 consistent 状态；远端校对明确本地 SQLite `remote_objects/upload_sessions` 对比百度 `list/listall`；云端同步页可回读 Cloud Sync summary；不显示 Device Token、百度 token、密码或完整敏感路径 | 开发机自动化已覆盖来源映射脱敏、共享历史刷新、远端校对 UI 修复写入、长提示可读和云端同步页摘要回读；干净机待执行 |
 | R08 | 清理 | 干净 Windows | 对已完成 job 执行回收站清理 | 原始数据清理页刷新前拉取本机云端历史；任务筛选默认“全部最近记录”，不要求用户输入 job_id；清理前复查通过后移入回收站，写入清理记录并同步 outbox；永久删除默认隐藏在高级选项，清理前必须选中候选 | 开发机自动化已覆盖候选门槛、共享历史刷新、身份复查、同步 payload 脱敏和 UI 高级删除/选择门槛；干净机待执行 |
 | R09 | 恢复 | 干净 Windows | 从本地 archive 或远端 archive 按备份来源恢复文件和文件夹来源 | 候选每行代表备份时选择的一个文件或文件夹来源，不暴露文件夹内部单文件恢复入口；恢复时按 archive 整包下载/解压，但只写出所选来源范围；7-Zip 解密、manifest 校验、SHA256 复验通过；手动恢复文件夹来源保留根文件夹和内部目录结构；远端 archive 可经百度 dlink 拉取；冲突默认保留两者 | 开发机自动化已覆盖来源级候选聚合、本地恢复、UI 远端拉取恢复、文件夹结构恢复、SHA256 复验和路径脱敏；干净机待执行 |
 | R10 | 断网补偿 | 干净 Windows | 云端临时不可用时执行本地任务并恢复网络 | 本地 SQLite 落盘；云端恢复后 outbox 可补偿同步 | 待执行 |
-| R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动，或使用新 exe 搭配空本地 SQLite 启动备份/来源映射/清理/恢复页 | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等；若本机 Device Token 仍在，相关页面可按本机 `device_id` 从云端拉取本设备历史备份记录并重建任务列表、来源映射、清理候选和来源级恢复候选 | 开发机自动化已覆盖云端历史 payload 重建空 SQLite、共享历史刷新和恢复候选；干净机待执行 |
-| R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据 | 程序目录可移除；用户数据、凭据和缓存清理边界清晰 | 待执行 |
+| R11 | 升级 | 干净 Windows | 用新包覆盖旧包目录后启动，或使用新 exe 搭配空本地 SQLite 启动备份/来源映射/清理/恢复页；执行前可先跑 `release_candidate_preflight` | 本地 DPAPI 凭据和 SQLite 数据可继续使用；迁移幂等；若本机 Device Token 仍在，相关页面可按本机 `device_id` 从云端拉取本设备历史备份记录并重建任务列表、来源映射、清理候选和来源级恢复候选；预检确认 SQLite migrations 已随包发布 | 开发机预检入口和历史同步自动化已覆盖；干净机待执行 |
+| R12 | 卸载/清理 | 干净 Windows | 删除程序目录并保留/清除用户数据；执行前可先跑 `release_candidate_preflight` | 程序目录可移除；用户数据、凭据和缓存清理边界清晰；默认 data/cache 位于 `%LOCALAPPDATA%\auto_backup_bdnetdesk\`，程序目录不得混入 SQLite、凭据、日志或 `var/data`/`var/cache` | 开发机预检入口已补齐；干净机待执行 |
 | R13 | 云同步真实性审计 | 开发机/干净 Windows | 运行 `auto_backup_client.cloud_sync_audit_cli` | 真实云端 `/v1/readyz` 为 ready；探针 revision 返回 `synced`；`GET /v1/reconcile/entities/{entity_id}` 回读 `revision_id`、`data_version`、`canonical_record_sha256` 匹配；重复提交同一 revision 返回 `duplicate` | 开发机已验收：`first_sync_status=synced`、`summary_matched=true`、`duplicate_sync_status=duplicate`、`duplicate_verified=true`、`cloud_sync_truthful=true`；干净机待复验 |
 | R14 | 敏感信息审计 | 开发机/干净 Windows | 运行 `auto_backup_client.release_sensitive_audit` 检查 dist、日志、SQLite outbox 和 UI 输出 | 无 `.env`、token、密码、wrapping key、明文 manifest、SQLite 数据库文件或完整敏感路径泄漏；CLI 发现泄漏时只输出脱敏 finding | 开发机自动化入口已补齐，干净机真实 dist/log/SQLite/UI 输出待执行 |
 
@@ -77,6 +78,18 @@ PyInstaller 官方文档获取记录：
 - 云同步真实性审计不得只看本地 `sync_outbox` 状态；必须保留真实 Cloud Sync API 写入和云端 summary 回读匹配证据，确认不是虚假同步。
 - R14 自动化审计只能证明指定输入未泄漏；干净机验收时仍必须把实际发布目录、运行日志、UI 导出文本和真实本地 SQLite 作为输入执行。
 
+## R04/R11/R12 发布候选预检命令
+
+开发机或干净 Windows 生成发布目录后，在 `client/` 下执行：
+
+```powershell
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.release_candidate_preflight --release-dir ..\dist\client\<BuildId>\AutoBackupBDNetdisk --data-dir "$env:LOCALAPPDATA\auto_backup_bdnetdesk\data" --cache-dir "$env:LOCALAPPDATA\auto_backup_bdnetdesk\cache" --check-webview2
+```
+
+通过标准：命令返回 0，输出 `release_candidate_preflight_passed: true`。若缺少 `AutoBackupBDNetdisk.exe`、`webui/index.html`、核心 JS/CSS、`migrations/sqlite/*.sql`，或发布目录包含 `.env`、SQLite 数据库、凭据目录、日志目录、`var/data`、`var/cache`，或 data/cache 目录位于发布目录内，命令必须返回非 0，且 finding 输出只包含脱敏路径尾部。非 Windows 或不传 `--check-webview2` 时 WebView2 检查为 skipped；干净 Windows 发布验收必须传入该开关并继续执行真实双击启动。
+
 ## R14 敏感信息审计命令
 
 开发机或干净 Windows 生成发布目录后，在 `client/` 下执行：
@@ -84,7 +97,7 @@ PyInstaller 官方文档获取记录：
 ```powershell
 $env:UV_LINK_MODE='copy'
 $env:UV_CACHE_DIR='..\.cache\uv'
-uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path ..\var\data\backup_state.sqlite3
+uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path "$env:LOCALAPPDATA\auto_backup_bdnetdesk\data\backup_state.sqlite3"
 ```
 
 如需同时检查日志或 UI 导出文本，可重复传入 `--scan-path`：

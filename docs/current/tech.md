@@ -211,13 +211,22 @@ $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.cloud_sync_audit_cli
 ```
 
+R04/R11/R12 发布候选预检：
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.release_candidate_preflight --release-dir ..\dist\client\<BuildId>\AutoBackupBDNetdisk --data-dir "$env:LOCALAPPDATA\auto_backup_bdnetdesk\data" --cache-dir "$env:LOCALAPPDATA\auto_backup_bdnetdesk\cache" --check-webview2
+```
+
 R14 敏感信息审计：
 
 ```powershell
 cd client
 $env:UV_LINK_MODE='copy'
 $env:UV_CACHE_DIR='..\.cache\uv'
-uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path ..\var\data\backup_state.sqlite3
+uv run python -m auto_backup_client.release_sensitive_audit --scan-path ..\dist\client\<BuildId>\AutoBackupBDNetdisk --sqlite-path "$env:LOCALAPPDATA\auto_backup_bdnetdesk\data\backup_state.sqlite3"
 ```
 
 ## 技术审计结论

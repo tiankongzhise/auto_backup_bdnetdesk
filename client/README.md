@@ -43,6 +43,7 @@
 - `src/auto_backup_client/backup_pipeline_cli.py`：端到端编排 CLI，默认只执行本地闭环，显式传入上传/同步/校对开关后才接入真实云端和真实百度链路。
 - `src/auto_backup_client/real_backup_pipeline_test_cli.py`：真实百度上传全链路测试入口，生成临时源文件后跑完整主流程、校验云端 summary、执行同路径冲突探针并清理本批远端对象。
 - `src/auto_backup_client/cloud_sync_audit_cli.py`：真实 Cloud Sync 同步真实性审计探针，直接提交无敏感临时 revision 并回读云端 summary，确认不是仅本地假同步。
+- `src/auto_backup_client/release_candidate_preflight.py`：P3-14 R04/R11/R12 发布候选预检入口，检查 onedir 发布目录、启动资源、SQLite 迁移、用户数据目录边界和可选 WebView2 Runtime 可见性。
 - `src/auto_backup_client/release_sensitive_audit.py`：P3-14 R14 发布候选敏感信息审计入口，扫描 dist、日志/UI 文本和 SQLite `sync_outbox`，发现泄漏时只输出脱敏 finding。
 - `src/auto_backup_client/webview_app.py`：pywebview 桌面入口，创建主窗口并加载静态工作台。
 - `src/auto_backup_client/webview_bridge.py`：`window.pywebview.api` bridge，封装备份、授权、校对、清理和恢复业务调用，并串行化写操作。
@@ -56,10 +57,11 @@
 cd client
 $env:UV_LINK_MODE='copy'
 $env:UV_CACHE_DIR='..\.cache\uv'
-$env:LOCAL_SQLITE_PATH='..\var\data\backup_state.sqlite3'
 $env:CLOUD_API_BASE_URL='https://backup.baichengedu.com'
 uv run python -m auto_backup_client.app
 ```
+
+默认运行期用户数据、SQLite 和缓存会写到 `%LOCALAPPDATA%\auto_backup_bdnetdesk\` 下；源码调试如需放到仓库内临时目录，可以同时设置 `LOCAL_DATA_DIR`、`LOCAL_SQLITE_PATH` 和 `LOCAL_CACHE_DIR`，不得只改其中一个导致目录边界混乱。
 
 `backup_jobs` 是版本化同步实体，创建任务和状态变更会同事务写入 `sync_outbox`。`backup_sources.local_path` 当前只保存在本地 SQLite，`sync_outbox.payload_json` 不包含本地来源路径；任务页状态栏和任务列表也只展示任务名、状态、来源数、同步状态、版本和更新时间。备份执行摘要只展示文件数、归档数量、上传分片总数和阶段结果，不输出本地 SQLite 路径、缓存路径、远端真实路径、Device Token、百度 token、用户密码或 wrapping key。来源映射、远端校对和云端同步 UI 同样不把这些敏感内容输出到界面日志。
 
@@ -97,6 +99,17 @@ SQLite 迁移目录定位顺序为：
 3. 源码树 `client/migrations/sqlite`。
 
 PyInstaller 官方依据已记录在 `docs/release_acceptance_matrix.md`。当前发布包仍需完成干净 Windows 安装、授权、备份、校对、清理、恢复、升级/卸载和敏感信息审计矩阵后，才能作为 v1.3 可交付发布。
+
+R04/R11/R12 发布候选预检可在生成发布目录后执行。该命令只检查发布目录结构、启动资源、SQLite 迁移、用户数据/缓存目录是否误放进程序目录，以及可选 WebView2 Runtime 注册表可见性；不能替代干净 Windows 双击启动、升级和卸载/清理真实验收。
+
+```powershell
+cd client
+$env:UV_LINK_MODE='copy'
+$env:UV_CACHE_DIR='..\.cache\uv'
+uv run python -m auto_backup_client.release_candidate_preflight --release-dir ..\dist\client\<BuildId>\AutoBackupBDNetdisk --data-dir "$env:LOCALAPPDATA\auto_backup_bdnetdesk\data" --cache-dir "$env:LOCALAPPDATA\auto_backup_bdnetdesk\cache" --check-webview2
+```
+
+通过标准是 `release_candidate_preflight_passed: true`。发现缺少 `AutoBackupBDNetdisk.exe`、`webui/index.html`、核心 JS/CSS、`migrations/sqlite/*.sql`，或发布目录包含 `.env`、SQLite 数据库、凭据目录、日志目录、`var/data`、`var/cache`，或 data/cache 目录位于发布目录内时返回非 0。
 
 R14 敏感信息审计可在生成发布目录、收集 UI 导出或日志后执行。`--scan-path` 用于 dist、日志目录或 UI 文本文件；`--sqlite-path` 用于检查指定 SQLite 的 `sync_outbox.payload_json` 和 `last_error`。显式传入的 SQLite 数据库本身不会被当作泄漏，但发布目录里出现 `.sqlite/.sqlite3/.db` 文件会被判为阻塞。
 
@@ -367,11 +380,13 @@ uv run python -m auto_backup_client.cloud_sync_audit_cli
 
 ## 本地 SQLite 上传账本
 
-默认路径沿用仓库根目录 `.env.example`：
+默认发布运行路径：
 
-- `LOCAL_DATA_DIR=./var/data`
-- `LOCAL_SQLITE_PATH=./var/data/backup_state.sqlite3`
-- `LOCAL_CACHE_DIR=./var/cache`
+- `LOCAL_DATA_DIR=%LOCALAPPDATA%\auto_backup_bdnetdesk\data`
+- `LOCAL_SQLITE_PATH=%LOCALAPPDATA%\auto_backup_bdnetdesk\data\backup_state.sqlite3`
+- `LOCAL_CACHE_DIR=%LOCALAPPDATA%\auto_backup_bdnetdesk\cache`
+
+仓库内 `var/` 只用于显式指定的源码调试或临时验收，不是发布默认用户数据位置。
 
 本地 SQLite 是任务执行主库，运行态数据库不得提交。迁移文件位于 `client/migrations/sqlite/`，当前包含 `sync_outbox`、`upload_sessions`、`upload_parts` 和 `remote_objects`。业务表写入会与 `sync_outbox` 入队在同一个 SQLite 事务内完成，后台云端同步 worker 后续阶段再接入。
 
