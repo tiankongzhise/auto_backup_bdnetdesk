@@ -65,7 +65,15 @@ go run ./cmd/cloud-api
 .\go_build.ps1
 ```
 
+如果当前 PowerShell 执行策略禁止直接运行本地脚本，可使用进程级绕过：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\go_build.ps1
+```
+
 默认生成 `dist/cloud-api/<yyyyMMdd-HHmmss>/linux-amd64/cloud-api`，用于 Linux amd64 服务器部署；可通过 `-BuildId` 固定批次名，通过 `-GoOS`、`-GoArch`、`-OutputDir`、`-OutputName`、`-ModuleDir` 和 `-ServiceName` 调整目标平台、输出根目录和服务入口。脚本会在输出根目录下追加 `<BuildId>/<goos>-<goarch>`，并使用批次隔离的 Go 构建缓存，避免旧缓存或旧产物污染新构建。
+
+当前 Windows Go 1.25.10 环境在冷缓存交叉构建标准库时曾出现并发编译不稳定，脚本默认使用 `-BuildParallelism 1` 传递给 `go build -p=1`；如在干净工具链中需要提高速度，可显式传入 `-BuildParallelism <并发数>`。最终 `go build` 子进程默认 900 秒超时，可通过 `-BuildTimeoutSeconds` 调整。
 
 云端 PostgreSQL 迁移文件位于 `cloud-api/migrations/postgres`，并已嵌入服务端二进制。`cloud-api serve` 启动时会自动检查 PostgreSQL 关键 schema；缺少 `devices`、`baidu_accounts` 等关键表/列或 schema 检查失败时，会自动执行内置迁移并复查，复查仍失败才拒绝启动。
 

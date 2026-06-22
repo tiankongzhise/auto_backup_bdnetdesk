@@ -5,6 +5,7 @@
 #   - service entry: cmd/cloud-api
 #   - target: linux/amd64
 #   - output: dist/cloud-api/<yyyyMMdd-HHmmss>/linux-amd64/cloud-api
+#   - build parallelism: 1, to avoid known cold-cache Windows Go toolchain instability
 
 param(
     [string]$ModuleDir,                       # Go module directory. Auto-detected if omitted.
@@ -17,7 +18,11 @@ param(
     [string]$GoOS = "linux",
     [string]$GoArch = "amd64",
     [switch]$CompressWithUpx,
-    [string]$LdFlags = "-s -w"
+    [string]$LdFlags = "-s -w",
+    [ValidateRange(1, 1024)]
+    [int]$BuildParallelism = 1,               # Go build -p value. Keep 1 by default on this Windows toolchain.
+    [ValidateRange(30, 86400)]
+    [int]$BuildTimeoutSeconds = 900           # Hard timeout for the final go build subprocess.
 )
 
 Set-StrictMode -Version Latest
@@ -154,7 +159,8 @@ function Quote-ProcessArgument {
 function Invoke-GoCapture {
     param(
         [string[]]$Arguments,
-        [string]$WorkingDirectory
+        [string]$WorkingDirectory,
+        [int]$TimeoutSeconds = 0
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -167,11 +173,41 @@ function Invoke-GoCapture {
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
+    $stdoutTask = $null
+    $stderrTask = $null
 
     try {
         [void]$process.Start()
-        $stdout = $process.StandardOutput.ReadToEnd()
-        $stderr = $process.StandardError.ReadToEnd()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+
+        if ($TimeoutSeconds -gt 0) {
+            $exited = $process.WaitForExit($TimeoutSeconds * 1000)
+            if (-not $exited) {
+                $commandText = "go $($startInfo.Arguments)"
+                if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT -and (Get-Command taskkill.exe -ErrorAction SilentlyContinue)) {
+                    & taskkill.exe /PID $process.Id /T /F | Out-Null
+                } else {
+                    $process.Kill()
+                }
+                $process.WaitForExit()
+                $stdout = Get-CompletedTaskText $stdoutTask
+                $stderr = Get-CompletedTaskText $stderrTask
+                $timeoutOutput = (($stdout, $stderr, "Timed out after $TimeoutSeconds seconds: $commandText") -join "").Trim()
+                [pscustomobject]@{
+                    ExitCode = 124
+                    Output   = $timeoutOutput
+                }
+                return
+            }
+        } else {
+            $process.WaitForExit()
+        }
+
+        [void]$stdoutTask.Wait()
+        [void]$stderrTask.Wait()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
         $process.WaitForExit()
         $output = (($stdout, $stderr) -join "").Trim()
         $exitCode = $process.ExitCode
@@ -183,6 +219,25 @@ function Invoke-GoCapture {
         ExitCode = $exitCode
         Output   = $output
     }
+}
+
+function Get-CompletedTaskText {
+    param([System.Threading.Tasks.Task[string]]$Task)
+
+    if ($null -eq $Task) {
+        return ""
+    }
+
+    try {
+        [void]$Task.Wait(5000)
+        if ($Task.IsCompleted -and -not $Task.IsFaulted -and -not $Task.IsCanceled) {
+            return $Task.Result
+        }
+    } catch {
+        return ""
+    }
+
+    return ""
 }
 
 function Get-GoVersionFromText {
@@ -308,6 +363,7 @@ if ([string]::IsNullOrWhiteSpace($ServiceName)) {
 # -----------------------------------------------------------------------------
 $BuildId = Get-ValidBuildId $BuildId
 Write-Host "Build ID: $BuildId" -ForegroundColor Gray
+Write-Host "Go build parallelism: $BuildParallelism" -ForegroundColor Gray
 
 if (-not [string]::IsNullOrWhiteSpace($OutputName)) {
     $baseOutputName = $OutputName
@@ -409,6 +465,7 @@ if ($stdLibResult.ExitCode -ne 0) {
 $entryPoint = "./cmd/$ServiceName"
 $buildArgs = @(
     "build",
+    "-p=$BuildParallelism",
     "-trimpath",
     "-buildvcs=false",
     "-ldflags=$LdFlags",
@@ -417,11 +474,14 @@ $buildArgs = @(
 )
 
 Write-Host "Running in ${moduleRelativePath}: go $($buildArgs -join ' ')" -ForegroundColor Gray
-$buildResult = Invoke-GoCapture -Arguments $buildArgs -WorkingDirectory $moduleRoot
+$buildResult = Invoke-GoCapture -Arguments $buildArgs -WorkingDirectory $moduleRoot -TimeoutSeconds $BuildTimeoutSeconds
 if ($buildResult.Output) {
     Write-Host $buildResult.Output
 }
 if ($buildResult.ExitCode -ne 0) {
+    if ($buildResult.ExitCode -eq 124) {
+        Fail-Build "Build timed out after $BuildTimeoutSeconds seconds"
+    }
     Fail-Build "Build failed"
 }
 

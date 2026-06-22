@@ -169,6 +169,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\client_build.ps1 -DryRun
 .\go_build.ps1
 ```
 
+`go_build.ps1` 默认使用批次隔离的 `.cache/go-build/<service>/<BuildId>/<goos>-<goarch>`，并以 `-BuildParallelism 1` 调用 `go build -p=1`，规避当前 Windows Go 1.25.10 冷缓存交叉构建标准库时的偶发编译器/汇编器异常；需要提高并发时可显式传入 `-BuildParallelism <N>`。最终构建子进程默认 900 秒超时，可用 `-BuildTimeoutSeconds` 调整。
+
 服务端正常部署只需启动 `cloud-api serve`。`cloud-api migrate` 只作为排障或人工修复入口，不作为正常部署前置条件。
 
 ## 测试命令

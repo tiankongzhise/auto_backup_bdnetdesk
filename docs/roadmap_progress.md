@@ -11,19 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：进入主排期下一阶段，补齐 P3 阶段 14 R04/R11/R12 发布候选预检自动化入口，为首次启动、升级和卸载/清理边界提供可重复执行的开发机检查。
-- 当前阶段判断：R04-R13 仍需要真实干净 Windows 和真实账号操作；但发布包结构、启动必需资源、SQLite 迁移打包、用户数据目录边界和程序目录敏感数据误放可以先实现为本地 CLI 预检，降低干净机验收前的反复返工。
-- 本轮计划范围：新增客户端 `release_candidate_preflight` CLI，支持检查 PyInstaller onedir 发布目录、可执行文件、webui、SQLite migrations、用户数据/缓存目录边界、程序目录误放用户数据和可选 WebView2 runtime 可见性；补充自动化测试、客户端 README、发布验收矩阵和进度记录。
-- 本轮完成后按用户要求暂停进度，不继续启动新的干净机验收或真实联调；恢复开发时继续执行 P3 阶段 14 干净 Windows R04-R13 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
+- 本轮工作：临时插队修复 `go_build.ps1` 服务端发布构建卡在 `Running in cloud-api: go build ...` 的问题。
+- 当前阶段判断：该问题挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于服务端发布二进制构建阻塞修复，完成后回到干净 Windows R04-R14 发布候选验收。
+- 本轮计划范围：复现 `go_build.ps1` 构建卡住/失败现象，确认 Windows Go 1.25.10 冷缓存交叉构建并发编译标准库的影响；修复脚本 Go 子进程输出捕获和构建并发参数；更新 README、`AGENTS.MD` 和进度记录。
+- 本轮完成后回到 P3 阶段 14 干净 Windows R04-R14 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
 
 ## 本次验收标准
 
-- `release_candidate_preflight` CLI 可检查一个 `--release-dir`，确认 `AutoBackupBDNetdisk.exe`、`webui/index.html`、核心 JS/CSS 和 `migrations/sqlite/*.sql` 存在。
-- 预检必须拒绝发布目录中出现 `.env`、`backup_state.sqlite3`、`credentials/`、`var/data`、`var/cache` 或明显的运行期日志目录，避免程序目录和用户数据目录混在一起。
-- 预检支持 `--data-dir` 和 `--cache-dir`，检查用户数据/缓存目录不位于发布目录内；支持 `--check-webview2`，在 Windows 上报告 WebView2 runtime 可见性，非 Windows 或未检查时只标记 skipped，不阻塞开发机测试。
-- CLI 发现阻塞项时返回非 0，并只输出检查项、脱敏路径尾部和说明；通过时输出 `release_candidate_preflight_passed: true`。
-- 定向 pytest 覆盖干净发布目录、缺少启动资源、用户数据误放程序目录、用户数据目录嵌入发布目录和 CLI 输出；`git diff --check` 通过。
-- 发布矩阵 R04/R11/R12 更新为开发机预检入口已补齐，干净 Windows 真实双击启动、升级和卸载/清理仍待执行。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File .\go_build.ps1 -BuildId <测试批次>` 不再卡在 `Running in cloud-api: go build ...`，可生成 Linux amd64 服务端二进制。
+- 脚本默认使用低并发 Go build，规避当前 Windows Go 1.25.10 冷缓存交叉构建标准库时的偶发 compiler/assembler 异常；仍允许通过参数显式调整并发。
+- Go 子进程 stdout/stderr 捕获不得因 stderr 输出较多而发生管道死锁；构建失败时必须回显真实 Go 错误。
+- `cloud-api/` 下 `go test -p=1 ./...` 通过。
+- `git diff --check` 通过。
 
 ## 开发排期
 
@@ -44,7 +43,7 @@
 | P2 | 11 来源映射和校对 UI | 来源与远端映射页、数据库与百度校对页、差异筛选、人工确认修复 | 已完成；P2 阶段 11 来源映射和校对 UI 开发完成 | 下一个开发阶段为 P2 阶段 12 原始数据清理 |
 | P2 | 12 原始数据清理 | 手动触发、回收站优先、清理前源文件复查、清理记录同步 | 已完成；P2 阶段 12 原始数据清理开发完成 | 下一个开发阶段为 P2 阶段 13 恢复流程 |
 | P2 | 13 恢复流程 | 选择恢复对象、下载 archive、解密解压、按 manifest 恢复、SHA256 复验、冲突默认保留两者 | 已完成；P2 阶段 13 恢复流程开发完成 | 下一个开发阶段为 P3 阶段 14 打包发布与最终验收 |
-| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复、稳定 Device ID 修复、本机设备摘要/授权密码验证入口修复、R14 敏感信息审计自动化入口和 R04/R11/R12 发布候选预检入口已完成，P3 阶段 14 尚未整体完成；当前按用户要求暂停进度 | 恢复后进入干净 Windows R04-R13：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试；R14 需在真实产物上执行自动化审计 |
+| P3 | 14 打包发布与最终验收 | PyInstaller/Nuitka、版本号、构建产物、发布文档、端到端验收矩阵 | 进行中；pywebview UI 替换、review fix、发布打包工程骨架、主 UI 真实备份闭环开发机自动化覆盖、开发机云同步真实性审计、打包客户端启动阻塞修复、百度授权设备标识修复、稳定 Device ID 修复、本机设备摘要/授权密码验证入口修复、R14 敏感信息审计自动化入口、R04/R11/R12 发布候选预检入口和服务端 `go_build.ps1` 低并发构建修复已完成，P3 阶段 14 尚未整体完成 | 回到干净 Windows R04-R13：安装、授权、备份、校对、清理、恢复、云同步真实性复验和卸载/升级测试；R14 需在真实产物上执行自动化审计 |
 
 ## 进度差异审计
 
@@ -56,6 +55,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-22：P3-14 服务端 go_build.ps1 构建卡住修复
+
+变更原因：用户反馈使用 `.\go_build.ps1` 编译最新服务端时，卡在 `Running in cloud-api: go build -trimpath -buildvcs=false -ldflags=-s -w -o ... ./cmd/cloud-api`，阻塞服务端发布二进制生成。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于发布构建阻塞修复和用户明确插队需求。
+
+验收标准：`go_build.ps1` 不再卡在 `Running in cloud-api: go build ...`；默认低并发构建规避 Windows Go 1.25.10 冷缓存交叉构建标准库异常；Go 子进程 stdout/stderr 不发生管道死锁，失败时回显真实错误；服务端构建、Go 测试和 `git diff --check` 通过。
+
+回到主排期条件：本轮脚本修复、文档沉淀、构建验证、Go 测试和提交完成后，下一开发小项回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-17：P3-14 AGENTS.MD 发布到中央 agents 仓库
 
@@ -298,6 +307,24 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：服务端 go_build.ps1 构建卡住修复
+
+- P3 阶段 14 服务端 `go_build.ps1` 构建卡住修复完成；P3 阶段 14 仍在进行中，下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 复现用户症状对应的构建路径：默认并发交叉构建 Linux amd64 时，Go 1.25.10 在冷的批次缓存下可于标准库 `crypto/cipher` 阶段报 `asmins: missing op 00168`；同目标、同仓库模块缓存使用 `go build -p=1` 可成功。
+- `go_build.ps1` 新增 `-BuildParallelism`，默认值为 `1` 并传给 `go build -p=1`，保留显式调高并发的能力。
+- `go_build.ps1` 新增 `-BuildTimeoutSeconds`，默认 900 秒；最终 `go build` 超时会终止子进程树并返回明确错误。
+- `Invoke-GoCapture` 改为 stdout/stderr 双流 `ReadToEndAsync()` 并发读取，避免旧脚本“先读 stdout 再读 stderr”在 Go 输出较多 stderr 时产生管道死锁；构建失败会回显真实 Go 输出。
+- 更新 README、`docs/current/tech.md` 和 `AGENTS.MD`，记录默认低并发服务端发布构建、PowerShell 执行策略绕过方式、构建超时参数和 Windows PowerShell 5.1 子进程输出捕获约束。
+- 已验证仓库根目录 `powershell -NoProfile -ExecutionPolicy Bypass -File .\go_build.ps1 -BuildId codex-build-fix-verify2` 通过，生成 `dist\cloud-api\codex-build-fix-verify2\linux-amd64\cloud-api`，文件大小 11.34 MB。
+- 已验证 `cloud-api/` 下设置仓库内 `GOCACHE` 和 `GOMODCACHE` 后执行 `go test -p=1 ./...` 通过。
+
+提交摘要：本次提交修复服务端发布构建脚本卡在 `Running in cloud-api: go build ...` 的问题，通过默认 `go build -p=1` 规避当前 Windows Go 1.25.10 冷缓存交叉构建标准库并发不稳定，并将 Go 子进程输出捕获改为双流异步读取和受控超时，确保后续构建失败时能回显真实错误而不是静默卡住。
+
+后续待办：
+
+- 回到 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 如在干净 Go 工具链上需要提升服务端构建速度，应单独验证较高 `-BuildParallelism` 后再调整默认值。
 
 ### P3 阶段 14 打包发布与最终验收：R04/R11/R12 发布候选预检自动化入口
 

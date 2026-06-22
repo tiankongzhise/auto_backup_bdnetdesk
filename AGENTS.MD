@@ -491,3 +491,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：保留仓库内 `GOCACHE`/`GOMODCACHE` 设置，按权限流程提升运行同一 `go test -p=1 ./...` 命令；提升后依赖下载成功，`cloud-api/` 测试通过。
 
 后续约束：Go 测试若在冷缓存下因 `proxy.golang.org`、DNS、socket 权限或模块下载失败，不得误判为项目代码失败；应先使用同一缓存路径提升重跑。依赖下载完成后仍应继续使用仓库内 `.cache/go-build` 和 `.cache/go-mod`，不得提交 `.cache/`。
+
+### 2026-06-22：go_build.ps1 冷缓存交叉构建卡在 Running go build
+
+问题：使用 `.\go_build.ps1` 编译最新服务端时，输出停在 `Running in cloud-api: go build -trimpath -buildvcs=false -ldflags=-s -w -o ... ./cmd/cloud-api`。复现时默认并发交叉构建 Linux amd64 在标准库 `crypto/cipher` 阶段报 `asmins: missing op 00168`；同目标、同缓存使用 `go build -p=1` 可成功。
+
+原因：当前 Windows Go 1.25.10 本机环境在冷缓存交叉构建标准库时仍存在并发编译/汇编不稳定；同时旧 `go_build.ps1` 先同步读 stdout 再读 stderr，Go 子进程一旦产生较多 stderr 输出存在管道死锁风险，会把真实 Go 错误表现成“卡住”。
+
+解决方案：`go_build.ps1` 新增 `-BuildParallelism`，默认传给 `go build -p=1`；新增 `-BuildTimeoutSeconds`，默认 900 秒；Go 子进程 stdout/stderr 改为 `ReadToEndAsync()` 双流并发读取，失败时回显真实 Go 输出，超时时终止子进程树并返回明确错误。验证中曾尝试 PowerShell `DataReceivedEventHandler` 事件回调，但 Windows PowerShell 5.1 出现无法打印异常的进程级崩溃，已放弃该写法。
+
+后续约束：服务端发布构建默认使用 `.\go_build.ps1` 的低并发配置；除非在干净 Go 工具链中重新验证，不要把默认构建并发调高。PowerShell 5.1 脚本中避免用事件回调收集子进程 stdout/stderr，优先使用双流 `ReadToEndAsync()` 或等价并发读取。若再次卡在 `Running in cloud-api: go build ...`，先检查是否传入了高 `-BuildParallelism`、是否命中 Go 工具链标准库冷编译异常，以及脚本是否按超时返回真实 stderr。
