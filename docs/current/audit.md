@@ -85,7 +85,7 @@
 - pywebview bridge 方法、返回包络和 operation DTO 来自 `webview_bridge.py` 与前端 `api.js`。
 - 百度 API 调用口径来自 `docs/baidu_netdisk_openapi_reference.md` 和 `baidu/upload.py`；2026-06-17 本轮重新通过提升后的 `curl.exe` 获取到官方“预上传”页面 HTML。
 
-本轮同步修正了 `client/docs/frontend_spec_pywebview.md` 中 `poll_baidu_authorization(session_id)`、`complete_baidu_authorization(session_id, authorization_password)` 和 operation 状态枚举等已确认过时签名。仍需代码级校对：`webview_bridge.py#get_cloud_sync_summary` 引用了 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段，后续修复云端同步页面时必须按 `api_database_contract.md` 对齐。
+本轮同步修正了 `client/docs/frontend_spec_pywebview.md` 中 `poll_baidu_authorization(session_id)`、`complete_baidu_authorization(session_id, authorization_password)` 和 operation 状态枚举等已确认过时签名。2026-06-22 已完成代码级校对：`webview_bridge.py#get_cloud_sync_summary` 不再引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段，校对与同步页已补齐 Cloud Sync summary 回读入口；干净 Windows R13 仍需真实云端复验。
 
 ## 安全边界检查
 

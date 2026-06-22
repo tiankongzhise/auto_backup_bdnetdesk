@@ -337,6 +337,17 @@ h3 {
   gap: 8px;
 }
 
+.stack {
+  display: grid;
+  gap: 8px;
+}
+
+.summary-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .item {
   display: grid;
   gap: 6px;

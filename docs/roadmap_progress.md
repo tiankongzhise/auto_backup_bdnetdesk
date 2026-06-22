@@ -11,17 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：临时插队修复 `go_build.ps1` 服务端发布构建卡在 `Running in cloud-api: go build ...` 的问题。
-- 当前阶段判断：该问题挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于服务端发布二进制构建阻塞修复，完成后回到干净 Windows R04-R14 发布候选验收。
-- 本轮计划范围：复现 `go_build.ps1` 构建卡住/失败现象，确认 Windows Go 1.25.10 冷缓存交叉构建并发编译标准库的影响；修复脚本 Go 子进程输出捕获和构建并发参数；更新 README、`AGENTS.MD` 和进度记录。
-- 本轮完成后回到 P3 阶段 14 干净 Windows R04-R14 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
+- 本轮工作：修复 pywebview bridge 的 Cloud Sync summary DTO 与 `EntitySummary` 模型不一致问题，并补齐校对与同步页的 summary 回读入口。
+- 当前阶段判断：该问题挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于 R07 校对与 R13 云同步真实性复验前的发布候选阻塞修复。
+- 本轮计划范围：对齐 `get_cloud_sync_summary(entity_id)` 返回字段与 `api_database_contract.md` 契约；前端校对页增加按实体 ID 回读云端 summary 的诊断入口；补充 bridge 单元测试；更新 audit、DCA 和进度记录。
+- 本轮完成后继续 P3 阶段 14 干净 Windows R04-R14 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
 
 ## 本次验收标准
 
-- `powershell -NoProfile -ExecutionPolicy Bypass -File .\go_build.ps1 -BuildId <测试批次>` 不再卡在 `Running in cloud-api: go build ...`，可生成 Linux amd64 服务端二进制。
-- 脚本默认使用低并发 Go build，规避当前 Windows Go 1.25.10 冷缓存交叉构建标准库时的偶发 compiler/assembler 异常；仍允许通过参数显式调整并发。
-- Go 子进程 stdout/stderr 捕获不得因 stderr 输出较多而发生管道死锁；构建失败时必须回显真实 Go 错误。
-- `cloud-api/` 下 `go test -p=1 ./...` 通过。
+- `get_cloud_sync_summary(entity_id)` 不再引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段。
+- bridge 返回 `entity_id/entity_type/data_version/revision_id/canonical_record_sha256/updated_by_device_id/deleted_at/recent_revisions`，并只展示 digest 摘要，不泄露敏感 payload。
+- 校对与同步页可输入实体 ID 发起 Cloud Sync summary 回读，显示当前 revision、data_version、同步设备摘要和最近 revision 状态。
+- 定向 `client/tests/test_webview_bridge.py` 通过。
+- 客户端 `compileall src tests` 通过。
 - `git diff --check` 通过。
 
 ## 开发排期
@@ -55,6 +56,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-22：P3-14 Cloud Sync summary DTO 与校对页回读入口修复
+
+变更原因：`docs/current/api_database_contract.md` 和 DCA-015 已指出 `webview_bridge.py#get_cloud_sync_summary` 仍引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段；该问题会导致校对与同步页或 R13 云同步真实性复验入口在运行时失败。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于 R07 校对与 R13 云同步真实性审计前的发布候选阻塞修复。
+
+验收标准：`get_cloud_sync_summary(entity_id)` 返回字段对齐 `api_database_contract.md` 与 `baidu.models.EntitySummary`；前端校对与同步页提供 Cloud Sync summary 回读入口并显示脱敏摘要；新增 bridge 测试覆盖 recent revisions DTO；客户端定向测试、compileall 和 `git diff --check` 通过。
+
+回到主排期条件：本轮 bridge DTO、前端入口、文档审计更新、测试和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-22：P3-14 服务端 go_build.ps1 构建卡住修复
 
@@ -307,6 +318,27 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：Cloud Sync summary DTO 与校对页回读入口修复
+
+- P3 阶段 14 Cloud Sync summary DTO 与校对页回读入口修复完成；P3 阶段 14 仍在进行中，下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- 修复 `webview_bridge.py#get_cloud_sync_summary` 引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段的问题，返回字段已对齐 `api_database_contract.md` 与 `baidu.models.EntitySummary`。
+- bridge DTO 现在包含 `entity_id/entity_type/data_version/revision_id/canonical_record_sha256/updated_by_device_id/deleted_at/recent_revisions`，并额外提供 `revision_id_hint`、`canonical_record_sha256_hint`、`updated_by_device_hint` 等前端摘要字段。
+- 校对与同步页新增 Cloud Sync 回读区，可输入实体 ID 调用真实 bridge summary 回读，显示当前 revision、data_version、同步设备摘要和 recent revisions 状态；现有来源映射和远端校对主流程保持不变。
+- 更新 `docs/current/api_database_contract.md`、`docs/current/spec.md`、`docs/current/audit.md` 和 `docs/current/document_change_audit.md`，将 DCA-015 从“待代码校对”更新为“代码已对齐，干净 Windows R13 仍需真实复验”。
+- 已验证 `client/` 下定向 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>\.cache\pytest-webview-bridge tests/test_webview_bridge.py` 通过，16 项通过。
+- 已验证 `client/` 下 `uv run python -m pytest -p no:cacheprovider --basetemp <repo>\.cache\pytest-webui-static tests/test_webui_static.py` 通过，9 项通过。
+- 已验证 `client/` 下 `uv run python -m compileall src tests` 通过。
+- 已验证仓库根目录 `node --check client/src/auto_backup_client/webui/js/views/reconcile.js` 通过。
+- 已验证仓库根目录 `git diff --check` 通过。
+
+提交摘要：本次提交修复 pywebview bridge 的 Cloud Sync summary DTO 字段漂移，按 `EntitySummary` 模型返回真实 summary 和 recent revisions，并在校对与同步页补齐按实体 ID 回读云端 summary 的脱敏展示入口；文档审计同步关闭 DCA-015 的代码待校对项，为 P3 阶段 14 R07/R13 干净 Windows 真实复验提供可用入口。
+
+后续待办：
+
+- 继续 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- R13 干净机复验仍需使用真实云端 summary matched 和 duplicate verified 证明同步真实性，不能只看开发机 bridge/UI 入口。
+- R07 干净机校对仍需真实百度 `list/listall`、来源映射和远端校对流程一起验证。
 
 ### P3 阶段 14 打包发布与最终验收：服务端 go_build.ps1 构建卡住修复
 

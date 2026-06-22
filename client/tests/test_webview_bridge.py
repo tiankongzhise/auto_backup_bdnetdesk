@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from auto_backup_client.baidu.models import EntitySummary, RevisionSummary
 from auto_backup_client.device_credentials import DeviceCredentials
 from auto_backup_client.settings import ClientSettings
 from auto_backup_client.sqlite_store import SQLiteClientStore
@@ -340,3 +342,58 @@ def test_verify_baidu_token_returns_safe_success_dto(tmp_path, monkeypatch) -> N
     assert verification["valid"] is True
     dumped = json.dumps(verification, ensure_ascii=False)
     assert "secret-password" not in dumped
+
+
+def test_cloud_sync_summary_dto_matches_entity_summary_model(tmp_path, monkeypatch) -> None:
+    bridge = _bridge(tmp_path)
+    summary = EntitySummary(
+        entity_id="backup_jobs:job-1",
+        entity_type="backup_jobs",
+        data_version=3,
+        revision_id="018fe9c0-0000-7000-8000-000000000001",
+        canonical_record_sha256="a" * 64,
+        updated_by_device_id="dev_edae23f2-1bfb-f26e-654f-ea4d8fbb5d10",
+        deleted_at=None,
+        recent_revisions=(
+            RevisionSummary(
+                event_id="evt_018fe9c0_0001",
+                revision_id="018fe9c0-0000-7000-8000-000000000001",
+                data_version=3,
+                apply_status="synced",
+                canonical_record_sha256="b" * 64,
+                created_at=datetime(2026, 6, 22, 8, 0, tzinfo=timezone.utc),
+            ),
+        ),
+    )
+
+    class FakeCloud:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_entity_summary(self, entity_id: str) -> EntitySummary:
+            assert entity_id == "backup_jobs:job-1"
+            return summary
+
+    monkeypatch.setattr(bridge, "_cloud_client", lambda: FakeCloud())
+
+    response = bridge.get_cloud_sync_summary("backup_jobs:job-1")
+
+    assert response["ok"] is True
+    dto = response["data"]["summary"]
+    assert dto["entity_id"] == "backup_jobs:job-1"
+    assert dto["entity_type"] == "backup_jobs"
+    assert dto["data_version"] == 3
+    assert dto["revision_id"] == "018fe9c0-0000-7000-8000-000000000001"
+    assert dto["revision_id_hint"] == "018f...0001"
+    assert dto["canonical_record_sha256"] == "a" * 64
+    assert dto["canonical_record_sha256_hint"] == "a" * 16
+    assert dto["updated_by_device_id"] == "dev_edae23f2-1bfb-f26e-654f-ea4d8fbb5d10"
+    assert dto["updated_by_device_hint"] == "dev_edae23f2...5d10"
+    assert dto["recent_revisions"][0]["apply_status"] == "synced"
+    assert dto["recent_revisions"][0]["canonical_record_sha256_hint"] == "b" * 16
+    dumped = json.dumps(dto, ensure_ascii=False)
+    assert "revision_count" not in dumped
+    assert "latest_revision_id" not in dumped

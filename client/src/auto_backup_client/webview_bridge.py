@@ -513,15 +513,7 @@ class AutoBackupWebviewBridge:
         def work() -> dict[str, Any]:
             with self._cloud_client() as cloud:
                 summary = cloud.get_entity_summary(entity_id)
-            return {
-                "summary": {
-                    "entity_id": summary.entity_id,
-                    "revision_count": summary.revision_count,
-                    "latest_revision_id": summary.latest_revision_id,
-                    "latest_data_version": summary.latest_data_version,
-                    "latest_canonical_record_sha256": _short_digest(summary.latest_canonical_record_sha256, length=16),
-                }
-            }
+            return {"summary": self._cloud_sync_summary_to_dto(summary)}
 
         return self._guard(work)
 
@@ -728,6 +720,34 @@ class AutoBackupWebviewBridge:
             device_token=self.settings.device_token,
             device_id=self.device_id,
         )
+
+    def _cloud_sync_summary_to_dto(self, summary: Any) -> dict[str, Any]:
+        return {
+            "entity_id": summary.entity_id,
+            "entity_type": summary.entity_type,
+            "data_version": summary.data_version,
+            "revision_id": summary.revision_id,
+            "revision_id_hint": _edge_hint(summary.revision_id),
+            "canonical_record_sha256": summary.canonical_record_sha256,
+            "canonical_record_sha256_hint": _short_digest(summary.canonical_record_sha256, length=16),
+            "updated_by_device_id": summary.updated_by_device_id,
+            "updated_by_device_hint": _device_id_hint(summary.updated_by_device_id),
+            "deleted_at": summary.deleted_at.isoformat() if summary.deleted_at else None,
+            "recent_revisions": [
+                {
+                    "event_id": revision.event_id,
+                    "event_id_hint": _edge_hint(revision.event_id),
+                    "revision_id": revision.revision_id,
+                    "revision_id_hint": _edge_hint(revision.revision_id),
+                    "data_version": revision.data_version,
+                    "apply_status": revision.apply_status,
+                    "canonical_record_sha256": revision.canonical_record_sha256,
+                    "canonical_record_sha256_hint": _short_digest(revision.canonical_record_sha256, length=16),
+                    "created_at": revision.created_at.isoformat(),
+                }
+                for revision in summary.recent_revisions
+            ],
+        }
 
     def _list_baidu_accounts(self) -> dict[str, Any]:
         accounts = self._with_auth_workflow(lambda workflow: workflow.load_accounts())

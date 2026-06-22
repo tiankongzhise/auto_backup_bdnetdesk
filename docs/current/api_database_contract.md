@@ -854,15 +854,21 @@ const data = await call("list_jobs");
     "entity_type": "backup_jobs",
     "data_version": 3,
     "revision_id": "018fe9c0-0000-7000-8000-000000000001",
+    "revision_id_hint": "018f...0001",
     "canonical_record_sha256": "0123456789abcdef",
+    "canonical_record_sha256_hint": "0123456789abcdef",
     "updated_by_device_id": "dev_01234567-89ab-cdef-0123-456789abcdef",
+    "updated_by_device_hint": "dev_01234567...cdef",
     "recent_revisions": [
       {
         "event_id": "evt_111",
+        "event_id_hint": "evt_..._111",
         "revision_id": "018fe9c0-0000-7000-8000-000000000001",
+        "revision_id_hint": "018f...0001",
         "data_version": 3,
         "apply_status": "synced",
         "canonical_record_sha256": "0123456789abcdef",
+        "canonical_record_sha256_hint": "0123456789abcdef",
         "created_at": "2026-06-17T08:00:01+00:00"
       }
     ]
@@ -870,7 +876,9 @@ const data = await call("list_jobs");
 }
 ```
 
-当前待校对点：`webview_bridge.py` 仍引用 `summary.revision_count`、`summary.latest_revision_id`、`summary.latest_data_version` 和 `summary.latest_canonical_record_sha256`，这些字段不在 `baidu.models.EntitySummary` 中。后续修复云端同步页面或 bridge 测试时，必须按上方契约对齐代码。
+`*_hint` 字段是 bridge 为前端脱敏展示额外提供的摘要字段；完整 `revision_id`、`canonical_record_sha256` 和 `updated_by_device_id` 仍保留在 DTO 中，供 R13 真实回读校验和开发诊断使用。
+
+2026-06-22 校对记录：`webview_bridge.py#get_cloud_sync_summary` 已按上方契约对齐 `baidu.models.EntitySummary`，并在校对与同步页补齐按实体 ID 回读 Cloud Sync summary 的入口。干净 Windows R13 仍需用真实云端 summary 回读和 duplicate 结果复验。
 
 ## 百度网盘 API 调用契约
 

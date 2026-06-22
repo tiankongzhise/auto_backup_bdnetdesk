@@ -78,13 +78,13 @@
 | 干净 Windows R04 首次启动 | 待做；开发机预检入口已补齐 | 发布包、WebView2 | 不要求已有 Device Token；预检不能替代真实双击启动。 | UI 启动，可自动注册或提示真实云端配置问题；`release_candidate_preflight` 检查发布目录启动资源和 WebView2 可见性。 |
 | R05 百度授权 | 待做 | 真实云端、百度官方页面 | 百度账号密码只在百度官方页面输入。 | DPAPI 保存 Device Token/KDF，仓库无敏感落盘。 |
 | R06 真实备份 | 待做 | 真实百度账号、缓存、7-Zip | 不闪 CMD，不泄露密码/token/完整路径。 | 完成扫描、归档、上传、同步、校对和 final sync。 |
-| R07 校对 | 待做 | 本机历史、百度 list/listall | 普通用户不输入内部 ID。 | 来源映射、远端校对、summary 回读都可用。 |
+| R07 校对 | 待做；开发机 summary 回读入口已补齐 | 本机历史、百度 list/listall | 普通用户不输入内部 ID；实体 ID 回读只作为诊断入口。 | 来源映射、远端校对、summary 回读都可用。 |
 | R08 清理 | 待做 | 完成任务、源文件未变 | 默认回收站，永久删除隐藏。 | 清理记录写本地和 outbox。 |
 | R09 恢复 | 待做 | 本地或远端 archive | 来源级恢复，默认保留两者。 | 本地/远端恢复后 SHA256 一致。 |
 | R10 断网补偿 | 待做 | 本地主库、sync worker | 云端断网时本地任务继续。 | 网络恢复后 outbox 补偿同步。 |
 | R11 升级 | 待做；开发机预检入口已补齐 | DPAPI 凭据、SQLite 迁移 | 稳定 `device_id` 不能变；预检只确认迁移打包和目录边界。 | 新包能读取旧凭据和历史；`release_candidate_preflight` 确认 SQLite migration 已随包发布。 |
 | R12 卸载/清理 | 待做；开发机预检入口已补齐 | 发布目录、用户数据目录 | 删除程序不等于删除用户数据；默认用户数据不得写入程序目录。 | 程序目录和用户数据边界清晰；默认 data/cache 位于 `%LOCALAPPDATA%\auto_backup_bdnetdesk\`，预检拒绝发布目录混入运行期数据。 |
-| R13 云同步真实性审计 | 待做干净机复验 | 真实云端 | 不能只看本地 outbox。 | summary matched、duplicate verified。 |
+| R13 云同步真实性审计 | 待做干净机复验；开发机 bridge/UI 回读入口已补齐 | 真实云端 | 不能只看本地 outbox。 | summary matched、duplicate verified。 |
 | R14 敏感信息审计 | 进行中 | dist、日志、SQLite、UI | 无敏感文件和敏感输出；自动化入口只能证明指定输入，不替代干净机实际产物审计。 | `release_sensitive_audit` 开发机入口已补齐；干净机 dist/log/UI/outbox 仍需执行无 token/password/key/manifest 明文验收。 |
 
 ## Spec 审计结论
