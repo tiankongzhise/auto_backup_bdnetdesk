@@ -82,6 +82,27 @@ def test_jobs_page_passes_baidu_upload_parameters_to_bridge() -> None:
     assert "cleanup_cache_artifacts: cleanupCache.checked" in text
 
 
+def test_jobs_page_splits_local_and_global_tasks_and_uses_bridge_permissions() -> None:
+    text = (WEBUI / "js" / "views" / "jobs.js").read_text(encoding="utf-8")
+
+    assert '"本机任务"' in text
+    assert '"全局任务"' in text
+    assert "job.current_device" in text
+    assert "job.can_continue" in text
+    assert "job.can_pause" in text
+    assert "job.can_cancel" in text
+    assert "owner_device_hint" in text
+    assert "window.prompt" not in text
+
+
+def test_dashboard_recent_jobs_show_scope_and_device() -> None:
+    text = (WEBUI / "js" / "views" / "dashboard.js").read_text(encoding="utf-8")
+
+    assert "job.scope_label" in text
+    assert "job.owner_device_hint" in text
+    assert "job.can_continue" in text
+
+
 def test_baidu_page_exposes_device_credential_status() -> None:
     text = (WEBUI / "js" / "views" / "baidu.js").read_text(encoding="utf-8")
 

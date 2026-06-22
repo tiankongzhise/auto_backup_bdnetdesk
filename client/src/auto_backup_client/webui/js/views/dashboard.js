@@ -45,7 +45,7 @@ function nextActions(dashboard) {
   if (!state.jobs.length) {
     actions.push(["创建第一个备份任务", "选择文件或目录，设置压缩密码后启动", "jobs"]);
   }
-  if (state.jobs.some((job) => job.status === "failed_retryable" || job.status === "paused")) {
+  if (state.jobs.some((job) => job.can_continue)) {
     actions.push(["继续未完成任务", "从备份页选择可继续任务", "jobs"]);
   }
   if (state.jobs.some((job) => job.status === "completed")) {
@@ -82,7 +82,8 @@ function recentJobs() {
           el("div", { class: "item-title", text: job.name }),
           badge(job.status_label, statusTone(job.status)),
         ]),
-        el("div", { class: "item-meta", text: `${job.source_count} 个来源 / ${job.last_stage || "queued"} / ${job.updated_at}` }),
+        el("div", { class: "item-meta", text: `${job.scope_label || "-"} / ${job.owner_device_hint || "-"} / ${job.source_count} 个来源` }),
+        el("div", { class: "item-meta", text: `${job.last_stage || "queued"} / ${job.updated_at}` }),
       ]),
     ),
   );

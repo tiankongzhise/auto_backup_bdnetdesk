@@ -11,17 +11,18 @@
 ## 当前工作项
 
 - 本次开发阶段：P3 阶段 14 打包发布与最终验收。
-- 本轮工作：修复 pywebview bridge 的 Cloud Sync summary DTO 与 `EntitySummary` 模型不一致问题，并补齐校对与同步页的 summary 回读入口。
-- 当前阶段判断：该问题挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于 R07 校对与 R13 云同步真实性复验前的发布候选阻塞修复。
-- 本轮计划范围：对齐 `get_cloud_sync_summary(entity_id)` 返回字段与 `api_database_contract.md` 契约；前端校对页增加按实体 ID 回读云端 summary 的诊断入口；补充 bridge 单元测试；更新 audit、DCA 和进度记录。
+- 本轮工作：修复 pywebview 最近任务未区分本机任务与全局/云端历史任务的问题，并恢复本机可继续任务的继续入口。
+- 当前阶段判断：该问题挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于 R06/R07/R10 干净 Windows 发布候选体验与任务状态一致性阻塞修复。
+- 本轮计划范围：bridge 任务 DTO 增加执行作用域、设备摘要、持久化来源数和可操作字段；工作台与备份页拆分本机任务和全局任务；本机 `running/paused/failed_retryable/queued` 可继续，全局历史只读展示；继续任务改为页面内密码输入，不再用 `window.prompt`；补充契约、设计/spec/DCA 和测试。
 - 本轮完成后继续 P3 阶段 14 干净 Windows R04-R14 真实启动、授权、备份、校对、清理、恢复、断网、升级/卸载和云同步真实性复验。
 
 ## 本次验收标准
 
-- `get_cloud_sync_summary(entity_id)` 不再引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段。
-- bridge 返回 `entity_id/entity_type/data_version/revision_id/canonical_record_sha256/updated_by_device_id/deleted_at/recent_revisions`，并只展示 digest 摘要，不泄露敏感 payload。
-- 校对与同步页可输入实体 ID 发起 Cloud Sync summary 回读，显示当前 revision、data_version、同步设备摘要和最近 revision 状态。
-- 定向 `client/tests/test_webview_bridge.py` 通过。
+- 最近任务/备份任务 DTO 明确返回 `scope/scope_label/owner_device_hint/current_device/can_start/can_continue/can_pause/can_cancel/source_count`。
+- 本机任务与全局任务在工作台和备份页分开展示；全局/云端历史任务不显示继续、暂停、取消等本机执行按钮。
+- `source_count` 优先使用任务记录持久化值，云端历史来源尚未完整导入时不再显示 0。
+- 本机 `running`、`paused`、`failed_retryable` 和 `queued` 任务可通过页面内密码输入继续/启动，前端不再用 `window.prompt` 收集密码。
+- 定向 `client/tests/test_webview_bridge.py` 与前端静态测试通过。
 - 客户端 `compileall src tests` 通过。
 - `git diff --check` 通过。
 
@@ -56,6 +57,16 @@
 - 产品规格要求的恢复尚未实现；P2-12 已补齐原始数据清理入口，但不能把清理能力等同于完整恢复和最终发布就绪。
 
 ## 排期变更记录
+
+### 2026-06-22：P3-14 最近任务设备作用域与继续入口修复
+
+变更原因：用户反馈设备里的最近任务没有区分设备，本应区分本机任务和全局任务；最近任务显示来源为 0、任务状态为运行中且不能点击继续任务，导致发布候选 UI 无法正确表达本机可执行任务与云端历史任务边界。
+
+影响阶段：挂靠 P3 阶段 14 打包发布与最终验收，不改变主排期；属于 R06 真实备份、R07 校对、R10 断网补偿和云端历史导入后的任务状态一致性阻塞修复。
+
+验收标准：bridge 任务 DTO 提供执行作用域、设备摘要、持久化来源数和可操作字段；工作台/备份页分开展示本机任务与全局任务；本机 `running/paused/failed_retryable/queued` 可继续，全局历史只读展示；继续任务使用页面内密码输入；定向 bridge 和前端静态测试、compileall、`git diff --check` 通过。
+
+回到主排期条件：本轮 UI/bridge 任务作用域修复、文档审计更新、测试和提交完成后，继续进入 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
 
 ### 2026-06-22：P3-14 Cloud Sync summary DTO 与校对页回读入口修复
 
@@ -318,6 +329,31 @@
 回到主排期条件：本轮文档约束提交完成后，下一开发项回到 P0 远端对象校对 worker。
 
 ## 完成记录
+
+### P3 阶段 14 打包发布与最终验收：最近任务设备作用域与继续入口修复
+
+- P3 阶段 14 最近任务设备作用域与继续入口修复完成；P3 阶段 14 仍在进行中，下一个开发阶段为 P3 阶段 14 干净 Windows R04-R14 发布候选验收。
+- bridge 任务 DTO 新增 `scope`、`scope_label`、`owner_device_hint`、`current_device`、`imported_from_cloud` 和 `can_start/can_continue/can_pause/can_cancel` 字段，明确本机任务和全局/其他设备历史任务边界。
+- 修复最近任务来源数展示：`source_count` 改为优先使用 `backup_jobs.source_count` 持久化值，云端历史尚未完整导入 `backup_sources` 行时不再显示 0；`local_source_count` 仅保留为本地来源行诊断。
+- 工作台最近任务展示本机/全局范围和设备摘要，下一步动作只根据 `can_continue` 提示继续任务，避免其他设备的 `running` 误导为本机可执行任务。
+- 备份页将任务表拆分为“本机任务”和“全局任务”；本机 `queued/running/paused/failed_retryable` 任务可继续，全局任务只读，不显示可执行写动作。
+- 继续/启动任务改为使用页面内一次性压缩密码和授权密码输入，提交后立即清空，不再用 `window.prompt` 收集密码。
+- bridge 写路径新增保护：`start_job` 和 `transition_job` 拒绝操作非本机任务，避免其他设备或全局历史任务被本机误继续、暂停或取消。
+- 更新 `docs/current/api_database_contract.md`、`design.md`、`spec.md`、`document_change_audit.md` 和 `client/docs/frontend_spec_pywebview.md`，固化最近任务设备作用域、来源数和可操作字段契约。
+- 新增和扩展 `tests/test_webview_bridge.py`、`tests/test_webui_static.py`，覆盖云端历史来源数不显示 0、全局任务只读、本机 running 任务可继续、前端本机/全局拆分和禁止 `window.prompt`。
+- 已验证定向客户端测试：`uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pytest-basetemp-task-scope tests/test_webview_bridge.py tests/test_webui_static.py`，30 项通过。
+- 已验证全量客户端测试：`uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pt`，206 项通过。
+- 已验证 `uv run python -m compileall src tests` 通过。
+- 已验证 `node --check client/src/auto_backup_client/webui/js/views/jobs.js` 和 `node --check client/src/auto_backup_client/webui/js/views/dashboard.js` 通过。
+- 已验证 `git diff --check` 通过。
+- 验证备注：曾用较长 basetemp 跑全量 pytest，`test_real_backup_pipeline_test_cli.py` 触发 `invalid_argument`/一次 Windows access violation；按项目既有短路径约束改用 `..\.cache\pt` 后全量通过，并已将该测试路径问题沉淀到 `AGENTS.MD`。
+
+提交摘要：本次提交修复 pywebview 最近任务和备份任务的设备作用域展示，任务 DTO 明确本机/全局边界、设备摘要、持久化来源数和可操作权限；前端拆分本机任务与全局任务，恢复本机 running/paused/failed_retryable/queued 任务继续入口，同时禁止全局历史被本机误操作并移除继续任务的 `window.prompt` 密码输入。
+
+后续待办：
+
+- 回到 P3 阶段 14 干净 Windows R04-R14，重点复验同一百度账号多设备历史中，本机任务可继续，其他设备任务只读且显示正确设备摘要和来源数。
+- 干净机 R10 断网补偿仍需验证本地 running/failed_retryable 任务在网络恢复后可继续并完成 outbox 补偿同步。
 
 ### P3 阶段 14 打包发布与最终验收：Cloud Sync summary DTO 与校对页回读入口修复
 

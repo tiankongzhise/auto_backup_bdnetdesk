@@ -16,7 +16,10 @@ export async function renderJobs(root, context) {
       ]),
     ]),
   );
-  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "备份任务" }), jobsTable(context)]));
+  const localJobs = state.jobs.filter((job) => job.current_device);
+  const globalJobs = state.jobs.filter((job) => !job.current_device);
+  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "本机任务" }), jobsTable(context, localJobs, "暂无本机备份任务")]));
+  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "全局任务" }), jobsTable(context, globalJobs, "暂无其他设备或全局历史任务")]));
 }
 
 function jobForm(context) {
@@ -150,11 +153,16 @@ function jobForm(context) {
     button("创建并启动", {
       variant: "primary",
       onClick: async () => {
+        const passwords = readRuntimePasswords();
+        if (!passwords.archive_password) {
+          showToast("请输入压缩密码");
+          return;
+        }
         const created = await context.call("create_job", name.value.trim(), state.selectedSources);
         const operationData = await context.call(
           "start_job",
           created.job.job_id,
-          { archive_password: archivePassword.value, authorization_password: authPassword.value },
+          passwords,
           {
             run_upload: runUpload.checked,
             root_dir: rootDir.value.trim(),
@@ -175,11 +183,17 @@ function jobForm(context) {
   ]);
 }
 
-function jobsTable(context) {
+function jobsTable(context, rows = state.jobs, emptyText = "暂无备份任务") {
+  return jobsTableForRows(context, rows, emptyText);
+}
+
+function jobsTableForRows(context, rows, emptyText) {
   return table(
     [
       { label: "任务", render: (job) => el("strong", { text: job.name }) },
       { label: "状态", render: (job) => badge(job.status_label, statusTone(job.status)) },
+      { label: "范围", render: (job) => badge(job.scope_label || "-", job.current_device ? "green" : "blue") },
+      { label: "设备", render: (job) => el("span", { class: "mono", text: job.owner_device_hint || "-" }) },
       { label: "来源", render: (job) => `${job.source_count} 个` },
       { label: "阶段", key: "last_stage" },
       { label: "同步", key: "sync_status" },
@@ -187,25 +201,30 @@ function jobsTable(context) {
         label: "操作",
         render: (job) =>
           el("div", { class: "toolbar" }, [
-            button("继续", {
-              disabled: !["paused", "failed_retryable", "queued"].includes(job.status),
+            button(job.status === "queued" ? "开始" : "继续", {
+              disabled: !job.can_continue,
+              title: job.current_device ? "使用上方压缩密码和授权密码继续任务" : "全局任务只读，不能在本机继续",
               onClick: async () => {
-                const archivePassword = window.prompt("输入备份压缩密码") || "";
-                const authPassword = window.prompt("输入百度授权密码") || "";
-                const data = await context.call("start_job", job.job_id, { archive_password: archivePassword, authorization_password: authPassword }, {});
+                const passwords = readRuntimePasswords();
+                if (!passwords.archive_password) {
+                  showToast("请输入压缩密码");
+                  return;
+                }
+                const data = await context.call("start_job", job.job_id, passwords, {});
                 upsertOperation(data.operation);
                 showToast("已提交继续任务");
+                context.pollOperation(data.operation.operation_id);
               },
             }),
             button("暂停", {
-              disabled: job.status !== "running",
+              disabled: !job.can_pause,
               onClick: async () => {
                 await context.call("transition_job", job.job_id, "pause");
                 showToast("任务已暂停");
               },
             }),
             button("取消", {
-              disabled: ["completed", "canceled"].includes(job.status),
+              disabled: !job.can_cancel,
               onClick: async () => {
                 await context.call("transition_job", job.job_id, "cancel");
                 showToast("任务已取消");
@@ -214,7 +233,23 @@ function jobsTable(context) {
           ]),
       },
     ],
-    state.jobs,
-    "暂无备份任务",
+    rows,
+    emptyText,
   );
+}
+
+function readRuntimePasswords() {
+  const archivePassword = document.querySelector("#archive-password");
+  const authPassword = document.querySelector("#auth-password");
+  const passwords = {
+    archive_password: archivePassword ? archivePassword.value : "",
+    authorization_password: authPassword ? authPassword.value : "",
+  };
+  if (archivePassword) {
+    archivePassword.value = "";
+  }
+  if (authPassword) {
+    authPassword.value = "";
+  }
+  return passwords;
 }

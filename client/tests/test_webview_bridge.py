@@ -6,9 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from auto_backup_client.baidu.models import EntitySummary, RevisionSummary
+from auto_backup_client.backup_jobs import BackupJobManager
 from auto_backup_client.device_credentials import DeviceCredentials
 from auto_backup_client.settings import ClientSettings
-from auto_backup_client.sqlite_store import SQLiteClientStore
+from auto_backup_client.sqlite_store import SQLiteClientStore, build_version_fields
 from auto_backup_client.webview_bridge import AutoBackupWebviewBridge
 
 
@@ -44,6 +45,99 @@ def test_create_job_returns_redacted_source_dto(tmp_path) -> None:
     dumped = json.dumps(payload, ensure_ascii=False)
     assert str(source) not in dumped
     assert "path_digest" in dumped
+
+
+def test_job_dto_uses_persisted_source_count_and_device_scope(tmp_path) -> None:
+    bridge = _bridge(tmp_path, device_id="device-local")
+    payload = build_version_fields(
+        entity_payload={
+            "backup_job_id": "job-cloud",
+            "entity_id": "backup_job_job-cloud",
+            "device_id": "device-other",
+            "job_name": "云端历史任务",
+            "status": "running",
+            "source_count": 2,
+            "started_at": "2026-06-22T08:00:00Z",
+            "paused_at": None,
+            "canceled_at": None,
+            "completed_at": None,
+            "last_stage": "upload",
+            "last_error": "",
+            "created_at": "2026-06-22T08:00:00Z",
+        },
+        updated_by_device_id="device-other",
+        now="2026-06-22T08:00:00Z",
+        sync_status="synced",
+    )
+    with bridge.store.transaction() as conn:
+        bridge.store.put_backup_job(conn, payload, enqueue=False)
+
+    response = bridge.list_jobs()
+
+    assert response["ok"] is True
+    job = response["data"]["jobs"][0]
+    assert job["source_count"] == 2
+    assert job["local_source_count"] == 0
+    assert job["scope"] == "global"
+    assert job["scope_label"] == "全局任务"
+    assert job["current_device"] is False
+    assert job["can_continue"] is False
+    assert job["can_pause"] is False
+    assert job["can_cancel"] is False
+
+
+def test_job_dto_marks_running_current_device_job_as_continuable(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    bridge = _bridge(tmp_path, device_id="device-local")
+    manager = BackupJobManager(bridge.store, device_id="device-local")
+    created = manager.create_job([str(source)], now="2026-06-22T08:00:00Z")
+    manager.transition_job(created.job.backup_job_id, "running", now="2026-06-22T08:01:00Z")
+
+    response = bridge.list_jobs()
+
+    assert response["ok"] is True
+    job = response["data"]["jobs"][0]
+    assert job["scope"] == "local"
+    assert job["scope_label"] == "本机任务"
+    assert job["current_device"] is True
+    assert job["source_count"] == 1
+    assert job["can_continue"] is True
+    assert job["can_pause"] is True
+    assert job["can_cancel"] is True
+
+
+def test_start_job_rejects_global_history_job(tmp_path) -> None:
+    bridge = _bridge(tmp_path, device_id="device-local", run_operations_inline=True)
+    payload = build_version_fields(
+        entity_payload={
+            "backup_job_id": "job-cloud",
+            "entity_id": "backup_job_job-cloud",
+            "device_id": "device-other",
+            "job_name": "其他设备任务",
+            "status": "running",
+            "source_count": 1,
+            "started_at": "2026-06-22T08:00:00Z",
+            "paused_at": None,
+            "canceled_at": None,
+            "completed_at": None,
+            "last_stage": "upload",
+            "last_error": "",
+            "created_at": "2026-06-22T08:00:00Z",
+        },
+        updated_by_device_id="device-other",
+        now="2026-06-22T08:00:00Z",
+        sync_status="synced",
+    )
+    with bridge.store.transaction() as conn:
+        bridge.store.put_backup_job(conn, payload, enqueue=False)
+
+    response = bridge.start_job("job-cloud", {"archive_password": "ArchivePassword123", "authorization_password": "AuthPassword456"}, {})
+
+    assert response["ok"] is True
+    operation = response["data"]["operation"]
+    assert operation["status"] == "failed"
+    assert "其他设备" in operation["error"]["message"]
 
 
 def test_start_job_returns_operation_without_password_leak(tmp_path) -> None:

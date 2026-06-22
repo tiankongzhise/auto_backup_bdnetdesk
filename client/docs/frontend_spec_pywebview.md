@@ -91,6 +91,8 @@ Python 入口：
   - `purpose` 支持 `cache_root`、`restore_target`、`quarantine_dir`。
 - `list_jobs(filter)`
   - 返回最近任务，默认按更新时间倒序。
+  - 每条任务必须包含 `scope/scope_label/owner_device_hint/current_device/can_start/can_continue/can_pause/can_cancel/source_count/local_source_count`。
+  - `scope=local` 才允许本机继续、暂停、取消；`scope=global` 只读展示。
 - `create_job(name, sources)`
   - `sources` 来自 `choose_sources()` 或拖拽路径；后端重新校验路径存在性和类型。
 - `start_job(job_id, passwords, options)`
@@ -173,7 +175,13 @@ Python 入口：
     "job_name": "文档备份",
     "status": "completed",
     "status_label": "已完成",
+    "scope": "local",
+    "scope_label": "本机任务",
+    "owner_device_hint": "dev_01234567...cdef",
+    "current_device": true,
+    "can_continue": false,
     "source_count": 2,
+    "local_source_count": 2,
     "last_stage": "reconcile_remote",
     "last_error": "",
     "sync_status": "synced",
@@ -216,7 +224,7 @@ Python 入口：
 
 - 系统摘要条：设备、账号、云端、缓存。
 - 下一步动作区：根据状态展示一个主按钮和最多两个次按钮。
-- 最近任务表：支持开始、继续、查看详情、恢复。
+- 最近任务表：展示本机/全局任务、设备摘要、来源数和状态；只有本机任务支持开始、继续、查看详情、恢复。
 - 风险提醒列表：缓存不足、未授权、待重试、校对差异、同步待补偿。
 - 运行中操作条：显示阶段、进度、取消按钮。
 
@@ -226,8 +234,9 @@ Python 入口：
 
 - 添加来源按钮、拖拽区域、待添加来源表。
 - 任务名输入、缓存目录选择、缓存预算检查开关。
-- 归档密码和授权密码只在开始 modal 中出现。
+- 归档密码和授权密码在页面内一次性输入，提交开始/继续后立即清空，不使用 `window.prompt`。
 - 任务表展示状态、来源数、阶段、同步状态、更新时间。
+- 任务表拆分本机任务和全局任务；全局任务只读，不显示可执行动作。
 
 按钮启停：
 

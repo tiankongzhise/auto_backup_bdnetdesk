@@ -90,6 +90,14 @@ def _status_label(status: str) -> str:
     return labels.get(status, status_label(status))
 
 
+def _is_cloud_history_path(value: str | None) -> bool:
+    return str(value or "").startswith("cloud-history://")
+
+
+def _job_is_current_device(job_record: Any, current_device_id: str) -> bool:
+    return str(getattr(job_record, "device_id", "") or "") == current_device_id
+
+
 def _size_label(size: int | None) -> str:
     if size is None:
         return "-"
@@ -371,6 +379,9 @@ class AutoBackupWebviewBridge:
             if next_status is None:
                 raise ValueError(f"不支持的任务动作：{action}")
             manager = BackupJobManager(self.store, device_id=self.device_id)
+            current = manager.get_job_with_sources(job_id).job
+            if not _job_is_current_device(current, self.device_id):
+                raise ValueError("该任务属于其他设备或全局历史，只能查看，不能在本机修改状态")
             job = manager.transition_job(job_id, next_status)
             return {"job": self._job_to_dto(job)}
 
@@ -634,18 +645,36 @@ class AutoBackupWebviewBridge:
     def _job_to_dto(self, job: Any) -> dict[str, Any]:
         job_record = getattr(job, "job", job)
         sources = [self._source_to_dto(source) for source in getattr(job, "sources", ())]
+        current_device = _job_is_current_device(job_record, self.device_id)
+        scope = "local" if current_device else "global"
+        source_count = max(int(getattr(job_record, "source_count", 0) or 0), len(sources))
+        imported_from_cloud = any(_is_cloud_history_path(getattr(source, "local_path", "")) for source in getattr(job, "sources", ()))
+        can_start = current_device and job_record.status == "queued"
+        can_continue = current_device and job_record.status in {"queued", "running", "paused", "failed_retryable"}
+        can_pause = current_device and job_record.status == "running"
+        can_cancel = current_device and job_record.status not in {"completed", "canceled", "failed_terminal"}
         return {
             "job_id": job_record.backup_job_id,
             "name": job_record.job_name,
             "status": job_record.status,
             "status_label": _status_label(job_record.status),
+            "scope": scope,
+            "scope_label": "本机任务" if current_device else "全局任务",
+            "owner_device_hint": _device_id_hint(getattr(job_record, "device_id", "")),
+            "current_device": current_device,
+            "imported_from_cloud": imported_from_cloud,
+            "can_start": can_start,
+            "can_continue": can_continue,
+            "can_pause": can_pause,
+            "can_cancel": can_cancel,
             "created_at": job_record.created_at,
             "updated_at": job_record.updated_at,
             "last_stage": job_record.last_stage,
             "sync_status": job_record.sync_status,
             "last_error": self._redact_optional(job_record.last_error),
             "sources": sources,
-            "source_count": len(sources),
+            "source_count": source_count,
+            "local_source_count": len(sources),
         }
 
     def _source_to_dto(self, source: Any) -> dict[str, Any]:
@@ -859,9 +888,13 @@ class AutoBackupWebviewBridge:
         auth_password = str(passwords.get("authorization_password") or "")
         if not archive_password:
             raise ValueError("需要输入备份压缩密码")
-        account_id = self._selected_account_id(options)
         job_state = BackupJobManager(self.store, device_id=self.device_id).get_job_with_sources(job_id).job
-        if job_state.status == "paused":
+        if not _job_is_current_device(job_state, self.device_id):
+            raise ValueError("该任务属于其他设备或全局历史，只能查看，不能在本机继续执行")
+        if job_state.status not in {"queued", "running", "paused", "failed_retryable"}:
+            raise ValueError("当前任务状态不能继续执行")
+        account_id = self._selected_account_id(options)
+        if job_state.status in {"paused", "failed_retryable"}:
             BackupJobManager(self.store, device_id=self.device_id).transition_job(job_id, "running")
         operation.update(stage="authorization", message="正在解密百度授权", progress=0.18)
         with self._baidu_client_from_password(account_id, auth_password) as baidu_client, self._cloud_client() as cloud_client:

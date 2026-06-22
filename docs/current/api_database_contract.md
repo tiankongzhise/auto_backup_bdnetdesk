@@ -709,7 +709,7 @@ const data = await call("list_jobs");
 | 方法 | 参数 | 返回 | 写锁/长操作 | 备注 |
 | --- | --- | --- | --- | --- |
 | `get_app_state()` | 无 | `app`、`dashboard`、`settings` | 否 | 启动页总状态。 |
-| `list_jobs()` | 无 | `jobs[]` | 否 | 最近 100 个任务。 |
+| `list_jobs()` | 无 | `jobs[]` | 否 | 最近 100 个任务，DTO 必须区分本机任务和全局/其他设备历史任务。 |
 | `create_job(name, sources)` | `name` string；`sources[]` | `job` | 写锁 | `sources` 可来自选择器 token 或拖拽 path。 |
 | `start_job(job_id, passwords, options)` | `passwords.archive_password`、`passwords.authorization_password`；上传选项 | `operation` | 长操作 | 运行备份 pipeline。 |
 | `transition_job(job_id, action)` | `action=pause/resume/cancel` | `job` | 写锁 | `resume` 映射为 `running`。 |
@@ -775,6 +775,43 @@ const data = await call("list_jobs");
   ]
 }
 ```
+
+`list_jobs()` 任务 DTO：
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "job_001",
+      "name": "照片备份",
+      "status": "running",
+      "status_label": "运行中",
+      "scope": "local",
+      "scope_label": "本机任务",
+      "owner_device_hint": "dev_01234567...cdef",
+      "current_device": true,
+      "imported_from_cloud": false,
+      "source_count": 2,
+      "local_source_count": 2,
+      "can_start": false,
+      "can_continue": true,
+      "can_pause": true,
+      "can_cancel": true,
+      "last_stage": "upload",
+      "sync_status": "sync_pending",
+      "updated_at": "2026-06-22T08:00:00Z"
+    }
+  ]
+}
+```
+
+字段约束：
+
+- `scope=local` 表示 `backup_jobs.device_id` 等于本机真实 `device_id`，可按 `can_*` 字段提供开始、继续、暂停和取消入口。
+- `scope=global` 表示其他设备或全局云端历史任务，只允许只读展示，不得在本机继续、暂停或取消。
+- `source_count` 优先使用 `backup_jobs.source_count` 持久化值；云端历史导入尚未包含 `backup_sources` 行时，不能因为本地来源行数为 0 而显示 `0 个来源`。
+- `local_source_count` 表示当前 SQLite 中已导入的 `backup_sources` 行数，仅用于诊断。
+- 本机 `queued/running/paused/failed_retryable` 任务可 `can_continue=true`；继续任务仍需前端页面内一次性提交运行时密码，不得使用 `window.prompt`。
 
 `start_job(...)` 参数：
 

@@ -501,3 +501,13 @@ P? 阶段 N <阶段名> 开发完成；下一个开发阶段为 P? 阶段 N+1 <�
 解决方案：`go_build.ps1` 新增 `-BuildParallelism`，默认传给 `go build -p=1`；新增 `-BuildTimeoutSeconds`，默认 900 秒；Go 子进程 stdout/stderr 改为 `ReadToEndAsync()` 双流并发读取，失败时回显真实 Go 输出，超时时终止子进程树并返回明确错误。验证中曾尝试 PowerShell `DataReceivedEventHandler` 事件回调，但 Windows PowerShell 5.1 出现无法打印异常的进程级崩溃，已放弃该写法。
 
 后续约束：服务端发布构建默认使用 `.\go_build.ps1` 的低并发配置；除非在干净 Go 工具链中重新验证，不要把默认构建并发调高。PowerShell 5.1 脚本中避免用事件回调收集子进程 stdout/stderr，优先使用双流 `ReadToEndAsync()` 或等价并发读取。若再次卡在 `Running in cloud-api: go build ...`，先检查是否传入了高 `-BuildParallelism`、是否命中 Go 工具链标准库冷编译异常，以及脚本是否按超时返回真实 stderr。
+
+### 2026-06-22：客户端全量 pytest 长 basetemp 触发真实 pipeline CLI 误报
+
+问题：执行客户端全量 `uv run python -m pytest` 时，如果 `--basetemp` 使用较长目录名，例如 `..\.cache\pytest-basetemp-task-scope-all-rerun2`，`tests/test_real_backup_pipeline_test_cli.py::test_real_pipeline_cli_runs_full_flow_and_redacts_sensitive_values` 会返回 `操作失败: invalid_argument`；更早一次同类全量运行还在 `_write_deterministic_file` 写临时测试文件时触发 Windows `access violation`。同一测试使用短 basetemp 单独复跑可通过，全量测试使用短目录 `..\.cache\pt` 也可通过。
+
+原因：该测试会创建临时源文件、深层 job cache、长 archive 文件名和 7-Zip/上传相关路径；过长 pytest basetemp 会再次触发 Windows 长路径和本机运行环境不稳定边界，失败发生在测试临时路径/文件生命周期，不是本轮业务断言回归。
+
+解决方案：本轮改用仓库内短目录执行全量验收：`uv run python -m pytest -p no:cacheprovider --basetemp ..\.cache\pt`，206 项通过；定向 bridge/webui 测试、单独 real pipeline CLI 测试、compileall、node --check 和 `git diff --check` 均通过。
+
+后续约束：客户端全量 pytest 尤其包含 `test_real_backup_pipeline_test_cli.py` 时，必须优先使用短 basetemp `..\.cache\pt` 或同等级短路径；不得把长 basetemp 下的 `invalid_argument` 或 Windows access violation 直接误判为业务代码失败。若必须复现失败，先用短 basetemp 单独复跑对应测试再判断。
