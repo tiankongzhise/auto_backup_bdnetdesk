@@ -43,6 +43,13 @@ BridgeCallable = Callable[[], dict[str, Any]]
 OperationCallable = Callable[["OperationHandle"], dict[str, Any]]
 DeviceCredentialResolver = Callable[..., tuple[Any, str]]
 DEFAULT_MAX_ARCHIVE_SIZE_BYTES = 4 * 1024**3
+OPERATION_KIND_LABELS = {
+    "backup": "备份任务",
+    "cleanup": "原始数据清理",
+    "restore": "恢复",
+    "remote_reconcile": "远端校对",
+    "remote_repair": "远端修复",
+}
 
 
 def _utc_now() -> str:
@@ -62,6 +69,15 @@ def _edge_hint(value: str | None) -> str:
     if len(normalized) <= 8:
         return _short_digest(path_sha256(normalized), length=8) or ""
     return f"{normalized[:4]}...{normalized[-4:]}"
+
+
+def _public_id_hint(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = str(value).strip()
+    if len(normalized) <= 18:
+        return normalized
+    return f"{normalized[:8]}...{normalized[-6:]}"
 
 
 def _device_id_hint(value: str | None) -> str:
@@ -177,6 +193,7 @@ class OperationHandle:
     finished_at: str | None = None
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+    context: dict[str, Any] = field(default_factory=dict)
     cancel_requested: bool = False
 
     def mark_running(self, message: str = "正在执行") -> None:
@@ -194,6 +211,10 @@ class OperationHandle:
             self.message = message
         if progress is not None:
             self.progress = max(0.0, min(1.0, progress))
+        self.updated_at = _utc_now()
+
+    def update_context(self, context: dict[str, Any]) -> None:
+        self.context.update({key: value for key, value in context.items() if value not in (None, "")})
         self.updated_at = _utc_now()
 
     def mark_complete(self, result: dict[str, Any]) -> None:
@@ -224,11 +245,14 @@ class OperationHandle:
     def to_dto(self) -> dict[str, Any]:
         dto = {
             "operation_id": self.operation_id,
+            "operation_id_hint": _public_id_hint(self.operation_id),
             "kind": self.kind,
+            "kind_label": OPERATION_KIND_LABELS.get(self.kind, self.kind),
             "status": self.status,
             "stage": self.stage,
             "message": self.message,
             "progress": self.progress,
+            "context": dict(self.context),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "started_at": self.started_at,
@@ -249,8 +273,8 @@ class OperationRegistry:
         self._operations: dict[str, OperationHandle] = {}
         self._executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="auto-backup-webview")
 
-    def submit(self, kind: str, func: OperationCallable) -> OperationHandle:
-        operation = OperationHandle(operation_id=secrets.token_hex(12), kind=kind)
+    def submit(self, kind: str, func: OperationCallable, *, context: dict[str, Any] | None = None) -> OperationHandle:
+        operation = OperationHandle(operation_id=secrets.token_hex(12), kind=kind, context=context or {})
         with self._lock:
             self._operations[operation.operation_id] = operation
 
@@ -348,6 +372,9 @@ class AutoBackupWebviewBridge:
     def list_jobs(self) -> dict[str, Any]:
         return self._guard(lambda: {"jobs": self._list_jobs_dto(limit=100)})
 
+    def list_job_choices(self) -> dict[str, Any]:
+        return self._guard(lambda: {"jobs": self._list_jobs_dto(limit=200)})
+
     def create_job(self, name: str, sources: list[Any]) -> dict[str, Any]:
         def work() -> dict[str, Any]:
             source_inputs = self._source_inputs_from_api(sources)
@@ -365,7 +392,11 @@ class AutoBackupWebviewBridge:
                 return self._backup_runner(operation)
             return self._run_backup_job(operation, job_id=job_id, passwords=passwords or {}, options=options or {})
 
-        operation = self._operations.submit("backup", lambda op: self._serialized_operation(work, op))
+        operation = self._operations.submit(
+            "backup",
+            lambda op: self._serialized_operation(work, op),
+            context=self._job_operation_context(job_id),
+        )
         return self._ok({"operation": operation.to_dto()})
 
     def transition_job(self, job_id: str, action: str) -> dict[str, Any]:
@@ -472,6 +503,7 @@ class AutoBackupWebviewBridge:
         operation = self._operations.submit(
             "remote_reconcile",
             lambda op: self._serialized_operation(lambda inner: self._run_remote_reconcile(inner, scope), op),
+            context=self._remote_reconcile_operation_context(scope),
         )
         return self._ok({"operation": operation.to_dto()})
 
@@ -479,6 +511,7 @@ class AutoBackupWebviewBridge:
         operation = self._operations.submit(
             "remote_repair",
             lambda op: self._serialized_operation(lambda inner: self._apply_remote_repairs(inner, selection, confirmation), op),
+            context={"target_label": "最近一次远端校对报告"},
         )
         return self._ok({"operation": operation.to_dto()})
 
@@ -489,6 +522,7 @@ class AutoBackupWebviewBridge:
         operation = self._operations.submit(
             "cleanup",
             lambda op: self._serialized_operation(lambda inner: self._apply_cleanup(inner, selection, options or {}), op),
+            context=self._cleanup_operation_context(selection),
         )
         return self._ok({"operation": operation.to_dto()})
 
@@ -499,6 +533,7 @@ class AutoBackupWebviewBridge:
         operation = self._operations.submit(
             "restore",
             lambda op: self._serialized_operation(lambda inner: self._apply_restore(inner, selection, options or {}), op),
+            context=self._restore_operation_context(selection),
         )
         return self._ok({"operation": operation.to_dto()})
 
@@ -628,6 +663,89 @@ class AutoBackupWebviewBridge:
         manager = BackupJobManager(self.store, device_id=self.device_id)
         return [self._job_to_dto(job) for job in manager.list_jobs(limit=limit)]
 
+    def _job_operation_context(self, job_id: str) -> dict[str, Any]:
+        job = self.store.get_backup_job(job_id)
+        if job is None:
+            return {
+                "job_id": job_id,
+                "job_id_hint": _public_id_hint(job_id),
+                "target_label": f"任务 {_public_id_hint(job_id)}",
+            }
+        job_name = str(job.get("job_name") or "未命名任务")
+        return {
+            "job_id": str(job.get("backup_job_id") or job_id),
+            "job_id_hint": _public_id_hint(str(job.get("backup_job_id") or job_id)),
+            "job_name": job_name,
+            "job_status": str(job.get("status") or ""),
+            "job_status_label": _status_label(str(job.get("status") or "")),
+            "source_count": int(job.get("source_count") or 0),
+            "target_label": job_name,
+        }
+
+    def _cleanup_operation_context(self, selection: list[str]) -> dict[str, Any]:
+        selected = [str(item).strip() for item in selection if str(item).strip()]
+        context = {
+            "selection_count": len(selected),
+            "target_label": f"{len(selected)} 个清理候选" if selected else "未选择清理候选",
+        }
+        try:
+            candidates = self._list_cleanup_candidates({"limit": 5000}).get("candidates", [])
+            matched = [item for item in candidates if item.get("content_reference_id") in selected]
+            context.update(self._selection_context_from_candidates(matched))
+        except BaseException:
+            pass
+        return context
+
+    def _restore_operation_context(self, selection: list[str]) -> dict[str, Any]:
+        selected = [str(item).strip() for item in selection if str(item).strip()]
+        context = {
+            "selection_count": len(selected),
+            "target_label": f"{len(selected)} 个恢复候选" if selected else "未选择恢复候选",
+        }
+        try:
+            candidates = self._list_restore_candidates({"limit": 5000}).get("candidates", [])
+            matched = [item for item in candidates if item.get("restore_candidate_id") in selected]
+            context.update(self._selection_context_from_candidates(matched))
+        except BaseException:
+            pass
+        return context
+
+    def _remote_reconcile_operation_context(self, scope: dict[str, Any]) -> dict[str, Any]:
+        job_id = str((scope or {}).get("job_id") or "").strip()
+        if job_id:
+            return self._job_operation_context(job_id)
+        upload_session_id = str((scope or {}).get("upload_session_id") or "").strip()
+        if upload_session_id:
+            return {
+                "upload_session_id_hint": _public_id_hint(upload_session_id),
+                "target_label": f"上传会话 {_public_id_hint(upload_session_id)}",
+            }
+        remote_dir = str((scope or {}).get("remote_dir") or "").strip()
+        if remote_dir:
+            return {
+                "remote_dir_digest": _short_digest(path_sha256(remote_dir), length=16),
+                "target_label": "远端目录校对",
+            }
+        return {"target_label": "未指定校对范围"}
+
+    def _selection_context_from_candidates(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        if not candidates:
+            return {}
+        job_ids = sorted({str(item.get("job_id") or "") for item in candidates if item.get("job_id")})
+        source_names = [str(item.get("source_display_name") or "") for item in candidates if item.get("source_display_name")]
+        context: dict[str, Any] = {
+            "selection_count": len(candidates),
+            "job_count": len(job_ids),
+            "source_names": source_names[:3],
+        }
+        if len(job_ids) == 1:
+            context.update(self._job_operation_context(job_ids[0]))
+        elif job_ids:
+            context["target_label"] = f"{len(job_ids)} 个任务中的 {len(candidates)} 个候选"
+        if source_names and "target_label" not in context:
+            context["target_label"] = "、".join(source_names[:2])
+        return context
+
     def _source_inputs_from_api(self, sources: Iterable[Any]) -> list[BackupSourceInput]:
         normalized: list[BackupSourceInput] = []
         for item in sources:
@@ -655,6 +773,8 @@ class AutoBackupWebviewBridge:
         can_cancel = current_device and job_record.status not in {"completed", "canceled", "failed_terminal"}
         return {
             "job_id": job_record.backup_job_id,
+            "job_id_hint": _public_id_hint(job_record.backup_job_id),
+            "entity_id": job_record.entity_id,
             "name": job_record.job_name,
             "status": job_record.status,
             "status_label": _status_label(job_record.status),
@@ -889,6 +1009,7 @@ class AutoBackupWebviewBridge:
         if not archive_password:
             raise ValueError("需要输入备份压缩密码")
         job_state = BackupJobManager(self.store, device_id=self.device_id).get_job_with_sources(job_id).job
+        operation.update_context(self._job_operation_context(job_state.backup_job_id))
         if not _job_is_current_device(job_state, self.device_id):
             raise ValueError("该任务属于其他设备或全局历史，只能查看，不能在本机继续执行")
         if job_state.status not in {"queued", "running", "paused", "failed_retryable"}:
@@ -1017,6 +1138,7 @@ class AutoBackupWebviewBridge:
             confirm_text=str(options.get("confirm_text") or ""),
             permanent_confirm_text=str(options.get("permanent_confirm_text") or ""),
         )
+        operation.update_context({"selection_count": result.requested_count})
         return {
             "dry_run": bool(options.get("dry_run", True)),
             "method": result.method,
@@ -1056,12 +1178,15 @@ class AutoBackupWebviewBridge:
                     "archive_id": item.archive_id,
                     "archive_seq": item.archive_seq,
                     "archive_status": item.archive_verify_status,
+                    "local_archive_available": item.local_archive_available,
+                    "remote_download_available": item.remote_download_available,
                     "remote_archive_status": item.remote_archive_status,
                     "cleanup_status": item.cleanup_status,
                     "ready": item.restorable,
                     "blockers": [] if item.restorable else [item.reason],
                     "size_label": _size_label(item.size_bytes),
                     "candidate_status": item.candidate_status,
+                    "file_count": item.file_count,
                 }
                 for item in report.candidates
             ],
@@ -1095,6 +1220,7 @@ class AutoBackupWebviewBridge:
         finally:
             if baidu_client is not None:
                 baidu_client.close()
+        operation.update_context({"selection_count": result.requested_count})
         return {
             "selected_count": result.requested_count,
             "restored_files": result.restored_count,
@@ -1136,6 +1262,7 @@ class AutoBackupWebviewBridge:
             operation.update(stage="reconcile", message="正在比对本地索引与百度远端对象", progress=0.35)
             report = reconciler.reconcile(scope)
         self._last_reconcile_report = report
+        operation.update_context({"difference_count": sum(report.status_counts.values()), "has_differences": report.has_differences})
         return self._reconcile_report_to_dto(report)
 
     def _apply_remote_repairs(self, operation: OperationHandle, selection: dict[str, Any] | list[Any], confirmation: str) -> dict[str, Any]:
@@ -1154,6 +1281,7 @@ class AutoBackupWebviewBridge:
         operation.update(stage="repair", message="正在应用远端索引修复", progress=0.32)
         repairer = RemoteObjectRepairer(store=self.store, updated_by_device_id=self.device_id)
         result = repairer.apply(plan, dry_run=dry_run)
+        operation.update_context({"selection_count": result.selected_count})
         return {
             "confirm_text": CONFIRM_REPAIR_TEXT,
             "dry_run": result.dry_run,

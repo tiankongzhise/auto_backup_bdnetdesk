@@ -4,25 +4,27 @@ import { badge, button, clear, el, field, input, operationView, showToast, statu
 export async function renderJobs(root, context) {
   const data = await context.call("list_jobs");
   state.jobs = data.jobs || [];
+  const statusBox = el("div");
+  redrawOperationStatus(statusBox);
   root.appendChild(
     el("div", { class: "grid two" }, [
       el("section", { class: "panel" }, [
         el("h2", { text: "新建备份" }),
-        jobForm(context),
+        jobForm(context, statusBox),
       ]),
       el("section", { class: "panel" }, [
         el("h2", { text: "执行状态" }),
-        operationView([...state.operations.values()].find((item) => item.kind === "backup" && ["running", "pending"].includes(item.status))),
+        statusBox,
       ]),
     ]),
   );
   const localJobs = state.jobs.filter((job) => job.current_device);
   const globalJobs = state.jobs.filter((job) => !job.current_device);
-  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "本机任务" }), jobsTable(context, localJobs, "暂无本机备份任务")]));
-  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "全局任务" }), jobsTable(context, globalJobs, "暂无其他设备或全局历史任务")]));
+  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "本机任务" }), jobsTable(context, statusBox, localJobs, "暂无本机备份任务")]));
+  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "全局任务" }), jobsTable(context, statusBox, globalJobs, "暂无其他设备或全局历史任务")]));
 }
 
-function jobForm(context) {
+function jobForm(context, statusBox) {
   const uploadDefaults = (state.appState && state.appState.settings && state.appState.settings.upload) || {};
   const name = input("job-name", { placeholder: "任务名称" });
   const manual = input("manual-source", { type: "textarea", placeholder: "每行一个完整文件或目录路径" });
@@ -177,17 +179,18 @@ function jobForm(context) {
         );
         upsertOperation(operationData.operation);
         showToast("备份任务已启动");
-        context.pollOperation(operationData.operation.operation_id);
+        redrawOperationStatus(statusBox);
+        context.pollOperation(operationData.operation.operation_id, () => redrawOperationStatus(statusBox));
       },
     }),
   ]);
 }
 
-function jobsTable(context, rows = state.jobs, emptyText = "暂无备份任务") {
-  return jobsTableForRows(context, rows, emptyText);
+function jobsTable(context, statusBox, rows = state.jobs, emptyText = "暂无备份任务") {
+  return jobsTableForRows(context, statusBox, rows, emptyText);
 }
 
-function jobsTableForRows(context, rows, emptyText) {
+function jobsTableForRows(context, statusBox, rows, emptyText) {
   return table(
     [
       { label: "任务", render: (job) => el("strong", { text: job.name }) },
@@ -212,8 +215,9 @@ function jobsTableForRows(context, rows, emptyText) {
                 }
                 const data = await context.call("start_job", job.job_id, passwords, {});
                 upsertOperation(data.operation);
-                showToast("已提交继续任务");
-                context.pollOperation(data.operation.operation_id);
+                showToast(`已提交继续任务：${job.name}`);
+                redrawOperationStatus(statusBox);
+                context.pollOperation(data.operation.operation_id, () => redrawOperationStatus(statusBox));
               },
             }),
             button("暂停", {
@@ -236,6 +240,21 @@ function jobsTableForRows(context, rows, emptyText) {
     rows,
     emptyText,
   );
+}
+
+function latestBackupOperation() {
+  return latestOperation((item) => item.kind === "backup");
+}
+
+function redrawOperationStatus(target) {
+  clear(target);
+  target.appendChild(operationView(latestBackupOperation()));
+}
+
+function latestOperation(predicate) {
+  return [...state.operations.values()]
+    .filter(predicate)
+    .sort((left, right) => String(right.created_at || right.updated_at || "").localeCompare(String(left.created_at || left.updated_at || "")))[0] || null;
 }
 
 function readRuntimePasswords() {

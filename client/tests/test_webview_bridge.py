@@ -138,6 +138,10 @@ def test_start_job_rejects_global_history_job(tmp_path) -> None:
     operation = response["data"]["operation"]
     assert operation["status"] == "failed"
     assert "其他设备" in operation["error"]["message"]
+    assert operation["kind_label"] == "备份任务"
+    assert operation["context"]["job_name"] == "其他设备任务"
+    assert operation["context"]["job_id_hint"] == "job-cloud"
+    assert operation["operation_id_hint"]
 
 
 def test_start_job_returns_operation_without_password_leak(tmp_path) -> None:
@@ -159,6 +163,23 @@ def test_start_job_returns_operation_without_password_leak(tmp_path) -> None:
     dumped = json.dumps(operation, ensure_ascii=False)
     assert "ArchivePassword123" not in dumped
     assert "AuthPassword456" not in dumped
+
+
+def test_list_job_choices_returns_safe_task_selection_fields(tmp_path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("payload", encoding="utf-8")
+    bridge = _bridge(tmp_path, device_id="device-local")
+    BackupJobManager(bridge.store, device_id="device-local").create_job([str(source)], job_name="选择用任务")
+
+    response = bridge.list_job_choices()
+
+    assert response["ok"] is True
+    job = response["data"]["jobs"][0]
+    assert job["name"] == "选择用任务"
+    assert job["job_id_hint"]
+    assert job["entity_id"].startswith("backup_job_")
+    dumped = json.dumps(job, ensure_ascii=False)
+    assert str(source) not in dumped
 
 
 def test_bridge_resolves_local_device_credentials_into_runtime_settings(tmp_path) -> None:
@@ -340,6 +361,9 @@ def test_cleanup_confirmation_error_is_exposed_as_redacted_operation(tmp_path) -
     operation = response["data"]["operation"]
     assert operation["status"] == "failed"
     assert "cleanup" in operation["error"]["type"].lower()
+    assert operation["kind_label"] == "原始数据清理"
+    assert operation["context"]["selection_count"] == 1
+    assert "未选择" not in operation["context"]["target_label"]
 
 
 def test_cleanup_permanent_delete_requires_advanced_enabled(tmp_path) -> None:

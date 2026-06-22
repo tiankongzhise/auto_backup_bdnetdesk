@@ -5,7 +5,6 @@ export async function renderDashboard(root, context) {
   await context.refreshAppState();
   const dashboard = state.appState.dashboard;
   const counts = dashboard.status_counts || {};
-  const latestOperation = dashboard.operations && dashboard.operations[0];
   root.appendChild(
     el("div", { class: "grid" }, [
       el("div", { class: "kpi-row" }, [
@@ -22,13 +21,24 @@ export async function renderDashboard(root, context) {
           ]),
           nextActions(dashboard),
         ]),
-        el("section", { class: "panel" }, [el("h2", { text: "最近操作" }), operationView(latestOperation)]),
+        el("section", { class: "panel" }, [el("h2", { text: "最近操作" }), recentOperations(dashboard.operations)]),
       ]),
       el("div", { class: "grid two" }, [
         el("section", { class: "panel" }, [el("h2", { text: "最近任务" }), recentJobs()]),
         el("section", { class: "panel" }, [el("h2", { text: "风险提醒" }), risks(dashboard.risks)]),
       ]),
     ]),
+  );
+}
+
+function recentOperations(operations) {
+  if (!operations || !operations.length) {
+    return operationView(null);
+  }
+  return el(
+    "div",
+    { class: "list" },
+    operations.slice(0, 4).map((operation) => el("div", { class: "item" }, operationView(operation, { compact: true }))),
   );
 }
 

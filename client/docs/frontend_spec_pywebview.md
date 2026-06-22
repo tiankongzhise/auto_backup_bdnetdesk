@@ -91,8 +91,11 @@ Python 入口：
   - `purpose` 支持 `cache_root`、`restore_target`、`quarantine_dir`。
 - `list_jobs(filter)`
   - 返回最近任务，默认按更新时间倒序。
-  - 每条任务必须包含 `scope/scope_label/owner_device_hint/current_device/can_start/can_continue/can_pause/can_cancel/source_count/local_source_count`。
+  - 每条任务必须包含 `job_id_hint/entity_id/scope/scope_label/owner_device_hint/current_device/can_start/can_continue/can_pause/can_cancel/source_count/local_source_count`。
   - `scope=local` 才允许本机继续、暂停、取消；`scope=global` 只读展示。
+- `list_job_choices()`
+  - 返回恢复、清理、校对页任务下拉使用的脱敏任务 DTO。
+  - 页面不得要求普通用户手动输入内部 `job_id` 才能恢复、清理或校对。
 - `create_job(name, sources)`
   - `sources` 来自 `choose_sources()` 或拖拽路径；后端重新校验路径存在性和类型。
 - `start_job(job_id, passwords, options)`
@@ -152,7 +155,9 @@ Python 入口：
 ### 4.7 长操作
 
 - `get_operation(operation_id)`
-  - 返回 `pending/running/completed/failed/canceling`、阶段、进度、脱敏消息、结果摘要。
+  - 返回 `pending/running/completed/failed/canceling`、阶段、进度、脱敏消息、结果摘要、`operation_id_hint/kind_label/context`。
+  - `context` 只能包含任务名、任务 ID 摘要、候选数量、来源显示名等脱敏上下文。
+  - 前端必须展示失败原因，不能只显示“操作失败”。
 - `cancel_operation(operation_id)`
   - 标记取消请求。第一版允许不可中断底层任务完成当前阶段后停止；UI 必须诚实显示“正在请求取消”。
 
@@ -172,6 +177,8 @@ Python 入口：
 {
   "job": {
     "backup_job_id": "uuid",
+    "job_id_hint": "job_001",
+    "entity_id": "backup_job_job_001",
     "job_name": "文档备份",
     "status": "completed",
     "status_label": "已完成",
@@ -207,11 +214,19 @@ Python 入口：
 {
   "operation": {
     "operation_id": "uuid",
+    "operation_id_hint": "uuid...hint",
     "kind": "backup",
+    "kind_label": "备份任务",
     "status": "running",
     "stage": "upload",
     "message": "正在上传第 2 个 archive",
-    "progress_percent": 62
+    "progress": 0.62,
+    "context": {
+      "job_name": "文档备份",
+      "job_id_hint": "job_001",
+      "source_count": 2,
+      "target_label": "文档备份"
+    }
   }
 }
 ```
@@ -226,7 +241,8 @@ Python 入口：
 - 下一步动作区：根据状态展示一个主按钮和最多两个次按钮。
 - 最近任务表：展示本机/全局任务、设备摘要、来源数和状态；只有本机任务支持开始、继续、查看详情、恢复。
 - 风险提醒列表：缓存不足、未授权、待重试、校对差异、同步待补偿。
-- 运行中操作条：显示阶段、进度、取消按钮。
+- 最近操作列表：展示操作类型、关联任务或候选范围、阶段、进度、失败原因和 operation 编号。
+- 运行中操作条：显示阶段、进度、取消按钮；继续任务提交后必须在本页操作状态区可见。
 
 ### 6.2 备份
 
@@ -258,7 +274,7 @@ Python 入口：
 控件：
 
 - 任务筛选，默认全部最近记录。
-- 来源级候选表：状态、来源类型、来源名、任务名、文件数、大小、archive 摘要、远端状态。
+- 来源级候选表：状态、来源类型、来源名、任务名、文件数、大小、本地 archive 可用性、远端状态、阻塞原因。
 - 目标模式：手动目录或原路径。
 - 冲突策略：默认保留两者。
 - 远端下载需要账号和授权密码 modal。
@@ -268,7 +284,7 @@ Python 入口：
 控件：
 
 - 任务筛选，默认全部最近记录。
-- 候选表：来源名、清理资格、远端确认、源文件复查、同步状态。
+- 候选表：任务名、来源名、清理资格、清理状态、远端确认、源文件复查、同步状态、阻塞原因。
 - 清理方式：回收站、隔离目录；永久删除在高级区。
 - 确认短语输入。
 
@@ -277,7 +293,7 @@ Python 入口：
 分区：
 
 - 来源映射：只读表，按任务/关键字筛选。
-- 远端校对：scope 表单、运行按钮、差异表、修复确认区。
+- 远端校对：任务下拉为普通用户主入口，上传会话和远端目录为排障补充入口；运行按钮、差异表、修复确认区。
 - 云端同步：本地 outbox 统计、最近同步实体、Cloud Sync summary 回读。
 
 ### 6.7 设置

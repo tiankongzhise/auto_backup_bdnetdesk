@@ -119,19 +119,34 @@ export function showToast(message) {
   showToast.timer = window.setTimeout(() => toast.classList.remove("is-visible"), 3600);
 }
 
-export function operationView(operation) {
+export function operationView(operation, options = {}) {
   if (!operation) {
     return el("div", { class: "empty", text: "暂无运行中的操作" });
   }
   const percent = Math.round((operation.progress || 0) * 100);
-  return el("div", { class: "operation" }, [
+  const context = operation.context || {};
+  const rows = [
+    `${operation.kind_label || operation.kind} / ${operation.stage || "-"} / ${percent}%`,
+    context.target_label ? `目标：${context.target_label}` : "",
+    context.job_name ? `任务：${context.job_name}（${context.job_status_label || context.job_status || "-"}）` : "",
+    context.source_count !== undefined ? `来源数：${context.source_count}` : "",
+    context.selection_count !== undefined ? `已选择：${context.selection_count}` : "",
+    operation.error && operation.error.message ? `失败原因：${operation.error.message}` : "",
+    operation.result && operation.result.final_stage ? `完成阶段：${operation.result.final_stage}` : "",
+    operation.operation_id_hint ? `操作编号：${operation.operation_id_hint}` : "",
+  ].filter(Boolean);
+  const children = [
     el("div", { class: "item-row" }, [
-      el("strong", { text: operation.message || operation.kind }),
+      el("strong", { text: operation.message || operation.kind_label || operation.kind }),
       badge(operation.status, operation.status === "failed" ? "red" : operation.status === "completed" ? "green" : "blue"),
     ]),
     el("div", { class: "progress" }, [el("span", { style: `width:${percent}%` })]),
-    el("div", { class: "item-meta", text: `${operation.kind} / ${operation.stage} / ${percent}%` }),
-  ]);
+    ...rows.map((row) => el("div", { class: row.startsWith("失败原因") ? "item-meta danger-text" : "item-meta", text: row })),
+  ];
+  if (options.compact !== true && context.source_names && context.source_names.length) {
+    children.push(el("div", { class: "item-meta", text: `候选：${context.source_names.join("、")}` }));
+  }
+  return el("div", { class: "operation" }, children);
 }
 
 export function statusTone(status) {

@@ -103,6 +103,43 @@ def test_dashboard_recent_jobs_show_scope_and_device() -> None:
     assert "job.can_continue" in text
 
 
+def test_operation_view_surfaces_context_and_error_reason() -> None:
+    text = (WEBUI / "js" / "render.js").read_text(encoding="utf-8")
+
+    assert "operation.kind_label" in text
+    assert "context.target_label" in text
+    assert "context.job_name" in text
+    assert "失败原因" in text
+    assert "operation.operation_id_hint" in text
+
+
+def test_backup_page_refreshes_visible_operation_after_continue() -> None:
+    text = (WEBUI / "js" / "views" / "jobs.js").read_text(encoding="utf-8")
+
+    assert "statusBox" in text
+    assert "redrawOperationStatus(statusBox)" in text
+    assert "context.pollOperation(data.operation.operation_id, () => redrawOperationStatus(statusBox))" in text
+    assert "已提交继续任务" in text
+
+
+def test_restore_cleanup_reconcile_pages_expose_task_filters() -> None:
+    restore = (WEBUI / "js" / "views" / "restore.js").read_text(encoding="utf-8")
+    cleanup = (WEBUI / "js" / "views" / "cleanup.js").read_text(encoding="utf-8")
+    reconcile = (WEBUI / "js" / "views" / "reconcile.js").read_text(encoding="utf-8")
+
+    assert 'context.call("list_job_choices")' in restore
+    assert 'context.call("list_restore_candidates", { job_id: jobId || "", keyword: keyword || "", limit: 200 })' in restore
+    assert '"文件数"' in restore
+    assert '"阻塞原因"' in restore
+    assert 'context.call("list_job_choices")' in cleanup
+    assert 'context.call("list_cleanup_candidates", { job_id: jobId || "", keyword: keyword || "", limit: 200 })' in cleanup
+    assert '"待同步"' in cleanup
+    assert '"阻塞原因"' in cleanup
+    assert 'context.call("list_job_choices")' in reconcile
+    assert 'loadMappings(context, jobSelect.value)' in reconcile
+    assert "entityId.value = job.entity_id" in reconcile
+
+
 def test_baidu_page_exposes_device_credential_status() -> None:
     text = (WEBUI / "js" / "views" / "baidu.js").read_text(encoding="utf-8")
 

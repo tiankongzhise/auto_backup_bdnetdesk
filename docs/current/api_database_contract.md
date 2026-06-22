@@ -686,11 +686,22 @@ const data = await call("list_jobs");
 {
   "operation": {
     "operation_id": "4d3c2b1a...",
+    "operation_id_hint": "4d3c2b1a...88cc21",
     "kind": "backup",
+    "kind_label": "备份任务",
     "status": "running",
     "stage": "backup",
     "message": "正在执行扫描、归档、上传与同步",
     "progress": 0.32,
+    "context": {
+      "job_id": "job_001",
+      "job_id_hint": "job_001",
+      "job_name": "照片备份",
+      "job_status": "running",
+      "job_status_label": "运行中",
+      "source_count": 2,
+      "target_label": "照片备份"
+    },
     "created_at": "2026-06-17T08:00:00+00:00",
     "updated_at": "2026-06-17T08:00:03+00:00",
     "started_at": "2026-06-17T08:00:00+00:00",
@@ -704,12 +715,20 @@ const data = await call("list_jobs");
 
 `kind` 当前包括：`backup`、`remote_reconcile`、`remote_repair`、`cleanup`、`restore`。
 
+字段约束：
+
+- `kind_label` 面向用户展示，当前包括“备份任务”“恢复”“原始数据清理”“远端校对”“远端修复”。
+- `context` 必须只包含脱敏上下文，用于解释“这次操作作用在哪个任务或候选上”；可包含 `job_id/job_id_hint/job_name/job_status_label/source_count/selection_count/source_names/target_label`。
+- 操作失败时 `error.message` 必须给出脱敏原因；前端最近操作必须展示 `kind_label`、`context.target_label` 或任务名、阶段、失败原因和 `operation_id_hint`，不能只显示“操作失败”。
+- `context.source_names` 只允许来源显示名，不得包含完整本地路径。
+
 ### Bridge 方法表
 
 | 方法 | 参数 | 返回 | 写锁/长操作 | 备注 |
 | --- | --- | --- | --- | --- |
 | `get_app_state()` | 无 | `app`、`dashboard`、`settings` | 否 | 启动页总状态。 |
 | `list_jobs()` | 无 | `jobs[]` | 否 | 最近 100 个任务，DTO 必须区分本机任务和全局/其他设备历史任务。 |
+| `list_job_choices()` | 无 | `jobs[]` | 否 | 恢复、清理、校对页的任务下拉，复用任务 DTO 的脱敏字段。 |
 | `create_job(name, sources)` | `name` string；`sources[]` | `job` | 写锁 | `sources` 可来自选择器 token 或拖拽 path。 |
 | `start_job(job_id, passwords, options)` | `passwords.archive_password`、`passwords.authorization_password`；上传选项 | `operation` | 长操作 | 运行备份 pipeline。 |
 | `transition_job(job_id, action)` | `action=pause/resume/cancel` | `job` | 写锁 | `resume` 映射为 `running`。 |
@@ -783,6 +802,8 @@ const data = await call("list_jobs");
   "jobs": [
     {
       "job_id": "job_001",
+      "job_id_hint": "job_001",
+      "entity_id": "backup_job_job_001",
       "name": "照片备份",
       "status": "running",
       "status_label": "运行中",
@@ -866,6 +887,8 @@ const data = await call("list_jobs");
 }
 ```
 
+清理页 UI 约束：必须先通过 `list_job_choices()` 让用户按任务筛选候选；候选表必须展示任务名、来源/文件显示名、清理状态、待同步提示和阻塞原因。空选择不得解释为全部。
+
 `apply_restore(...)` 参数：
 
 ```json
@@ -881,6 +904,10 @@ const data = await call("list_jobs");
   }
 }
 ```
+
+恢复页 UI 约束：必须先通过 `list_job_choices()` 让用户按任务筛选来源级恢复候选；候选表必须展示任务名、来源显示名、来源类型、文件数、本地 archive 是否可用、远端 archive 是否确认和阻塞原因。恢复操作提交后 operation 必须显示关联任务或选择数量。
+
+校对页 UI 约束：必须提供任务下拉；选择任务后，来源映射按该任务过滤，远端校对默认使用该 `job_id`，Cloud Sync 回读默认填入该任务的 `entity_id`。`upload_session_id` 和 `remote_dir` 仍可作为排障输入，但不得成为普通用户唯一入口。
 
 `get_cloud_sync_summary(...)` 契约返回：
 
