@@ -86,12 +86,16 @@ def test_jobs_page_splits_local_and_global_tasks_and_uses_bridge_permissions() -
     text = (WEBUI / "js" / "views" / "jobs.js").read_text(encoding="utf-8")
 
     assert '"本机任务"' in text
-    assert '"全局任务"' in text
+    assert '"其他设备任务"' in text
+    assert "deviceGroupedJobs" in text
+    assert "groupJobsByDevice" in text
     assert "job.current_device" in text
     assert "job.can_continue" in text
     assert "job.can_pause" in text
     assert "job.can_cancel" in text
     assert "owner_device_hint" in text
+    assert "device_group_label" in text
+    assert "只读，可用于恢复或校对" in text
     assert "window.prompt" not in text
 
 
@@ -110,6 +114,8 @@ def test_operation_view_surfaces_context_and_error_reason() -> None:
     assert "context.target_label" in text
     assert "context.job_name" in text
     assert "失败原因" in text
+    assert "错误码" in text
+    assert "下一步" in text
     assert "operation.operation_id_hint" in text
 
 

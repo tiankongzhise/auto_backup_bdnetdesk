@@ -302,12 +302,12 @@ def test_get_content_parses_cloud_dedupe_candidate() -> None:
     assert content.latest_entity_id == "content_object_entity"
 
 
-def test_list_backup_history_uses_current_device_and_parses_entities() -> None:
+def test_list_backup_history_defaults_to_all_devices_and_parses_entities() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["Authorization"] == "Bearer fake-device-token"
         assert request.method == "GET"
         assert request.url.path == "/v1/backups"
-        assert request.url.params["device_id"] == "current"
+        assert request.url.params["device_id"] == "all"
         assert request.url.params["limit"] == "25"
         return httpx.Response(
             200,
@@ -343,3 +343,25 @@ def test_list_backup_history_uses_current_device_and_parses_entities() -> None:
     assert history.device_id == "dev-1"
     assert history.entities[0].entity_type == "backup_jobs"
     assert history.entities[0].payload["backup_job_id"] == "job-1"
+
+
+def test_list_backup_history_falls_back_to_current_for_old_server() -> None:
+    scopes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/backups"
+        scopes.append(request.url.params["device_id"])
+        if request.url.params["device_id"] == "all":
+            return httpx.Response(403, json={"error": "forbidden_device", "message": "old server"})
+        return httpx.Response(200, json={"device_id": "dev-current", "entities": []})
+
+    cloud = BaiduCloudClient(
+        "https://backup.baichengedu.com",
+        "fake-device-token",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    history = cloud.list_backup_history(limit=25)
+
+    assert history.device_id == "dev-current"
+    assert scopes == ["all", "current"]

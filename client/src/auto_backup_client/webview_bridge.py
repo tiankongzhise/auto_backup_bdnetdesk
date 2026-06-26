@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import threading
 import time
@@ -22,11 +23,11 @@ from auto_backup_client.backup_jobs import (
 )
 from auto_backup_client.backup_pipeline import BackupPipeline, BackupPipelineOptions
 from auto_backup_client.baidu.auth_workflow import BaiduAuthWorkflow
-from auto_backup_client.baidu.cloud_api import BaiduCloudClient
+from auto_backup_client.baidu.cloud_api import BaiduCloudClient, CloudAPIError
 from auto_backup_client.baidu.kdf_store import PasswordKDFStore
 from auto_backup_client.baidu.reconcile import RemoteObjectReconciler, RemoteReconcileScope
 from auto_backup_client.baidu.reconcile_repair import CONFIRM_REPAIR_TEXT, RemoteObjectRepairer, build_remote_repair_plan
-from auto_backup_client.baidu.upload import DEFAULT_BACKUP_ROOT_DIR, DEFAULT_PART_SIZE, BaiduNetdiskClient
+from auto_backup_client.baidu.upload import DEFAULT_BACKUP_ROOT_DIR, DEFAULT_PART_SIZE, BaiduNetdiskClient, BaiduNetdiskError
 from auto_backup_client.device_credentials import resolve_or_register_device_credentials
 from auto_backup_client.restore_flow import BaiduArchiveDownloader, RestoreService
 from auto_backup_client.settings import ClientSettings
@@ -50,6 +51,13 @@ OPERATION_KIND_LABELS = {
     "remote_reconcile": "远端校对",
     "remote_repair": "远端修复",
 }
+WINDOWS_PATH_RE = re.compile(r"(?i)(?:[a-z]:\\|\\\\)[^\s'\"<>|]+")
+REMOTE_BACKUP_PATH_RE = re.compile(r"/apps/[^\s'\"<>]+")
+SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(access_token|refresh_token|device_token|authorization_password|archive_password|wrapping_key|password|token)\s*[:=]\s*[^,\s;]+"
+)
+BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+DEVICE_TOKEN_RE = re.compile(r"\bbdn_[A-Za-z0-9._~+/=-]+")
 
 
 def _utc_now() -> str:
@@ -128,20 +136,89 @@ def _size_label(size: int | None) -> str:
     return f"{value:.1f} {units[unit_index]}"
 
 
-def _safe_error(exc: BaseException) -> dict[str, Any]:
-    message = str(exc).strip() or exc.__class__.__name__
-    if "\\" in message or ":/" in message or "token" in message.lower() or "password" in message.lower():
-        message = f"{exc.__class__.__name__}: 操作失败，详细信息已在前端脱敏"
-    return {
+def _safe_error(exc: BaseException, *, stage: str = "") -> dict[str, Any]:
+    message = _safe_error_message(exc)
+    data: dict[str, Any] = {
         "type": exc.__class__.__name__,
-        "message": message[:300],
+        "message": message[:500],
     }
+    code = _error_code(exc)
+    status_code = _error_status_code(exc)
+    if code:
+        data["code"] = code
+    if status_code:
+        data["status_code"] = status_code
+    if stage:
+        data["stage"] = stage
+    next_step = _error_next_step(exc, code=code, status_code=status_code)
+    if next_step:
+        data["next_step"] = next_step
+    return data
 
 
-def _operation_error(exc: BaseException) -> dict[str, Any]:
-    data = _safe_error(exc)
+def _operation_error(exc: BaseException, *, stage: str = "") -> dict[str, Any]:
+    data = _safe_error(exc, stage=stage)
     data["trace"] = traceback.format_exc(limit=8)
     return data
+
+
+def _safe_error_message(exc: BaseException) -> str:
+    if isinstance(exc, CloudAPIError):
+        reason = _sanitize_error_text(exc.message or str(exc))
+        return f"云端 API 返回 {exc.status_code} {exc.error_code or 'cloud_api_error'}：{reason}"
+    if isinstance(exc, BaiduNetdiskError):
+        reason = _sanitize_error_text(str(exc) or exc.error_code or "百度网盘请求失败")
+        status = f"HTTP {exc.status_code}" if exc.status_code else "HTTP 未返回"
+        code = exc.error_code or "unknown"
+        return f"百度网盘 API 返回 {status} / {code}：{reason}"
+    return _sanitize_error_text(str(exc).strip() or exc.__class__.__name__)
+
+
+def _sanitize_error_text(value: str) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        return "操作失败，未返回更多原因"
+    text = SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[已脱敏]", text)
+    text = BEARER_TOKEN_RE.sub("Bearer [已脱敏]", text)
+    text = DEVICE_TOKEN_RE.sub("[Device Token 已脱敏]", text)
+    text = WINDOWS_PATH_RE.sub("[本地路径已脱敏]", text)
+    text = REMOTE_BACKUP_PATH_RE.sub("[远端路径已脱敏]", text)
+    return text[:500]
+
+
+def _error_code(exc: BaseException) -> str:
+    if isinstance(exc, CloudAPIError):
+        return exc.error_code or "cloud_api_error"
+    if isinstance(exc, BaiduNetdiskError):
+        return exc.error_code or "baidu_netdisk_error"
+    return ""
+
+
+def _error_status_code(exc: BaseException) -> int:
+    if isinstance(exc, CloudAPIError):
+        return int(exc.status_code or 0)
+    if isinstance(exc, BaiduNetdiskError):
+        return int(exc.status_code or 0)
+    return 0
+
+
+def _error_next_step(exc: BaseException, *, code: str, status_code: int) -> str:
+    if isinstance(exc, CloudAPIError):
+        if status_code in {401, 403}:
+            return "检查设备凭据或重新注册当前设备后再重试"
+        if status_code >= 500 or code == "retryable_error":
+            return "稍后重试；如果持续失败，请检查云端服务和数据库状态"
+        return "检查云端返回的错误码后重试"
+    if isinstance(exc, BaiduNetdiskError):
+        if code == "quota_not_enough":
+            return "清理百度网盘空间或降低单次备份大小后重试"
+        if status_code in {401, 403}:
+            return "重新验证授权密码或重新完成百度授权后重试"
+        return "检查百度网盘错误码、网络和授权状态后重试"
+    lowered = str(exc).lower()
+    if "password" in lowered or "授权密码" in lowered or "解密" in lowered:
+        return "重新输入授权密码；如仍失败，请在百度授权页验证 token 解密"
+    return "根据失败阶段修正输入或环境后重试"
 
 
 def _as_source_inputs(sources: Iterable[Any]) -> list[BackupSourceInput]:
@@ -227,11 +304,12 @@ class OperationHandle:
         self.updated_at = self.finished_at
 
     def mark_failed(self, exc: BaseException) -> None:
+        failed_stage = self.stage or "failed"
         self.status = "failed"
-        self.stage = "failed"
-        self.message = "操作失败"
+        self.stage = failed_stage
+        self.message = f"{failed_stage} 阶段失败"
         self.progress = max(self.progress, 0.0)
-        self.error = _operation_error(exc)
+        self.error = _operation_error(exc, stage=failed_stage)
         self.finished_at = _utc_now()
         self.updated_at = self.finished_at
 
@@ -326,6 +404,7 @@ class AutoBackupWebviewBridge:
         backup_runner: OperationCallable | None = None,
         device_credentials_resolver: DeviceCredentialResolver | None = None,
         auto_resolve_device_credentials: bool = True,
+        auto_refresh_history: bool = True,
     ) -> None:
         self.settings = settings or ClientSettings.from_env()
         Path(self.settings.local_data_dir).mkdir(parents=True, exist_ok=True)
@@ -358,6 +437,7 @@ class AutoBackupWebviewBridge:
         self._window: Any | None = None
         self._operations = OperationRegistry(inline=run_operations_inline)
         self._backup_runner = backup_runner
+        self._auto_refresh_history = auto_refresh_history
         self._last_reconcile_report: Any | None = None
         self._auth_session_id: str = ""
         self._pending_sources: dict[str, BackupSourceInput] = {}
@@ -660,6 +740,7 @@ class AutoBackupWebviewBridge:
             return {"available": False, "selected_account_id": None, "items": []}
 
     def _list_jobs_dto(self, *, limit: int) -> list[dict[str, Any]]:
+        self._refresh_history()
         manager = BackupJobManager(self.store, device_id=self.device_id)
         return [self._job_to_dto(job) for job in manager.list_jobs(limit=limit)]
 
@@ -765,6 +846,8 @@ class AutoBackupWebviewBridge:
         sources = [self._source_to_dto(source) for source in getattr(job, "sources", ())]
         current_device = _job_is_current_device(job_record, self.device_id)
         scope = "local" if current_device else "global"
+        owner_device_hint = _device_id_hint(getattr(job_record, "device_id", ""))
+        device_group_label = "本机任务" if current_device else f"设备 {owner_device_hint or '未知设备'}"
         source_count = max(int(getattr(job_record, "source_count", 0) or 0), len(sources))
         imported_from_cloud = any(_is_cloud_history_path(getattr(source, "local_path", "")) for source in getattr(job, "sources", ()))
         can_start = current_device and job_record.status == "queued"
@@ -779,8 +862,9 @@ class AutoBackupWebviewBridge:
             "status": job_record.status,
             "status_label": _status_label(job_record.status),
             "scope": scope,
-            "scope_label": "本机任务" if current_device else "全局任务",
-            "owner_device_hint": _device_id_hint(getattr(job_record, "device_id", "")),
+            "scope_label": "本机任务" if current_device else "其他设备任务",
+            "owner_device_hint": owner_device_hint,
+            "device_group_label": device_group_label,
             "current_device": current_device,
             "imported_from_cloud": imported_from_cloud,
             "can_start": can_start,
@@ -809,9 +893,7 @@ class AutoBackupWebviewBridge:
     def _redact_optional(self, value: str | None) -> str | None:
         if not value:
             return value
-        if "\\" in value or ":/" in value:
-            return "错误信息包含本地路径，已脱敏"
-        return value[:300]
+        return _sanitize_error_text(value)
 
     def _choose_sources(self, *, kind: str) -> list[dict[str, Any]]:
         if self._window is None:
@@ -965,7 +1047,7 @@ class AutoBackupWebviewBridge:
             return False
 
     def _refresh_history(self) -> None:
-        if not self.settings.device_token:
+        if not self._auto_refresh_history or not self.settings.device_token:
             return
         try:
             refresher = DeviceBackupHistoryRefresher(

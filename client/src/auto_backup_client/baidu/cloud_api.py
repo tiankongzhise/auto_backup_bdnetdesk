@@ -68,7 +68,7 @@ class BaiduCloudClient:
         except CloudAPIError as exc:
             if exc.status_code not in {404, 405}:
                 raise
-            history = self.list_backup_history(limit=1)
+            history = self.list_backup_history(limit=1, device_scope="current")
             if not history.device_id:
                 raise
             return DeviceInfo(device_id=history.device_id)
@@ -192,10 +192,19 @@ class BaiduCloudClient:
         data = self._request("GET", f"/v1/contents/{cleaned}")
         return ContentObject.from_json(data)
 
-    def list_backup_history(self, *, limit: int = 5000) -> BackupHistoryResponse:
+    def list_backup_history(self, *, limit: int = 5000, device_scope: str = "all") -> BackupHistoryResponse:
         if limit < 1 or limit > 20000:
             raise ValueError("backup history limit must be between 1 and 20000")
-        data = self._request("GET", f"/v1/backups?device_id=current&limit={limit}")
+        scope = device_scope.strip() or "current"
+        if scope not in {"current", "all"}:
+            raise ValueError("backup history device_scope must be current or all")
+        try:
+            data = self._request("GET", f"/v1/backups?device_id={scope}&limit={limit}")
+        except CloudAPIError as exc:
+            if scope == "all" and exc.status_code == 403 and exc.error_code == "forbidden_device":
+                data = self._request("GET", f"/v1/backups?device_id=current&limit={limit}")
+            else:
+                raise
         return BackupHistoryResponse.from_json(data)
 
     def _request(

@@ -125,13 +125,17 @@ export function operationView(operation, options = {}) {
   }
   const percent = Math.round((operation.progress || 0) * 100);
   const context = operation.context || {};
+  const error = operation.error || {};
   const rows = [
     `${operation.kind_label || operation.kind} / ${operation.stage || "-"} / ${percent}%`,
     context.target_label ? `目标：${context.target_label}` : "",
     context.job_name ? `任务：${context.job_name}（${context.job_status_label || context.job_status || "-"}）` : "",
     context.source_count !== undefined ? `来源数：${context.source_count}` : "",
     context.selection_count !== undefined ? `已选择：${context.selection_count}` : "",
-    operation.error && operation.error.message ? `失败原因：${operation.error.message}` : "",
+    error.stage ? `失败阶段：${error.stage}` : "",
+    error.code || error.status_code ? `错误码：${[error.status_code ? `HTTP ${error.status_code}` : "", error.code || ""].filter(Boolean).join(" / ")}` : "",
+    error.message ? `失败原因：${error.message}` : "",
+    error.next_step ? `下一步：${error.next_step}` : "",
     operation.result && operation.result.final_stage ? `完成阶段：${operation.result.final_stage}` : "",
     operation.operation_id_hint ? `操作编号：${operation.operation_id_hint}` : "",
   ].filter(Boolean);

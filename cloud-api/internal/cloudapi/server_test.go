@@ -236,7 +236,7 @@ func TestInvalidContentPayloadRejected(t *testing.T) {
 	}
 }
 
-func TestListBackupsReturnsOnlyAuthenticatedDeviceHistory(t *testing.T) {
+func TestListBackupsReturnsAuthenticatedAndRelatedDeviceHistory(t *testing.T) {
 	store := newMemoryStore()
 	handler := NewServer(store, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
 	first := registerDevice(t, handler)
@@ -287,6 +287,47 @@ func TestListBackupsReturnsOnlyAuthenticatedDeviceHistory(t *testing.T) {
 	}
 	if len(resp.Entities) != 1 || resp.Entities[0].EntityID != firstEvent.EntityID {
 		t.Fatalf("expected only first device history, got %#v", resp.Entities)
+	}
+
+	allBeforeBinding := httptest.NewRequest(http.MethodGet, "/v1/backups?device_id=all&limit=10", nil)
+	allBeforeBinding.Header.Set("Authorization", "Bearer "+first.DeviceToken)
+	allBeforeBindingRec := httptest.NewRecorder()
+	handler.ServeHTTP(allBeforeBindingRec, allBeforeBinding)
+	if allBeforeBindingRec.Code != http.StatusOK {
+		t.Fatalf("expected all-scope history 200 before binding, got %d: %s", allBeforeBindingRec.Code, allBeforeBindingRec.Body.String())
+	}
+	var allBeforeBindingResp BackupHistoryResponse
+	if err := json.NewDecoder(allBeforeBindingRec.Body).Decode(&allBeforeBindingResp); err != nil {
+		t.Fatalf("decode all-scope history response before binding: %v", err)
+	}
+	if len(allBeforeBindingResp.Entities) != 1 || allBeforeBindingResp.Entities[0].EntityID != firstEvent.EntityID {
+		t.Fatalf("expected all-scope history without shared account to stay on current device, got %#v", allBeforeBindingResp.Entities)
+	}
+
+	store.mu.Lock()
+	store.baiduBindings["account-shared"] = map[string]bool{
+		first.DeviceID:  true,
+		second.DeviceID: true,
+	}
+	store.mu.Unlock()
+
+	allReq := httptest.NewRequest(http.MethodGet, "/v1/backups?device_id=all&limit=10", nil)
+	allReq.Header.Set("Authorization", "Bearer "+first.DeviceToken)
+	allRec := httptest.NewRecorder()
+	handler.ServeHTTP(allRec, allReq)
+	if allRec.Code != http.StatusOK {
+		t.Fatalf("expected related-device history 200, got %d: %s", allRec.Code, allRec.Body.String())
+	}
+	var allResp BackupHistoryResponse
+	if err := json.NewDecoder(allRec.Body).Decode(&allResp); err != nil {
+		t.Fatalf("decode related-device history response: %v", err)
+	}
+	gotEntities := map[string]bool{}
+	for _, entity := range allResp.Entities {
+		gotEntities[entity.EntityID] = true
+	}
+	if !gotEntities[firstEvent.EntityID] || !gotEntities[secondEvent.EntityID] {
+		t.Fatalf("expected both shared-account device histories, got %#v", allResp.Entities)
 	}
 
 	forbidden := httptest.NewRequest(http.MethodGet, "/v1/backups?device_id="+second.DeviceID, nil)

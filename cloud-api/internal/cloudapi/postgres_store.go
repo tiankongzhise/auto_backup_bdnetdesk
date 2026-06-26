@@ -378,8 +378,18 @@ LIMIT 10
 	return summary, true, nil
 }
 
-func (s *PostgresStore) ListBackupHistory(ctx context.Context, deviceID string, limit int) ([]BackupHistoryEntity, error) {
+func (s *PostgresStore) ListBackupHistory(ctx context.Context, deviceID string, includeRelatedDevices bool, limit int) ([]BackupHistoryEntity, error) {
 	rows, err := s.pool.Query(ctx, `
+WITH visible_devices AS (
+    SELECT $1::text AS device_id
+    UNION
+    SELECT b2.device_id
+    FROM baidu_account_device_bindings b1
+    JOIN baidu_account_device_bindings b2
+        ON b2.account_id = b1.account_id
+    WHERE $3::boolean
+      AND b1.device_id = $1
+)
 SELECT
     entity_id,
     entity_type,
@@ -402,9 +412,9 @@ WHERE deleted_at IS NULL
       'remote_objects'
   )
   AND (
-      updated_by_device_id = $1
-      OR payload_json->>'device_id' = $1
-      OR payload_json->>'updated_by_device_id' = $1
+      updated_by_device_id IN (SELECT device_id FROM visible_devices)
+      OR payload_json->>'device_id' IN (SELECT device_id FROM visible_devices)
+      OR payload_json->>'updated_by_device_id' IN (SELECT device_id FROM visible_devices)
   )
 ORDER BY
     CASE entity_type
@@ -422,7 +432,7 @@ ORDER BY
     updated_at,
     entity_id
 LIMIT $2
-`, deviceID, limit)
+`, deviceID, limit, includeRelatedDevices)
 	if err != nil {
 		return nil, err
 	}

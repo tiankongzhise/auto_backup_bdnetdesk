@@ -300,16 +300,27 @@ func (s *memoryStore) GetEntitySummary(_ context.Context, entityID string) (Enti
 	return summary, true, nil
 }
 
-func (s *memoryStore) ListBackupHistory(_ context.Context, deviceID string, limit int) ([]BackupHistoryEntity, error) {
+func (s *memoryStore) ListBackupHistory(_ context.Context, deviceID string, includeRelatedDevices bool, limit int) ([]BackupHistoryEntity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.err != nil {
 		return nil, s.err
 	}
+	visibleDevices := map[string]bool{deviceID: true}
+	if includeRelatedDevices {
+		for _, bindings := range s.baiduBindings {
+			if !bindings[deviceID] {
+				continue
+			}
+			for boundDeviceID := range bindings {
+				visibleDevices[boundDeviceID] = true
+			}
+		}
+	}
 	entities := make([]BackupHistoryEntity, 0)
 	for _, entity := range s.entities {
-		if entity.DeletedAt != nil || entity.UpdatedByDeviceID != deviceID {
+		if entity.DeletedAt != nil || !memoryEntityVisibleToDevice(entity, visibleDevices) {
 			continue
 		}
 		switch entity.EntityType {
@@ -331,6 +342,23 @@ func (s *memoryStore) ListBackupHistory(_ context.Context, deviceID string, limi
 		}
 	}
 	return entities, nil
+}
+
+func memoryEntityVisibleToDevice(entity memoryEntity, visibleDevices map[string]bool) bool {
+	if visibleDevices[entity.UpdatedByDeviceID] {
+		return true
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(entity.Payload, &payload); err != nil {
+		return false
+	}
+	for _, key := range []string{"device_id", "updated_by_device_id"} {
+		value, _ := payload[key].(string)
+		if visibleDevices[value] {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *memoryStore) Ping(_ context.Context) error {

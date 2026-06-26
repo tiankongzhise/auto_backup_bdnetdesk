@@ -21,7 +21,7 @@ export async function renderJobs(root, context) {
   const localJobs = state.jobs.filter((job) => job.current_device);
   const globalJobs = state.jobs.filter((job) => !job.current_device);
   root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "本机任务" }), jobsTable(context, statusBox, localJobs, "暂无本机备份任务")]));
-  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "全局任务" }), jobsTable(context, statusBox, globalJobs, "暂无其他设备或全局历史任务")]));
+  root.appendChild(el("div", { class: "panel", style: "margin-top:16px" }, [el("h2", { text: "其他设备任务" }), deviceGroupedJobs(context, statusBox, globalJobs)]));
 }
 
 function jobForm(context, statusBox) {
@@ -199,47 +199,89 @@ function jobsTableForRows(context, statusBox, rows, emptyText) {
       { label: "设备", render: (job) => el("span", { class: "mono", text: job.owner_device_hint || "-" }) },
       { label: "来源", render: (job) => `${job.source_count} 个` },
       { label: "阶段", key: "last_stage" },
+      {
+        label: "失败原因",
+        render: (job) => el("span", { class: job.last_error ? "danger-text" : "", text: job.last_error || "-" }),
+      },
       { label: "同步", key: "sync_status" },
       {
         label: "操作",
         render: (job) =>
-          el("div", { class: "toolbar" }, [
-            button(job.status === "queued" ? "开始" : "继续", {
-              disabled: !job.can_continue,
-              title: job.current_device ? "使用上方压缩密码和授权密码继续任务" : "全局任务只读，不能在本机继续",
-              onClick: async () => {
-                const passwords = readRuntimePasswords();
-                if (!passwords.archive_password) {
-                  showToast("请输入压缩密码");
-                  return;
-                }
-                const data = await context.call("start_job", job.job_id, passwords, {});
-                upsertOperation(data.operation);
-                showToast(`已提交继续任务：${job.name}`);
-                redrawOperationStatus(statusBox);
-                context.pollOperation(data.operation.operation_id, () => redrawOperationStatus(statusBox));
-              },
-            }),
-            button("暂停", {
-              disabled: !job.can_pause,
-              onClick: async () => {
-                await context.call("transition_job", job.job_id, "pause");
-                showToast("任务已暂停");
-              },
-            }),
-            button("取消", {
-              disabled: !job.can_cancel,
-              onClick: async () => {
-                await context.call("transition_job", job.job_id, "cancel");
-                showToast("任务已取消");
-              },
-            }),
-          ]),
+          job.current_device
+            ? localJobActions(context, statusBox, job)
+            : el("span", { class: "item-meta", text: "只读，可用于恢复或校对" }),
       },
     ],
     rows,
     emptyText,
   );
+}
+
+function localJobActions(context, statusBox, job) {
+  return el("div", { class: "toolbar" }, [
+    button(job.status === "queued" ? "开始" : "继续", {
+      disabled: !job.can_continue,
+      title: "使用上方压缩密码和授权密码继续任务",
+      onClick: async () => {
+        const passwords = readRuntimePasswords();
+        if (!passwords.archive_password) {
+          showToast("请输入压缩密码");
+          return;
+        }
+        const data = await context.call("start_job", job.job_id, passwords, {});
+        upsertOperation(data.operation);
+        showToast(`已提交继续任务：${job.name}`);
+        redrawOperationStatus(statusBox);
+        context.pollOperation(data.operation.operation_id, () => redrawOperationStatus(statusBox));
+      },
+    }),
+    button("暂停", {
+      disabled: !job.can_pause,
+      onClick: async () => {
+        await context.call("transition_job", job.job_id, "pause");
+        showToast("任务已暂停");
+      },
+    }),
+    button("取消", {
+      disabled: !job.can_cancel,
+      onClick: async () => {
+        await context.call("transition_job", job.job_id, "cancel");
+        showToast("任务已取消");
+      },
+    }),
+  ]);
+}
+
+function deviceGroupedJobs(context, statusBox, jobs) {
+  if (!jobs.length) {
+    return el("div", { class: "empty", text: "暂无其他设备或云端历史任务" });
+  }
+  return el(
+    "div",
+    { class: "list" },
+    groupJobsByDevice(jobs).map((group) =>
+      el("div", { class: "device-task-group" }, [
+        el("div", { class: "item-row" }, [
+          el("h3", { text: group.label }),
+          badge(`${group.rows.length} 个任务`, "blue"),
+        ]),
+        jobsTable(context, statusBox, group.rows, "暂无任务"),
+      ]),
+    ),
+  );
+}
+
+function groupJobsByDevice(jobs) {
+  const groups = new Map();
+  for (const job of jobs) {
+    const key = job.owner_device_hint || "unknown-device";
+    const label = job.device_group_label || `设备 ${key}`;
+    if (!groups.has(key)) {
+      groups.set(key, { label, rows: [] });
+    }
+    groups.get(key).rows.push(job);
+  }
+  return [...groups.values()];
 }
 
 function latestBackupOperation() {

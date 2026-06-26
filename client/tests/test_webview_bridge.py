@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from auto_backup_client.baidu.models import EntitySummary, RevisionSummary
+from auto_backup_client.baidu.cloud_api import CloudAPIError
 from auto_backup_client.backup_jobs import BackupJobManager
 from auto_backup_client.device_credentials import DeviceCredentials
 from auto_backup_client.settings import ClientSettings
@@ -29,6 +30,7 @@ def _bridge(tmp_path: Path, **kwargs) -> AutoBackupWebviewBridge:
     store = SQLiteClientStore(settings.local_sqlite_path)
     store.migrate()
     device_id = kwargs.pop("device_id", "device-test")
+    kwargs.setdefault("auto_refresh_history", False)
     return AutoBackupWebviewBridge(settings=settings, store=store, device_id=device_id, **kwargs)
 
 
@@ -62,7 +64,7 @@ def test_job_dto_uses_persisted_source_count_and_device_scope(tmp_path) -> None:
             "canceled_at": None,
             "completed_at": None,
             "last_stage": "upload",
-            "last_error": "",
+            "last_error": r"upload failed for E:\secret\archive.7z",
             "created_at": "2026-06-22T08:00:00Z",
         },
         updated_by_device_id="device-other",
@@ -79,11 +81,15 @@ def test_job_dto_uses_persisted_source_count_and_device_scope(tmp_path) -> None:
     assert job["source_count"] == 2
     assert job["local_source_count"] == 0
     assert job["scope"] == "global"
-    assert job["scope_label"] == "全局任务"
+    assert job["scope_label"] == "其他设备任务"
+    assert job["device_group_label"].startswith("设备 ")
     assert job["current_device"] is False
     assert job["can_continue"] is False
     assert job["can_pause"] is False
     assert job["can_cancel"] is False
+    assert "upload failed" in job["last_error"]
+    assert "本地路径已脱敏" in job["last_error"]
+    assert r"E:\secret\archive.7z" not in job["last_error"]
 
 
 def test_job_dto_marks_running_current_device_job_as_continuable(tmp_path) -> None:
@@ -144,6 +150,37 @@ def test_start_job_rejects_global_history_job(tmp_path) -> None:
     assert operation["operation_id_hint"]
 
 
+def test_start_job_failure_preserves_stage_code_and_redacts_sensitive_fragments(tmp_path) -> None:
+    def failing_runner(operation):
+        operation.update(stage="upload", message="正在上传")
+        raise CloudAPIError(503, "retryable_error", r"store unavailable for E:\secret\state.sqlite3 access_token=abc123")
+
+    bridge = _bridge(
+        tmp_path,
+        run_operations_inline=True,
+        backup_runner=failing_runner,
+    )
+
+    response = bridge.start_job(
+        "job-test",
+        {"archive_password": "ArchivePassword123", "authorization_password": "AuthPassword456"},
+        {},
+    )
+
+    assert response["ok"] is True
+    operation = response["data"]["operation"]
+    assert operation["status"] == "failed"
+    assert operation["stage"] == "upload"
+    assert operation["error"]["stage"] == "upload"
+    assert operation["error"]["status_code"] == 503
+    assert operation["error"]["code"] == "retryable_error"
+    assert "store unavailable" in operation["error"]["message"]
+    assert "本地路径已脱敏" in operation["error"]["message"]
+    dumped = json.dumps(operation, ensure_ascii=False)
+    assert r"E:\secret\state.sqlite3" not in dumped
+    assert "abc123" not in dumped
+
+
 def test_start_job_returns_operation_without_password_leak(tmp_path) -> None:
     bridge = _bridge(
         tmp_path,
@@ -201,7 +238,7 @@ def test_bridge_resolves_local_device_credentials_into_runtime_settings(tmp_path
             "本机 DPAPI 凭据",
         )
 
-    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver)
+    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver, auto_refresh_history=False)
     bridge._try_accounts_summary = lambda: {"available": True, "selected_account_id": None, "items": []}
 
     assert bridge.settings.device_token == "token-from-store"
@@ -234,7 +271,7 @@ def test_bridge_reports_device_credential_recovery_error_without_blocking_ui(tmp
     def resolver(**_kwargs):
         raise RuntimeError("local credential store unavailable")
 
-    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver)
+    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver, auto_refresh_history=False)
 
     state = bridge.get_app_state()["data"]
     assert state["app"]["device_token_available"] is False
@@ -255,7 +292,7 @@ def test_bridge_rejects_write_operations_when_device_id_is_unresolved(tmp_path) 
     def resolver(**_kwargs):
         raise RuntimeError("device id unavailable")
 
-    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver)
+    bridge = AutoBackupWebviewBridge(settings=settings, device_credentials_resolver=resolver, auto_refresh_history=False)
 
     response = bridge.create_job("blocked", [{"path": str(tmp_path)}])
 

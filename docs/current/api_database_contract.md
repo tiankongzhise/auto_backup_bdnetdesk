@@ -160,7 +160,7 @@ schema 未就绪 `503`：
 | `GET` | `/v1/reconcile/entities/{entity_id}` | 是 | 回读云端当前实体和最近 revision，用于真实性审计。 |
 | `GET` | `/v1/contents/{content_id}` | 是 | 查询内容级去重索引投影。 |
 | `GET` | `/v1/archives/{archive_sha256}` | 是 | 查询归档对象投影。 |
-| `GET` | `/v1/backups?device_id=current&limit=5000` | 是 | 拉取当前设备云端历史。 |
+| `GET` | `/v1/backups?device_id=current/all&limit=5000` | 是 | 拉取当前设备或同百度账号可见的跨设备云端历史。 |
 
 #### `POST /v1/sync/revisions`
 
@@ -344,12 +344,16 @@ schema 未就绪 `503`：
 
 ```http
 GET /v1/backups?device_id=current&limit=5000
+GET /v1/backups?device_id=all&limit=5000
 ```
 
 约束：
 
 - `device_id` 省略时等同 `current`。
-- 只允许查询当前认证设备；传其他设备 ID 返回 `403 forbidden_device`。
+- `device_id=current` 只返回当前认证设备历史。
+- `device_id=all` 返回当前认证设备，以及与当前设备绑定到同一百度账号的其他设备历史；无共享账号时退化为当前设备历史。
+- 显式传其他设备 ID 仍返回 `403 forbidden_device`，不得用任意设备 ID 枚举历史。
+- 客户端默认使用 `all` 拉取跨设备历史；旧服务返回 `403 forbidden_device` 时必须回退到 `current`，但只能作为兼容路径。
 - `limit` 范围 1-20000，默认 5000。
 - 返回实体类型限定为 `backup_jobs`、`backup_sources`、`file_items`、`folder_items`、`content_objects`、`content_references`、`archives`、`archive_members`、`remote_objects`。
 
@@ -719,7 +723,8 @@ const data = await call("list_jobs");
 
 - `kind_label` 面向用户展示，当前包括“备份任务”“恢复”“原始数据清理”“远端校对”“远端修复”。
 - `context` 必须只包含脱敏上下文，用于解释“这次操作作用在哪个任务或候选上”；可包含 `job_id/job_id_hint/job_name/job_status_label/source_count/selection_count/source_names/target_label`。
-- 操作失败时 `error.message` 必须给出脱敏原因；前端最近操作必须展示 `kind_label`、`context.target_label` 或任务名、阶段、失败原因和 `operation_id_hint`，不能只显示“操作失败”。
+- 操作失败时 `error.message` 必须给出脱敏后的具体原因，不能只显示“详细信息已脱敏”；`error` 可包含 `stage/status_code/code/next_step` 等非敏感诊断字段。
+- 前端最近操作必须展示 `kind_label`、`context.target_label` 或任务名、阶段、失败原因和 `operation_id_hint`，不能只显示“操作失败”。
 - `context.source_names` 只允许来源显示名，不得包含完整本地路径。
 
 ### Bridge 方法表
@@ -727,7 +732,7 @@ const data = await call("list_jobs");
 | 方法 | 参数 | 返回 | 写锁/长操作 | 备注 |
 | --- | --- | --- | --- | --- |
 | `get_app_state()` | 无 | `app`、`dashboard`、`settings` | 否 | 启动页总状态。 |
-| `list_jobs()` | 无 | `jobs[]` | 否 | 最近 100 个任务，DTO 必须区分本机任务和全局/其他设备历史任务。 |
+| `list_jobs()` | 无 | `jobs[]` | 否 | 最近 100 个任务，DTO 必须区分本机任务和其他设备历史任务。 |
 | `list_job_choices()` | 无 | `jobs[]` | 否 | 恢复、清理、校对页的任务下拉，复用任务 DTO 的脱敏字段。 |
 | `create_job(name, sources)` | `name` string；`sources[]` | `job` | 写锁 | `sources` 可来自选择器 token 或拖拽 path。 |
 | `start_job(job_id, passwords, options)` | `passwords.archive_password`、`passwords.authorization_password`；上传选项 | `operation` | 长操作 | 运行备份 pipeline。 |
@@ -810,6 +815,7 @@ const data = await call("list_jobs");
       "scope": "local",
       "scope_label": "本机任务",
       "owner_device_hint": "dev_01234567...cdef",
+      "device_group_label": "本机任务",
       "current_device": true,
       "imported_from_cloud": false,
       "source_count": 2,
@@ -819,6 +825,7 @@ const data = await call("list_jobs");
       "can_pause": true,
       "can_cancel": true,
       "last_stage": "upload",
+      "last_error": "",
       "sync_status": "sync_pending",
       "updated_at": "2026-06-22T08:00:00Z"
     }
@@ -829,7 +836,9 @@ const data = await call("list_jobs");
 字段约束：
 
 - `scope=local` 表示 `backup_jobs.device_id` 等于本机真实 `device_id`，可按 `can_*` 字段提供开始、继续、暂停和取消入口。
-- `scope=global` 表示其他设备或全局云端历史任务，只允许只读展示，不得在本机继续、暂停或取消。
+- `scope=global` 表示其他设备或全局云端历史任务，只允许只读展示，不得在本机继续、暂停或取消；恢复/校对页面可基于已导入索引读取候选。
+- `device_group_label` 用于前端把其他设备任务按设备摘要分组展示。
+- `last_error` 必须使用脱敏后的可读原因；不得包含完整本地路径、完整远端路径、Device Token、百度 token、授权密码、归档密码或 wrapping key。
 - `source_count` 优先使用 `backup_jobs.source_count` 持久化值；云端历史导入尚未包含 `backup_sources` 行时，不能因为本地来源行数为 0 而显示 `0 个来源`。
 - `local_source_count` 表示当前 SQLite 中已导入的 `backup_sources` 行数，仅用于诊断。
 - 本机 `queued/running/paused/failed_retryable` 任务可 `can_continue=true`；继续任务仍需前端页面内一次性提交运行时密码，不得使用 `window.prompt`。

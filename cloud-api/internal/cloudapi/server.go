@@ -320,8 +320,13 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 	if deviceID == "" {
 		deviceID = "current"
 	}
-	if deviceID != "current" && deviceID != device.DeviceID {
-		writeError(w, http.StatusForbidden, "forbidden_device", "backup history can only be listed for the authenticated device")
+	includeRelatedDevices := false
+	switch deviceID {
+	case "current", device.DeviceID:
+	case "all":
+		includeRelatedDevices = true
+	default:
+		writeError(w, http.StatusForbidden, "forbidden_device", "backup history can only be listed for the authenticated device or related devices")
 		return
 	}
 	limit := 5000
@@ -333,7 +338,7 @@ func (s *Server) handleListBackups(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = parsed
 	}
-	entities, err := s.store.ListBackupHistory(r.Context(), device.DeviceID, limit)
+	entities, err := s.store.ListBackupHistory(r.Context(), device.DeviceID, includeRelatedDevices, limit)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "retryable_error", "cloud store is unavailable")
 		return

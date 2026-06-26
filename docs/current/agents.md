@@ -11,7 +11,8 @@
 3. `docs/roadmap_progress.md`
 4. 与任务相关的 `prd.md`、`design.md`、`tech.md`、`api_database_contract.md`、`spec.md`
 5. Git 最近 20 条提交
-6. 相关关键提交 `git show --stat --summary --format=fuller <commit>`
+6. 启动新任务前先检查 GitHub 远端是否有新提交；如 `origin/<当前分支>` 领先、与本地分叉，或无法确认是否需要同步，必须先向用户展示是否同步远端最新代码的选择，未确认前不得继续修改。
+7. 相关关键提交 `git show --stat --summary --format=fuller <commit>`
 
 不得只依据当前文件快照判断项目状态。
 

@@ -83,10 +83,25 @@ function recentJobs() {
   if (!state.jobs.length) {
     return el("div", { class: "empty", text: "暂无备份任务" });
   }
+  const localJobs = state.jobs.filter((job) => job.current_device).slice(0, 4);
+  const otherJobs = state.jobs.filter((job) => !job.current_device).slice(0, 4);
   return el(
     "div",
     { class: "list" },
-    state.jobs.slice(0, 6).map((job) =>
+    [
+      ...recentJobSection("本机任务", localJobs),
+      ...recentJobSection("其他设备任务", otherJobs),
+    ],
+  );
+}
+
+function recentJobSection(title, jobs) {
+  if (!jobs.length) {
+    return [];
+  }
+  return [
+    el("div", { class: "item-meta", text: title }),
+    ...jobs.map((job) =>
       el("div", { class: "item" }, [
         el("div", { class: "item-row" }, [
           el("div", { class: "item-title", text: job.name }),
@@ -94,9 +109,10 @@ function recentJobs() {
         ]),
         el("div", { class: "item-meta", text: `${job.scope_label || "-"} / ${job.owner_device_hint || "-"} / ${job.source_count} 个来源` }),
         el("div", { class: "item-meta", text: `${job.last_stage || "queued"} / ${job.updated_at}` }),
+        job.last_error ? el("div", { class: "item-meta danger-text", text: `失败原因：${job.last_error}` }) : "",
       ]),
     ),
-  );
+  ];
 }
 
 function risks(items) {
