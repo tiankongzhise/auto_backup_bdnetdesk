@@ -87,6 +87,21 @@
 
 本轮同步修正了 `client/docs/frontend_spec_pywebview.md` 中 `poll_baidu_authorization(session_id)`、`complete_baidu_authorization(session_id, authorization_password)` 和 operation 状态枚举等已确认过时签名。2026-06-22 已完成代码级校对：`webview_bridge.py#get_cloud_sync_summary` 不再引用 `EntitySummary` 中不存在的 `revision_count/latest_*` 字段，校对与同步页已补齐 Cloud Sync summary 回读入口；干净 Windows R13 仍需真实云端复验。
 
+## Hash 与去重专题审计补充
+
+2026-06-26 新增 `docs/current/hash_dedupe_review.md`，用于记录文件 hash、文件夹 hash、内容去重和跨设备重复上传行为的 code review 结论。
+
+本次专题审计澄清：
+
+- 当前项目已经在扫描、去重、归档、上传和恢复阶段使用 SHA256/MD5 等多层校验，不是只记录 hash。
+- 仍存在 `local_duplicate`、`cloud_duplicate_candidate` 等非 payload 引用在打包前不复查源文件的可靠性风险。
+- 大量小文件场景下，扫描阶段重复读取、串行 hash、文件夹 hash 递归展平、SQLite 删除重插和 outbox 修订写入会共同放大耗时。
+- 当前文件夹 manifest hash 包含 atime/mtime/ctime，容易因访问时间或元数据变更产生 hash 抖动，不适合作为“内容是否改变”的唯一解释。
+- 跨设备去重依赖云端历史导入或云端候选查询结果；如果本机未刷新到另一台设备的内容索引，仍可能重复上传相同文件。
+- 跨设备 manifest-only 引用需要进一步显式记录可恢复 payload/archive 依据，避免 manifest 指向的内容只存在于本地不完整历史中。
+
+后续处理应优先修复 P0/P1 项：打包前复查所有 content reference、证明 manifest-only 引用可恢复、备份前刷新跨设备历史、优化小文件单次读取与重扫 diff 写入。相关代码优化必须补充大批量小文件、扫描后修改 duplicate、跨设备已上传再备份和恢复可用性的测试。
+
 ## 安全边界检查
 
 已集中明确：
@@ -119,3 +134,4 @@
 - 上传失败重试 UI 仍可进一步细化。
 - pywebview bridge 的云端同步 summary DTO 字段需要按 `api_database_contract.md` 做代码级对齐。
 - 旧文档中历史完成记录很多，后续若发现与代码不一致，应继续补充 `document_change_audit.md`。
+- Hash/去重专题审计已列出 P0/P1/P2 优化项，后续实现前需要把 `docs/current/hash_dedupe_review.md` 中的风险项转为对应 spec、测试和代码修复。

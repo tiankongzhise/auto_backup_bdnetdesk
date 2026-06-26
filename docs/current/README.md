@@ -16,11 +16,18 @@
 | 8 | `docs/current/audit.md` | 实质审计结论、旧文档冲突、风险和待验证问题。 |
 | 9 | `docs/current/document_change_audit.md` | 新旧文档口径差异，用于后续与代码和测试变更校对。 |
 
+## 专题审计
+
+| 文档 | 用途 |
+| --- | --- |
+| `docs/current/hash_dedupe_review.md` | Hash 计算、文件夹 hash、大量小文件性能、内容去重和跨设备重复上传行为的专题 code review 结论。 |
+
 ## 开发前阅读路径
 
 - 产品功能变更：先读 `prd.md`，再读 `spec.md` 对应任务，最后读 `tech.md` 中相关技术边界。
 - UI 或交互变更：先读 `design.md`，再读 `spec.md` 对应任务和 `agents.md` 前端规范。
 - 云端、百度 API、SQLite、凭据、同步、上传、恢复或发布变更：先读 `tech.md` 和 `api_database_contract.md`，再读 `spec.md`，必要时查 `docs/baidu_netdisk_openapi_reference.md` 或部署文档。
+- 修改扫描、hash、去重、manifest-only archive、跨设备重复上传或恢复可用性前：先读 `hash_dedupe_review.md`，再读 `tech.md`、`api_database_contract.md` 和 `spec.md` 对应任务。
 - 真实联调、发布验收或干净机测试：先读 `spec.md` 的 P3-14，再读 `docs/release_acceptance_matrix.md`。
 - 修改文档本身：必须同时维护 `audit.md` 或 `document_change_audit.md` 中对应的审计记录。
 
